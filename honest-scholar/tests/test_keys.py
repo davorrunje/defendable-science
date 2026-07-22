@@ -1,15 +1,20 @@
-"""Tests for the CLI-owned API-key store and the ``keys`` command group (#42).
+"""Tests for the CLI-owned API-key store and the ``keys`` command group (#42, #66).
 
 Deterministic throughout: the store path is a ``tmp_path`` (module tests) or the
 CLI's cwd via ``monkeypatch.chdir``; the environment is driven with
 ``monkeypatch``; stdin is fed via ``CliRunner(input=...)``. No test ever asserts a
-secret *value* appears in output — only presence/absence and source.
+secret *value* appears in output — only presence/absence and source. The
+``tests/conftest.py`` autouse fixture points ``HOME``/``XDG_CONFIG_HOME`` at a
+throwaway directory for every test, so the new out-of-repo default store path
+(ADR-0032) never touches a real developer's home directory.
 """
 
 from __future__ import annotations
 
 import json
 import stat
+import subprocess
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -38,9 +43,52 @@ def test_is_known_registry_rclone_and_unknown() -> None:
 
 
 def test_store_path_default_and_override(tmp_path: Path) -> None:
-    assert keys_mod.store_path() == keys_mod.STORE_PATH
+    assert keys_mod.store_path() == keys_mod.default_store_path()
     override = tmp_path / "k.json"
     assert keys_mod.store_path(override) == override
+
+
+# --- default store location: XDG, outside the repo (honest-scholar#66) ------
+
+
+def test_xdg_config_home_uses_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    xdg = tmp_path / "xdg-config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    assert keys_mod.xdg_config_home() == xdg
+
+
+def test_xdg_config_home_falls_back_to_dot_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert keys_mod.xdg_config_home() == tmp_path / ".config"
+
+
+def test_default_store_path_is_xdg_honest_scholar_keys_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    xdg = tmp_path / "xdg-config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    assert keys_mod.default_store_path() == xdg / "honest-scholar" / "keys.json"
+
+
+def test_store_path_env_override_wins_over_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    in_repo = tmp_path / ".honest-scholar" / "keys.json"
+    monkeypatch.setenv(keys_mod.STORE_PATH_ENV, str(in_repo))
+    assert keys_mod.store_path() == in_repo
+
+
+def test_store_path_explicit_arg_wins_over_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(keys_mod.STORE_PATH_ENV, str(tmp_path / "env.json"))
+    explicit = tmp_path / "explicit.json"
+    assert keys_mod.store_path(explicit) == explicit
 
 
 def test_missing_store_is_empty(tmp_path: Path) -> None:
@@ -172,6 +220,93 @@ def test_rclone_scoped_env_is_per_remote(tmp_path: Path) -> None:
     assert scoped_env_only["RCLONE_CONFIG_STORE_TOKEN"] == "fake-token"
 
 
+# --- guardrail: committable in-repo store (honest-scholar#66) ---------------
+
+
+def _fake_run(returncode: int) -> keys_mod.GitRunner:
+    """Build a fake ``git`` runner that always returns `returncode`."""
+
+    def _run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=returncode)
+
+    return _run
+
+
+def _raising_run(*_args: object, **_kwargs: object) -> SimpleNamespace:
+    raise FileNotFoundError("git not found")
+
+
+def test_git_root_for_finds_ancestor_dot_git(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    nested = tmp_path / "a" / "b" / "keys.json"
+    assert keys_mod._git_root_for(nested) == tmp_path.resolve()
+
+
+def test_git_root_for_none_outside_a_work_tree(tmp_path: Path) -> None:
+    assert keys_mod._git_root_for(tmp_path / "keys.json") is None
+
+
+def test_is_gitignored_true_false_and_inconclusive() -> None:
+    assert keys_mod.is_gitignored("x", run=_fake_run(0)) is True
+    assert keys_mod.is_gitignored("x", run=_fake_run(1)) is False
+    assert keys_mod.is_gitignored("x", run=_fake_run(128)) is None
+
+
+def test_is_gitignored_none_when_git_binary_missing() -> None:
+    assert keys_mod.is_gitignored("x", run=_raising_run) is None
+
+
+def test_store_at_risk_false_outside_a_work_tree(tmp_path: Path) -> None:
+    assert keys_mod.store_at_risk(tmp_path / "keys.json", run=_fake_run(0)) is False
+
+
+def test_store_at_risk_false_when_confirmed_ignored(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    path = tmp_path / ".honest-scholar" / "keys.json"
+    assert keys_mod.store_at_risk(path, run=_fake_run(0)) is False
+
+
+def test_store_at_risk_true_when_not_ignored(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    path = tmp_path / ".honest-scholar" / "keys.json"
+    assert keys_mod.store_at_risk(path, run=_fake_run(1)) is True
+
+
+def test_store_at_risk_true_when_inconclusive(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    path = tmp_path / ".honest-scholar" / "keys.json"
+    assert keys_mod.store_at_risk(path, run=_fake_run(128)) is True
+
+
+def test_store_at_risk_runs_git_in_the_repo_root(tmp_path: Path) -> None:
+    # Regression guard: `git check-ignore` must run in the *target* repo's
+    # root, not the caller's actual cwd, or the check silently uses the wrong
+    # repository when `keys set` is invoked from elsewhere.
+    (tmp_path / ".git").mkdir()
+    path = tmp_path / "nested" / ".honest-scholar" / "keys.json"
+    seen: dict[str, object] = {}
+
+    def _run(*args: object, **kwargs: object) -> SimpleNamespace:
+        seen["cwd"] = kwargs.get("cwd")
+        return SimpleNamespace(returncode=0)
+
+    keys_mod.store_at_risk(path, run=_run)
+    assert seen["cwd"] == str(tmp_path.resolve())
+
+
+def test_store_at_risk_real_git_matches_check_ignore(tmp_path: Path) -> None:
+    """End-to-end with the real ``git`` binary — the issue's own reproduction."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # nosec B603 B607
+    path = tmp_path / ".honest-scholar" / "keys.json"
+    # not yet gitignored -> committable
+    assert keys_mod.store_at_risk(path) is True
+    (tmp_path / ".gitignore").write_text(
+        ".honest-scholar/keys.json\n", encoding="utf-8"
+    )
+    # gitignored -> no longer at risk
+    assert keys_mod.store_at_risk(path) is False
+
+
 # --- keys CLI group ---------------------------------------------------------
 
 
@@ -183,6 +318,33 @@ def test_set_single_via_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert keys_mod.load_store() == {
         "S2_API_KEY": "fake-s2-key"  # pragma: allowlist secret
     }
+    # the default (out-of-repo) store never triggers the committable warning
+    assert "committable" not in result.stderr
+
+
+def test_set_warns_when_resolved_store_is_committable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(keys_mod, "store_at_risk", lambda *_a, **_k: True)
+    result = runner.invoke(app, ["keys", "set", "S2_API_KEY"], input="v\n")
+    assert result.exit_code == 0
+    assert "committable" in result.stderr
+    assert keys_mod.STORE_PATH_ENV in result.stderr
+    # still stores the value — this is a warning, never a refusal
+    assert keys_mod.load_store() == {"S2_API_KEY": "v"}
+
+
+def test_set_many_warns_when_resolved_store_is_committable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(keys_mod, "store_at_risk", lambda *_a, **_k: True)
+    blob = json.dumps({"S2_API_KEY": "a"})
+    result = runner.invoke(app, ["keys", "set"], input=blob)
+    assert result.exit_code == 0
+    assert "committable" in result.stderr
+    assert keys_mod.load_store() == {"S2_API_KEY": "a"}
 
 
 def test_set_numeric_value_is_not_treated_as_json(
@@ -338,7 +500,17 @@ def test_unset_present_then_absent(
 def test_path_prints_store_path() -> None:
     result = runner.invoke(app, ["keys", "path"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == str(keys_mod.STORE_PATH)
+    assert result.stdout.strip() == str(keys_mod.default_store_path())
+
+
+def test_path_prints_in_repo_override_when_opted_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    in_repo = tmp_path / ".honest-scholar" / "keys.json"
+    monkeypatch.setenv(keys_mod.STORE_PATH_ENV, str(in_repo))
+    result = runner.invoke(app, ["keys", "path"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(in_repo)
 
 
 # --- integration: doctor + _lit_client --------------------------------------
