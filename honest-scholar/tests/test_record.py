@@ -393,3 +393,258 @@ def test_cli_record_unreadable_transcript_exits_1_cleanly(tmp_path: Path) -> Non
     )
     assert result.exit_code == 1  # clean exit, not a traceback
     assert "defend record failed" in result.stderr
+
+
+def _points_file(tmp_path: Path, points: list[dict[str, object]]) -> Path:
+    path = tmp_path / "points.json"
+    path.write_text(json.dumps(points), encoding="utf-8")
+    return path
+
+
+def test_cli_record_points_from_file(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = _points_file(
+        tmp_path,
+        [
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "answer",
+                "resolved": True,
+            }
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["outcome"] == "resolved"
+
+
+def test_cli_record_points_without_sign_off_fails(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = _points_file(
+        tmp_path,
+        [
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "wrong",
+                "resolved": False,
+                "gap_note": "unanswered probe",
+            }
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "claim",
+            "--points",
+            str(points),
+            "--override",
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+
+
+def test_cli_record_points_with_transcript_and_acks(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    transcript = tmp_path / "t.md"
+    transcript.write_text("Q: why? A: because.", encoding="utf-8")
+    points = _points_file(
+        tmp_path,
+        [
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "wrong",
+                "resolved": False,
+                "gap_note": "gap one",
+            }
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "claim",
+            "--points",
+            str(points),
+            "--acks",
+            "gap one::D. Runje",
+            "--signed-off-by",
+            "D. Runje",
+            "--transcript",
+            str(transcript),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["outcome"] == "acknowledged-per-gap"
+
+
+def test_cli_record_points_from_stdin(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "paper-comprehension",
+            "--points",
+            "-",
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+        input=json.dumps(
+            [
+                {
+                    "point": "key-result",
+                    "source_quote": "quote",
+                    "reader_answer": "answer",
+                    "resolved": True,
+                }
+            ]
+        ),
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["outcome"] == "resolved"
+
+
+def test_cli_record_unreadable_points_file_exits_1_cleanly(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(tmp_path / "missing.json"),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "defend record failed" in result.stderr
+
+
+def test_cli_record_malformed_points_json_exits_1_cleanly(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = tmp_path / "points.json"
+    points.write_text("not json", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "defend record failed" in result.stderr
+
+
+def test_cli_record_points_not_a_json_array_exits_1_cleanly(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = tmp_path / "points.json"
+    points.write_text(json.dumps({"point": "x"}), encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "defend record failed" in result.stderr
+
+
+def test_cli_record_points_item_not_an_object_exits_1_cleanly(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = tmp_path / "points.json"
+    points.write_text(json.dumps(["not an object"]), encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "defend record failed" in result.stderr
+
+
+def test_cli_record_points_bad_shape_exits_1_cleanly(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    points = _points_file(tmp_path, [{"point": "x", "unexpected_key": "y"}])
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "defend record failed" in result.stderr

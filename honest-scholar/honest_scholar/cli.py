@@ -622,7 +622,7 @@ def audit(
     raise typer.Exit(code=0 if report.ok else 1)
 
 
-# --- defend (honest-scholar#4) ----------------------------------------------------
+# --- defend (honest-scholar#4, honest-scholar#68) ----------------------------------
 defend = typer.Typer(help="Defensibility record helpers.", no_args_is_help=True)
 app.add_typer(defend, name="defend")
 
@@ -636,16 +636,52 @@ def _parse_acks(acks: str) -> list[dict[str, str]]:
     return result
 
 
+def _parse_points(raw: str) -> list[record_mod.PointRecord]:
+    """Parse a JSON array of point-record objects into ``PointRecord``s (ADR-0033).
+
+    :param raw: JSON text: ``[{"point": ..., "source_quote": ..., "reader_answer":
+        ..., "resolved": ..., "location": ..., "gap_note": ...}, ...]`` —
+        ``location``/``gap_note`` are optional per item; empty input means no
+        points.
+    :raises record_mod.RecordError: If `raw` isn't a JSON array of point objects
+        with the expected fields.
+    """
+    if not raw.strip():
+        return []
+    try:
+        data: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise record_mod.RecordError(f"--points is not valid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise record_mod.RecordError("--points must be a JSON array")
+    points: list[record_mod.PointRecord] = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise record_mod.RecordError("--points item must be a JSON object")
+        try:
+            points.append(record_mod.PointRecord(**item))
+        except TypeError as exc:
+            raise record_mod.RecordError(f"--points item is malformed: {exc}") from exc
+    return points
+
+
 @defend.command()
 def record(
     artifact: Annotated[
         str, typer.Option("--artifact", help="Target markdown artifact.")
     ],
     target: Annotated[
-        str, typer.Option("--target", help="claim | cited-work | methodology.")
+        str,
+        typer.Option(
+            "--target", help="claim | cited-work | methodology | paper-comprehension."
+        ),
     ],
-    gaps: Annotated[
-        str, typer.Option("--gaps", help="Observed gap facts, '||'-separated.")
+    points: Annotated[
+        str,
+        typer.Option(
+            "--points",
+            help="Point records: a JSON-array file path, or '-' for stdin.",
+        ),
     ] = "",
     signed_off_by: Annotated[str, typer.Option("--signed-off-by")] = "",
     override: Annotated[bool, typer.Option("--override")] = False,
@@ -659,23 +695,24 @@ def record(
         record_mod.DEFAULT_LOG_DIR
     ),
 ) -> None:
-    """Record a ``defend`` examination: patch understanding + append the log.
+    """Record a ``defend``/``digest`` examination: patch understanding + log.
 
     Writes ``status.understanding`` into the artifact frontmatter and appends the
-    outcome to the accountability log. Records observed facts only — never a
-    verdict, score, or answer key.
+    full evidentiary point record (ADR-0033) to the accountability log. Records
+    observed facts only — never a verdict, score, or answer key.
 
     :param artifact: The examined markdown artifact.
-    :param target: ``claim`` / ``cited-work`` / ``methodology``.
-    :param gaps: Observed gap facts, ``||``-separated (empty means no gaps).
+    :param target: ``claim`` / ``cited-work`` / ``methodology`` /
+        ``paper-comprehension``.
+    :param points: Point records — a JSON-array file path, or ``-`` for stdin;
+        empty means none.
     :param signed_off_by: Named human; required when gaps are waved through.
     :param override: A blanket logged override of the surfaced gaps.
     :param acks: Per-gap acknowledgements, ``gap::name``, ``||``-separated.
     :param transcript: Transcript file path, or ``-`` for stdin.
     :param log_dir: Directory for the accountability log.
-    :raises typer.Exit: Code 1 on a guard violation or malformed artifact.
+    :raises typer.Exit: Code 1 on a guard violation or malformed artifact/input.
     """
-    gap_list = [g.strip() for g in gaps.split("||") if g.strip()]
     try:
         transcript_text: str | None = None
         if transcript == "-":
@@ -684,10 +721,16 @@ def record(
             # Inside the try so an unreadable transcript exits 1 cleanly rather
             # than tracebacking (it is an ``OSError`` like the other read paths).
             transcript_text = Path(transcript).read_text(encoding="utf-8")
+        points_text = ""
+        if points == "-":
+            points_text = sys.stdin.read()
+        elif points:
+            points_text = Path(points).read_text(encoding="utf-8")
+        point_list = _parse_points(points_text)
         result = record_mod.record(
             artifact,
             target,
-            gap_list,
+            point_list,
             signed_off_by=signed_off_by or None,
             override=override,
             acknowledgements=_parse_acks(acks),
