@@ -89,9 +89,7 @@ def bump(current: str, release: str, pre: str) -> str:
         phase, num = None, 0
     elif pre in _PRE_TO_PHASE:
         target = _PRE_TO_PHASE[pre]
-        if phase is None:
-            phase, num = target, 0
-        elif _PHASES.index(phase) < _PHASES.index(target):
+        if phase is None or _PHASES.index(phase) < _PHASES.index(target):
             phase, num = target, 0
         elif phase == target:
             num += 1

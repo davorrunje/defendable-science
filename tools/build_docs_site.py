@@ -44,6 +44,14 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Real Click/Typer types for the CLI-reference walker below. Typer 0.27
+    # vendors Click at ``typer._click`` (there is no standalone ``click``
+    # dependency to import), and implements command *grouping* itself via
+    # ``typer.core.TyperGroup`` rather than a vendored ``click.Group``.
+    from typer._click.core import Command, Context, Parameter
 
 # --- constants -------------------------------------------------------------------
 
@@ -153,7 +161,7 @@ def plan() -> tuple[dict[str, str | None], dict[str, object]]:
     ]
     reg("disclosure", "DISCLOSURE.md")
 
-    navigation = {
+    navigation: dict[str, object] = {
         "groups": [
             {"group": "Overview", "pages": ["index"]},
             {"group": "Get started", "pages": ["get-started/user-guide"]},
@@ -178,15 +186,24 @@ def _routes_in_nav(navigation: dict[str, object]) -> list[str]:
     """Flatten every page route referenced by the navigation tree, in order."""
     out: list[str] = []
 
-    def walk(pages: list[object]) -> None:
+    def walk(pages: object) -> None:
+        # `pages` is always a list by construction (see `plan()`) — narrow with
+        # isinstance rather than a blanket ignore so a genuine shape bug still
+        # surfaces as an AssertionError instead of being silently swallowed.
+        assert isinstance(pages, list), f"expected a list of nav entries, got {pages!r}"
         for entry in pages:
             if isinstance(entry, str):
                 out.append(entry)
             elif isinstance(entry, dict):
-                walk(entry["pages"])  # type: ignore[arg-type]
+                walk(entry["pages"])
 
-    for group in navigation["groups"]:  # type: ignore[index]
-        walk(group["pages"])  # type: ignore[index]
+    groups = navigation["groups"]
+    assert isinstance(groups, list), (
+        f"expected navigation['groups'] to be a list, got {groups!r}"
+    )
+    for group in groups:
+        assert isinstance(group, dict), f"expected a nav group dict, got {group!r}"
+        walk(group["pages"])
     return out
 
 
@@ -440,9 +457,8 @@ def _resolve_target(
     :returns: ``(new_target, error)`` — `error` is set only for a link that points
         at a repository path which does not exist.
     """
-    if (
-        target.startswith(("#", "/", "//", "mailto:"))
-        or re.match(r"^[a-z][a-z0-9+.-]*://", target)
+    if target.startswith(("#", "/", "//", "mailto:")) or re.match(
+        r"^[a-z][a-z0-9+.-]*://", target
     ):
         return target, None
 
@@ -451,9 +467,7 @@ def _resolve_target(
     if not path_part:
         return target, None
 
-    resolved = posixpath.normpath(
-        posixpath.join(posixpath.dirname(source), path_part)
-    )
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path_part))
     key = resolved.rstrip("/")
 
     if key in route_map:
@@ -518,7 +532,7 @@ def _cell(text: str) -> str:
     return " ".join((text or "").split()).replace("|", "\\|") or "—"
 
 
-def _default_cell(param: object) -> str:
+def _default_cell(param: Parameter) -> str:
     """Render an option's default value for a table cell."""
     default = getattr(param, "default", None)
     if getattr(param, "is_flag", False):
@@ -528,11 +542,20 @@ def _default_cell(param: object) -> str:
     return f"`{default}`"
 
 
-def _render_command(cmd: object, ctx_cls: type, parent_ctx: object, path: list[str]) -> str:
+def _render_command(
+    cmd: Command, ctx_cls: type[Context], parent_ctx: Context | None, path: list[str]
+) -> str:
     """Render one Typer/Click command (or group) to a markdown section."""
+    # Local import: `generate_cli_reference` already imports `honest_scholar`/typer
+    # lazily so the rest of this module works without either installed; mirror
+    # that here rather than importing typer unconditionally at module scope.
+    from typer.core import TyperGroup
+
     ctx = ctx_cls(cmd, info_name=path[-1], parent=parent_ctx)
-    is_group = hasattr(cmd, "list_commands") and hasattr(cmd, "get_command")
-    params = [p for p in cmd.get_params(ctx) if getattr(p, "name", None) != "help"]
+    is_group = isinstance(cmd, TyperGroup)
+    params: list[Parameter] = [
+        p for p in cmd.get_params(ctx) if getattr(p, "name", None) != "help"
+    ]
     arguments = [p for p in params if getattr(p, "param_type_name", "") == "argument"]
     options = [p for p in params if getattr(p, "param_type_name", "") == "option"]
 
@@ -572,8 +595,15 @@ def _render_command(cmd: object, ctx_cls: type, parent_ctx: object, path: list[s
         parts.append("")
 
     if is_group:
+        # `is_group` is exactly `isinstance(cmd, TyperGroup)`, but that narrowing
+        # doesn't survive the assignment above — re-assert it here so mypy knows
+        # `cmd` has `list_commands`/`get_command` (real `TyperGroup`-only methods).
+        assert isinstance(cmd, TyperGroup)
         for name in cmd.list_commands(ctx):
             sub = cmd.get_command(ctx, name)
+            # `get_command` is `dict.get` under the hood; `name` always comes from
+            # this same `commands` mapping via `list_commands`, so it is never None.
+            assert sub is not None, f"list_commands returned unknown command {name!r}"
             parts.append(_render_command(sub, ctx_cls, ctx, [*path, name]))
 
     return "\n".join(parts)
@@ -583,6 +613,7 @@ def generate_cli_reference() -> str:
     """Render the ``honest-scholar`` Typer command tree to markdown."""
     import typer
     from typer._click.core import Context
+    from typer.core import TyperGroup
 
     from honest_scholar.cli import app
 
@@ -599,8 +630,13 @@ def generate_cli_reference() -> str:
         "build, so it always matches the released CLI.",
         "",
     ]
+    if not isinstance(
+        root, TyperGroup
+    ):  # pragma: no cover - the app always has >1 command
+        raise BuildError("honest-scholar CLI root is not a command group")
     for name in root.list_commands(root_ctx):
         sub = root.get_command(root_ctx, name)
+        assert sub is not None, f"list_commands returned unknown command {name!r}"
         body.append(_render_command(sub, Context, root_ctx, ["honest-scholar", name]))
     return "\n".join(body)
 
@@ -621,7 +657,9 @@ def build_page(
         title = "CLI reference"
         description = "The honest-scholar command tree, generated from the Typer app."
         raw = generate_cli_reference()
-        body = rewrite_links(raw, "docs/USER-GUIDE.md", route_map, routes, errors, site_links)
+        body = rewrite_links(
+            raw, "docs/USER-GUIDE.md", route_map, routes, errors, site_links
+        )
         return frontmatter(title, description) + "\n" + mdx_safe(body).strip() + "\n"
 
     text = (REPO_ROOT / source).read_text(encoding="utf-8")
@@ -654,7 +692,9 @@ def build_page(
         body = strip_leading_h1(body)
 
     body = rewrite_links(body, source, route_map, routes, errors, site_links)
-    return frontmatter(title, description or None) + "\n" + mdx_safe(body).strip() + "\n"
+    return (
+        frontmatter(title, description or None) + "\n" + mdx_safe(body).strip() + "\n"
+    )
 
 
 def build_docs_json(navigation: dict[str, object]) -> dict[str, object]:
@@ -686,7 +726,9 @@ def build(out: Path) -> dict[str, int]:
     if set(nav_routes) != set(sources):
         missing = set(sources) - set(nav_routes)
         extra = set(nav_routes) - set(sources)
-        raise BuildError(f"navigation/pages mismatch (missing={missing}, extra={extra})")
+        raise BuildError(
+            f"navigation/pages mismatch (missing={missing}, extra={extra})"
+        )
 
     route_map = {src: route for route, src in sources.items() if src}
     routes = set(sources)
@@ -731,9 +773,13 @@ def build(out: Path) -> dict[str, int]:
             f"{len(errors)} link error(s):\n  - " + "\n  - ".join(sorted(errors))
         )
 
+    nav_groups = navigation["groups"]
+    assert isinstance(nav_groups, list), (
+        f"expected navigation['groups'] to be a list, got {nav_groups!r}"
+    )
     return {
         "pages": len(sources),
-        "groups": len(navigation["groups"]),  # type: ignore[arg-type]
+        "groups": len(nav_groups),
         "site_links": len(site_links),
     }
 

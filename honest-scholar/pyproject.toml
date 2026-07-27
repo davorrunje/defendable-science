@@ -73,7 +73,10 @@ include = ["honest_scholar"]
 include = ["honest_scholar"]
 
 [tool.mypy]
-files = ["honest_scholar", "tests"]
+# `../tools` covers the maintainer build tooling (e.g. `build_docs_site.py`) so
+# it stays type-checked even though it's outside the shipped package/coverage
+# gate (see issue #56).
+files = ["honest_scholar", "tests", "../tools"]
 strict = true
 strict_bytes = true
 local_partial_types = true
@@ -123,6 +126,7 @@ include = [
     "honest_scholar/**/*.py",
     "tests/**/*.py",
     "pyproject.toml",
+    "../tools/*.py",
 ]
 
 [tool.ruff.lint]
@@ -166,6 +170,12 @@ ignore = [
     "PLR2004",  # magic-value-comparison
     "S101",     # use assert
     "N806",     # uppercase variable names
+]
+"../tools/*.py" = [
+    "T20",      # flake8-print — a build/maintainer CLI tool; print() is its output, not debug noise
+    "C901",     # mccabe complexity — the CLI-reference tree walker is a small, tested recursive
+                # renderer just over the threshold; splitting it further would hurt readability
+    "PERF401",  # flake8-perf list.extend suggestions — pre-existing, purely stylistic
 ]
 
 [tool.ruff.lint.isort]
