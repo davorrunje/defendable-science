@@ -60,7 +60,9 @@ point until it holds or you elect to stop and record the gap.
 5. **Re-probe** (possibly reframed) until you can state the point in your own
    words, or you explicitly park it as an unresolved gap.
 6. **Record** (see below) and, if warranted, update the paper's `triage.yml`
-   row.
+   row. On the **first digest** of a paper, create the digest artifact with
+   a minimal seed frontmatter block (see Output artifact, below) before
+   running `defend record`.
 
 **Out of scope.** One `digest` run covers one paper — for a reading list, run
 it once per paper. `digest` never adjudicates whether the paper's own claims
@@ -116,7 +118,15 @@ source paper, named by citekey so it joins trivially with
 `references.json`/`triage.yml`. Git-tracked, citeable.
 
 - **Frontmatter**: a `status:` block carrying `understanding` +
-  `last-updated` (patched by `defend record`, above).
+  `last-updated`. The block must be seeded before the Record step runs
+  (not already patched by `defend record`). Minimal seed:
+  ```yaml
+  ---
+  status:
+    understanding: {status: pending, unresolved: []}
+    last-updated: YYYY-MM-DD
+  ---
+  ```
 - **Body**: faithful summary; key equations/claims; assumptions; limitations;
   and, when applicable, an explicit "relation to my work" section.
 
