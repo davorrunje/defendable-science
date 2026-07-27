@@ -173,9 +173,10 @@ Per meta-spec §5: `papers.md` registry; per-paper roots with
 `hypotheses/<YYYY-MM-DD-slug>/{hypothesis,strategy,design,plan,findings}.md`,
 `backlog.md`, `paper/{pitch,positioning,outline,ledger,decision,sections/}`;
 `portfolio-backlog.md`; optional `thesis/{kappa,aims.md,milestones.yml}`;
-`literature/{references.bib,triage.yml}`; generated `dashboard.md`. Status
-frontmatter on every hypothesis/paper/thesis artifact feeds `progress`; examination
-transcripts + logged overrides form the accountability trail.
+`literature/{references.bib,triage.yml,digests/<citekey>.md}`; generated
+`dashboard.md`. Status frontmatter on every hypothesis/paper/thesis artifact
+feeds `progress`; examination transcripts + logged overrides form the
+accountability trail.
 
 ## 8. Agency & Understanding interlock (the material-decision checkpoints)
 
@@ -195,11 +196,11 @@ every one.
 
 ## 9. Plugin vs. consumer
 
-- **Plugin:** the five pipeline skills + `progress` + `defend`; staged-doc + kappa
-  templates; the rigor kit; the firewall/flywheel logic; the persona set. Depends
-  only on the capability contracts (experiment backend, engineering backend,
-  `literature`, `dataset`) and delegates engineering to the bound engineering
-  backend via the engineering-delegation contract.
+- **Plugin:** the five pipeline skills + `progress` + `defend` + `digest`;
+  staged-doc + kappa templates; the rigor kit; the firewall/flywheel logic; the
+  persona set. Depends only on the capability contracts (experiment backend,
+  engineering backend, `literature`, `dataset`) and delegates engineering to
+  the bound engineering backend via the engineering-delegation contract.
 - **Consumer:** all `docs/research/` content; the `papers.md` bindings; the
   experiment-backend implementation; `.honest-scholar/` config.
 

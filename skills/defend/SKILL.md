@@ -60,17 +60,24 @@ the author elects to stop and record the gap.
    canonical critique.
 6. **Record.** Write an `understanding` status to the artifact frontmatter
    (feeds the `progress` roll-up) and, optionally, an examination transcript.
-   Unanswered probes and any logged overrides are the accountability trail. If
-   fired as a guardrail, follow Guardrail semantics.
+   The full evidentiary record — the exact quote grounding each probed point
+   plus what the author actually said, resolved or not (ADR-0033) — goes to the
+   accountability log, not just the frontmatter. Unanswered probes and any
+   logged overrides are the accountability trail. If fired as a guardrail,
+   follow Guardrail semantics.
 
 > **Tooling.** The record step is the `honest-scholar defend record` CLI command
 > (`honest_scholar/defend/record.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); it appends the
-> `understanding` frontmatter block and persists the transcript. By hand (if the CLI
-> isn't available): under the `status:` block set `understanding: {status: ok|gaps,
-> unresolved: [...]}` to match the schema `progress` reads (`../progress/SKILL.md`),
-> and bump `status.last-updated` (do **not** nest a date inside `understanding`); if
-> a transcript is kept, write it beside the artifact as `defend-<date>.md`.
+> `understanding` frontmatter block and the log entry, and persists the
+> transcript. Pass the probed points as `--points <file>` (or `--points -` for
+> stdin) — a JSON array of `{point, source_quote, reader_answer, resolved,
+> location?, gap_note?}` objects, one per load-bearing point probed, not just
+> the failures (ADR-0033). By hand (if the CLI isn't available): under the
+> `status:` block set `understanding: {status: ok|gaps, unresolved: [...]}` to
+> match the schema `progress` reads (`../progress/SKILL.md`), and bump
+> `status.last-updated` (do **not** nest a date inside `understanding`); if a
+> transcript is kept, write it beside the artifact as `defend-<date>.md`.
 
 ## Example (a methodology probe)
 
@@ -99,6 +106,11 @@ reason and defend, and cites — never the claim's answer.
 | `claim` | the author's own scientific claim — entailments, assumptions, rivals, falsifiers, limitations | *how to reason/defend* only; never the answer key |
 | `cited-work` | do the cited works actually support the claim; what each source really says | the author's citations + the source texts |
 | `methodology` | the *why* behind a rigor-kit method, not the ritual | the methodology digests + authoritative refs |
+
+On a `cited-work` gap — you can't explain what the source says, or the
+citation misrepresents it — offer a deeper remediation than an inline
+correction: a full `digest` session on that paper (`../digest/SKILL.md`).
+Same guardrail stop/offer/log semantics; no new mechanism.
 
 **Stage presets** (suggested defaults, overridable):
 
