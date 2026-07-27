@@ -40,7 +40,7 @@ compute a completion percentage — those are firewall/anti-Goodhart violations
 
 | Verb | What it does |
 |---|---|
-| `status <level> [id]` | Read the frontmatter for one artifact (`id` given) or every artifact at a level (`hypothesis` \| `paper` \| `thesis`), roll it up per the rules below, and print a coverage + blockers view. No files written. |
+| `status <level> [id]` | Read the frontmatter for one artifact (`id` given) or every artifact at a level (`hypothesis` \| `paper` \| `thesis` \| `literature`), roll it up per the rules below, and print a coverage + blockers view. No files written. |
 | `dashboard` | Regenerate `docs/research/dashboard.md` as a **pure projection** of all status frontmatter. The only file progress writes — and it is machine-owned, never hand-edited. |
 
 - `status` is the everyday verb; run it freely, it mutates nothing.
@@ -133,6 +133,17 @@ or percentage. Averaging would hide exactly the failures that matter.
 
 Output shape everywhere: `{covered / total by state}` + `{explicit blockers}` +
 `{stale?}`. No rolled-up number leaves this skill.
+
+## Literature reading
+
+A fourth roll-up, independent of the hypothesis/paper/thesis hierarchy above
+(`status literature`): scan `docs/research/literature/digests/*.md`
+frontmatter directly — the `understanding` block the `digest` skill writes via
+`defend record --target paper-comprehension` (ADR-0033) — and report, per
+digested paper, `{digested & understood / gaps unresolved}`, joined against
+`triage.yml` by citekey for context (role, disposition). Same anti-Goodhart
+posture as everywhere else in this skill: coverage + named gaps, never a count
+of "papers read" as a productivity signal.
 
 ## Anti-Goodhart
 
