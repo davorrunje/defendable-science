@@ -164,6 +164,10 @@ gate whether a PDF may be committed vs. mirror-only.
   `position --level thesis` into the kappa's independent related-work chapter.
 - **`defend`** (target `cited-work`) draws on this registry to check "does ref [12]
   actually support this sentence?" — the same surface-don't-adjudicate posture.
+- **`digest`** grounds each paper it digests in this registry (a
+  `references.json` entry + mirrored PDF) and writes back to the `triage.yml`
+  row on completion — the reading step that precedes triage/positioning
+  (`../digest/SKILL.md`).
 - **Substrate**: shares the persistent-ID / mirror / fixity mechanism with
   `dataset`; both are front-ends over one substrate, not one shared file.
 
