@@ -334,11 +334,14 @@ the throttling that otherwise stalls citation-graph work.
 | `OPENALEX_MAILTO` | OpenAlex | Joins the "polite pool" (a contact email) for faster, more reliable responses. | <https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication> |
 | `RCLONE_CONFIG_<REMOTE>_*` | Private dataset mirror | rclone remote credentials, handed to rclone as scoped env vars (no config file needed). | Per your rclone remote (see `rclone config`). |
 
-Honest Scholar keeps keys in a **CLI-managed JSON store** at
-`.honest-scholar/keys.json` — never a `.env` — and reads them with
-**`os.environ` > store > unset** precedence, so an environment variable always
-wins (CI / secrets injection is unaffected) and an unset key just degrades the
-service. Manage the store with the `keys` command group:
+Honest Scholar keeps keys in a **CLI-managed JSON store** — never a `.env` — at
+an XDG config path **outside any repo's work tree**:
+`$XDG_CONFIG_HOME/honest-scholar/keys.json`, falling back to
+`~/.config/honest-scholar/keys.json` (ADR-0032). A stored key can therefore
+never be committed by accident. Keys are read with **`os.environ` > store >
+unset** precedence, so an environment variable always wins (CI / secrets
+injection is unaffected) and an unset key just degrades the service. Manage
+the store with the `keys` command group:
 
 ```
 honest-scholar keys set S2_API_KEY        # prompts hidden, or reads piped stdin
@@ -355,11 +358,16 @@ prompt — so a secret never lands in your shell history or the process list.
 `keys list`/`check` and `doctor` report only **presence and source**, never a
 value.
 
+Set `HONEST_SCHOLAR_KEYS_PATH` to opt into a different location, e.g. the
+legacy in-repo `.honest-scholar/keys.json` — `research-init` still gitignores
+that path for anyone who does — but the store then warns (never silently) if
+the resolved path sits in a git work tree and is not confirmed gitignored.
+
 > **Honesty caveat — plaintext at rest.** The store is **not encrypted**.
-> Gitignore (`.honest-scholar/keys.json` is ignored) and `0600` file permissions
-> limit exposure, but anyone who can read the file reads the keys. Treat it as
-> convenience storage, not a secret vault. OS-keychain backing behind the same
-> `keys` interface is a planned follow-up (issue #49).
+> Living outside the repo (or being gitignored + `0600` file permissions when
+> opted in) limits exposure, but anyone who can read the file reads the keys.
+> Treat it as convenience storage, not a secret vault. OS-keychain backing
+> behind the same `keys` interface is a planned follow-up (issue #49).
 
 ## 9. Everyday tips
 

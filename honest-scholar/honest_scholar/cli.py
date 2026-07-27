@@ -933,6 +933,26 @@ def _warn_unknown(name: str) -> None:
         typer.echo(f"warning: {name!r} is not a known key; storing it anyway", err=True)
 
 
+def _warn_if_store_committable() -> None:
+    """Warn on stderr when the resolved store sits in a non-gitignored repo.
+
+    Defense-in-depth (honest-scholar#66, ADR-0032): the default store lives
+    outside any repo, but anyone who opts into :envvar:`STORE_PATH_ENV` — e.g.
+    the legacy in-repo location — could otherwise commit a secret file without
+    noticing. Warns and continues; the out-of-repo default is the real fix, so
+    this never refuses.
+    """
+    resolved = keys_mod.store_path()
+    if keys_mod.store_at_risk(resolved):
+        typer.echo(
+            f"warning: the key store at {resolved} is inside a git work tree and "
+            "does not appear to be gitignored — a stored key here is committable; "
+            "gitignore it, or unset "
+            f"{keys_mod.STORE_PATH_ENV} to use the default out-of-repo store",
+            err=True,
+        )
+
+
 def _set_many(blob: dict[str, object]) -> None:
     """Set every entry of a piped JSON object; never echoes a value.
 
@@ -942,6 +962,7 @@ def _set_many(blob: dict[str, object]) -> None:
     if not blob:
         typer.echo("keys set: the JSON object is empty", err=True)
         raise typer.Exit(code=2)
+    _warn_if_store_committable()
     for name, value in blob.items():
         if not isinstance(value, str):
             typer.echo(f"keys set: value for {name!r} must be a string", err=True)
@@ -985,6 +1006,7 @@ def set_(
     if not value:
         typer.echo(f"keys set: empty value for {name}", err=True)
         raise typer.Exit(code=2)
+    _warn_if_store_committable()
     _warn_unknown(name)
     keys_mod.set_key(name, value)
     typer.echo(f"stored {name} (source: store)")

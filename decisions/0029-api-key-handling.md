@@ -2,6 +2,12 @@
 
 - Status: accepted · Date: 2026-07-19 · Deciders: Davor Runje
 
+> **Refined by ADR-0032.** The default store location moves outside the
+> consumer repo's work tree (XDG config, not `.honest-scholar/keys.json`),
+> closing a secret-leak gap the in-repo default left open
+> (honest-scholar#66). The in-repo path below remains available as an
+> explicit opt-in and is still gitignored by `research-init`.
+
 ## Context
 
 The skills reach external services that key-gate their useful rate limits —
