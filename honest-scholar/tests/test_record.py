@@ -40,7 +40,7 @@ def _artifact(tmp_path: Path) -> Path:
 
 
 def _resolved(point: str = "assumptions") -> r.PointRecord:
-    """A minimal resolved point record for tests that don't care about content."""
+    """Build a minimal resolved point record for tests that don't care about content."""
     return r.PointRecord(
         point=point,
         source_quote="the paper/artifact text grounding this point",
@@ -50,7 +50,7 @@ def _resolved(point: str = "assumptions") -> r.PointRecord:
 
 
 def _gap(note: str, *, point: str = "assumptions") -> r.PointRecord:
-    """A minimal unresolved point record carrying a specific gap fact."""
+    """Build a minimal unresolved point record carrying a specific gap fact."""
     return r.PointRecord(
         point=point,
         source_quote="the paper/artifact text grounding this point",
@@ -272,9 +272,7 @@ def test_point_record_defaults_location_and_gap_note_to_none() -> None:
 
 def test_unresolved_gaps_prefers_gap_note_over_point() -> None:
     points = [_gap("could not explain the falsification probe", point="assumptions")]
-    assert r._unresolved_gaps(points) == [
-        "could not explain the falsification probe"
-    ]
+    assert r._unresolved_gaps(points) == ["could not explain the falsification probe"]
 
 
 def test_unresolved_gaps_falls_back_to_point_name_without_gap_note() -> None:

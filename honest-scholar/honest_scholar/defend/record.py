@@ -20,9 +20,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date as date_cls
 from pathlib import Path
 
-TARGETS = frozenset(
-    {"claim", "cited-work", "methodology", "paper-comprehension"}
-)
+TARGETS = frozenset({"claim", "cited-work", "methodology", "paper-comprehension"})
 DEFAULT_LOG_DIR = Path("docs/research/defend-log")
 
 
