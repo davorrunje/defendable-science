@@ -636,23 +636,6 @@ def _parse_acks(acks: str) -> list[dict[str, str]]:
     return result
 
 
-def _gaps_to_point_records(gaps: str) -> list[record_mod.PointRecord]:
-    """Convert CLI gap strings to minimal PointRecord objects.
-
-    Each gap becomes an unresolved point with the gap text as gap_note.
-    """
-    return [
-        record_mod.PointRecord(
-            point="unspecified",
-            source_quote="",
-            reader_answer="",
-            resolved=False,
-            gap_note=gap,
-        )
-        for gap in filter(None, (g.strip() for g in gaps.split("||")))
-    ]
-
-
 @defend.command()
 def record(
     artifact: Annotated[
@@ -692,7 +675,7 @@ def record(
     :param log_dir: Directory for the accountability log.
     :raises typer.Exit: Code 1 on a guard violation or malformed artifact.
     """
-    point_records = _gaps_to_point_records(gaps)
+    gap_list = [g.strip() for g in gaps.split("||") if g.strip()]
     try:
         transcript_text: str | None = None
         if transcript == "-":
@@ -704,7 +687,7 @@ def record(
         result = record_mod.record(
             artifact,
             target,
-            point_records,
+            gap_list,
             signed_off_by=signed_off_by or None,
             override=override,
             acknowledgements=_parse_acks(acks),
