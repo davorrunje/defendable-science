@@ -28,3 +28,7 @@ coverage.xml
 dist/
 build/
 *.egg-info/
+
+# git worktrees (agent isolation)
+.worktrees/
+.claude/worktrees/
