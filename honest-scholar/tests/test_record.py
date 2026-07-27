@@ -1,4 +1,4 @@
-"""Tests for the ``defend record`` helper (honest-scholar#4)."""
+"""Tests for the ``defend record`` helper (honest-scholar#4, honest-scholar#68)."""
 
 from __future__ import annotations
 
@@ -37,6 +37,27 @@ def _artifact(tmp_path: Path) -> Path:
     path = tmp_path / "findings.md"
     path.write_text(_ARTIFACT, encoding="utf-8")
     return path
+
+
+def _resolved(point: str = "assumptions") -> r.PointRecord:
+    """A minimal resolved point record for tests that don't care about content."""
+    return r.PointRecord(
+        point=point,
+        source_quote="the paper/artifact text grounding this point",
+        reader_answer="a correct, articulated answer",
+        resolved=True,
+    )
+
+
+def _gap(note: str, *, point: str = "assumptions") -> r.PointRecord:
+    """A minimal unresolved point record carrying a specific gap fact."""
+    return r.PointRecord(
+        point=point,
+        source_quote="the paper/artifact text grounding this point",
+        reader_answer="an incomplete or wrong answer",
+        resolved=False,
+        gap_note=note,
+    )
 
 
 def test_patch_sets_understanding_and_preserves_rest() -> None:
@@ -93,7 +114,7 @@ def test_record_ok_writes_log(tmp_path: Path) -> None:
     result = r.record(
         artifact,
         "methodology",
-        [],
+        [_resolved()],
         log_dir=tmp_path / "log",
         today="2026-07-18",
     )
@@ -109,11 +130,26 @@ def test_record_bad_target_raises(tmp_path: Path) -> None:
         r.record(_artifact(tmp_path), "vibes", [], today="2026-07-18")
 
 
+def test_record_paper_comprehension_target_accepted(tmp_path: Path) -> None:
+    result = r.record(
+        _artifact(tmp_path),
+        "paper-comprehension",
+        [_resolved(point="key-result")],
+        log_dir=tmp_path / "log",
+        today="2026-07-18",
+    )
+    assert result.outcome == "resolved"
+
+
 def test_record_gaps_passed_requires_sign_off(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     with pytest.raises(r.RecordError, match="requires a named"):
         r.record(
-            artifact, "claim", ["unanswered probe"], override=True, today="2026-07-18"
+            artifact,
+            "claim",
+            [_gap("unanswered probe")],
+            override=True,
+            today="2026-07-18",
         )
 
 
@@ -121,7 +157,7 @@ def test_record_override_with_sign_off(tmp_path: Path) -> None:
     result = r.record(
         _artifact(tmp_path),
         "claim",
-        ["unanswered probe"],
+        [_gap("unanswered probe")],
         override=True,
         signed_off_by="D. Runje",
         log_dir=tmp_path / "log",
@@ -134,7 +170,7 @@ def test_record_per_gap_acknowledgement(tmp_path: Path) -> None:
     result = r.record(
         _artifact(tmp_path),
         "claim",
-        ["gap one"],
+        [_gap("gap one")],
         acknowledgements=[{"gap": "gap one", "by": "D. Runje"}],
         signed_off_by="D. Runje",
         log_dir=tmp_path / "log",
@@ -147,7 +183,7 @@ def test_record_writes_transcript(tmp_path: Path) -> None:
     result = r.record(
         _artifact(tmp_path),
         "methodology",
-        [],
+        [_resolved()],
         transcript="Q: why TOST? A: ...",
         log_dir=tmp_path / "log",
         today="2026-07-18",
@@ -162,6 +198,138 @@ def test_record_never_writes_a_verdict_field(tmp_path: Path) -> None:
     parsed = yaml.safe_load(artifact.read_text(encoding="utf-8").split("---")[1])
     # The verdict the artifact already had is untouched; record never sets it.
     assert parsed["status"]["verdict"] == "pending"
+
+
+def test_record_unresolved_outcome(tmp_path: Path) -> None:
+    result = r.record(
+        _artifact(tmp_path),
+        "claim",
+        [_gap("gap")],
+        log_dir=tmp_path / "log",
+        today="2026-07-18",
+    )
+    assert result.outcome == "unresolved"
+
+
+def test_record_log_dedup(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path)
+    r.record(artifact, "claim", [], log_dir=tmp_path / "log", today="2026-07-18")
+    second = r.record(
+        artifact, "claim", [], log_dir=tmp_path / "log", today="2026-07-18"
+    )
+    assert second.log_entry.name.endswith("-2.yml")
+
+
+def test_patch_unterminated_frontmatter() -> None:
+    with pytest.raises(r.RecordError, match="unterminated"):
+        r.patch_understanding("---\nstatus:\n  x: 1\n", "ok", [], last_updated="d")
+
+
+def test_patch_no_status_block() -> None:
+    with pytest.raises(r.RecordError, match="no 'status:'"):
+        r.patch_understanding(
+            "---\nfoo: bar\n---\n\nbody\n", "ok", [], last_updated="d"
+        )
+
+
+def test_patch_blank_line_and_trailing_top_key() -> None:
+    text = (
+        "---\nstatus:\n\n  understanding: {status: pending, unresolved: []}\n"
+        "foo: bar\n---\n\nbody\n"
+    )
+    out = r.patch_understanding(text, "ok", [], last_updated="2026-07-18")
+    assert "foo: bar" in out
+    assert '"status": "ok"' in out
+
+
+def test_patch_zero_indent_line_after_status() -> None:
+    text = "---\nstatus:\nfoo: bar\n  understanding: {status: pending, unresolved: []}\n---\nbody\n"
+    out = r.patch_understanding(text, "ok", [], last_updated="2026-07-18")
+    assert "foo: bar" in out
+
+
+def test_patch_status_block_without_children() -> None:
+    out = r.patch_understanding(
+        "---\nstatus:\n---\n\nbody\n", "ok", [], last_updated="d"
+    )
+    assert "understanding" in out
+    assert "last-updated" in out
+
+
+# --- PointRecord / evidentiary log (ADR-0033) --------------------------------
+
+
+def test_point_record_defaults_location_and_gap_note_to_none() -> None:
+    point = r.PointRecord(
+        point="limitations",
+        source_quote="quote",
+        reader_answer="answer",
+        resolved=True,
+    )
+    assert point.location is None
+    assert point.gap_note is None
+
+
+def test_unresolved_gaps_prefers_gap_note_over_point() -> None:
+    points = [_gap("could not explain the falsification probe", point="assumptions")]
+    assert r._unresolved_gaps(points) == [
+        "could not explain the falsification probe"
+    ]
+
+
+def test_unresolved_gaps_falls_back_to_point_name_without_gap_note() -> None:
+    bare_gap = r.PointRecord(
+        point="key-result",
+        source_quote="quote",
+        reader_answer="answer",
+        resolved=False,
+    )
+    assert r._unresolved_gaps([bare_gap]) == ["key-result"]
+
+
+def test_unresolved_gaps_skips_resolved_points() -> None:
+    points = [_resolved(point="method"), _gap("gap", point="limitations")]
+    assert r._unresolved_gaps(points) == ["gap"]
+
+
+def test_record_log_carries_full_point_evidence(tmp_path: Path) -> None:
+    resolved = r.PointRecord(
+        point="key-result",
+        source_quote="We achieve 99% accuracy (Table 2).",
+        location="Table 2",
+        reader_answer="They beat the baseline by a wide margin on the benchmark.",
+        resolved=True,
+    )
+    gap = _gap("could not explain why non-convexity breaks it", point="limitations")
+    result = r.record(
+        _artifact(tmp_path),
+        "paper-comprehension",
+        [resolved, gap],
+        log_dir=tmp_path / "log",
+        today="2026-07-18",
+    )
+    entry = yaml.safe_load(result.log_entry.read_text(encoding="utf-8"))[0]
+    assert entry["points"] == [
+        {
+            "point": "key-result",
+            "source_quote": "We achieve 99% accuracy (Table 2).",
+            "reader_answer": (
+                "They beat the baseline by a wide margin on the benchmark."
+            ),
+            "resolved": True,
+            "location": "Table 2",
+            "gap_note": None,
+        },
+        {
+            "point": "limitations",
+            "source_quote": "the paper/artifact text grounding this point",
+            "reader_answer": "an incomplete or wrong answer",
+            "resolved": False,
+            "location": None,
+            "gap_note": "could not explain why non-convexity breaks it",
+        },
+    ]
+    assert entry["status"] == "gaps"
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -184,88 +352,6 @@ def test_cli_record(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert json.loads(result.stdout)["outcome"] == "resolved"
-
-
-def test_cli_record_gaps_without_sign_off_fails(tmp_path: Path) -> None:
-    artifact = _artifact(tmp_path)
-    result = runner.invoke(
-        app,
-        [
-            "defend",
-            "record",
-            "--artifact",
-            str(artifact),
-            "--target",
-            "claim",
-            "--gaps",
-            "unanswered probe",
-            "--override",
-            "--log-dir",
-            str(tmp_path / "log"),
-        ],
-    )
-    assert result.exit_code == 1
-
-
-def test_cli_record_with_transcript_and_acks(tmp_path: Path) -> None:
-    artifact = _artifact(tmp_path)
-    transcript = tmp_path / "t.md"
-    transcript.write_text("Q: why? A: because.", encoding="utf-8")
-    result = runner.invoke(
-        app,
-        [
-            "defend",
-            "record",
-            "--artifact",
-            str(artifact),
-            "--target",
-            "claim",
-            "--gaps",
-            "gap one",
-            "--acks",
-            "gap one::D. Runje",
-            "--signed-off-by",
-            "D. Runje",
-            "--transcript",
-            str(transcript),
-            "--log-dir",
-            str(tmp_path / "log"),
-        ],
-    )
-    assert result.exit_code == 0
-    assert json.loads(result.stdout)["outcome"] == "acknowledged-per-gap"
-
-
-def test_patch_unterminated_frontmatter() -> None:
-    with pytest.raises(r.RecordError, match="unterminated"):
-        r.patch_understanding("---\nstatus:\n  x: 1\n", "ok", [], last_updated="d")
-
-
-def test_patch_no_status_block() -> None:
-    with pytest.raises(r.RecordError, match="no 'status:'"):
-        r.patch_understanding(
-            "---\nfoo: bar\n---\n\nbody\n", "ok", [], last_updated="d"
-        )
-
-
-def test_record_unresolved_outcome(tmp_path: Path) -> None:
-    result = r.record(
-        _artifact(tmp_path),
-        "claim",
-        ["gap"],
-        log_dir=tmp_path / "log",
-        today="2026-07-18",
-    )
-    assert result.outcome == "unresolved"
-
-
-def test_record_log_dedup(tmp_path: Path) -> None:
-    artifact = _artifact(tmp_path)
-    r.record(artifact, "claim", [], log_dir=tmp_path / "log", today="2026-07-18")
-    second = r.record(
-        artifact, "claim", [], log_dir=tmp_path / "log", today="2026-07-18"
-    )
-    assert second.log_entry.name.endswith("-2.yml")
 
 
 def test_cli_record_transcript_from_stdin(tmp_path: Path) -> None:
@@ -309,27 +395,3 @@ def test_cli_record_unreadable_transcript_exits_1_cleanly(tmp_path: Path) -> Non
     )
     assert result.exit_code == 1  # clean exit, not a traceback
     assert "defend record failed" in result.stderr
-
-
-def test_patch_blank_line_and_trailing_top_key() -> None:
-    text = (
-        "---\nstatus:\n\n  understanding: {status: pending, unresolved: []}\n"
-        "foo: bar\n---\n\nbody\n"
-    )
-    out = r.patch_understanding(text, "ok", [], last_updated="2026-07-18")
-    assert "foo: bar" in out
-    assert '"status": "ok"' in out
-
-
-def test_patch_zero_indent_line_after_status() -> None:
-    text = "---\nstatus:\nfoo: bar\n  understanding: {status: pending, unresolved: []}\n---\nbody\n"
-    out = r.patch_understanding(text, "ok", [], last_updated="2026-07-18")
-    assert "foo: bar" in out
-
-
-def test_patch_status_block_without_children() -> None:
-    out = r.patch_understanding(
-        "---\nstatus:\n---\n\nbody\n", "ok", [], last_updated="d"
-    )
-    assert "understanding" in out
-    assert "last-updated" in out

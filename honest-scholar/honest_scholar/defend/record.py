@@ -2,12 +2,13 @@
 
 Writes the ``status.understanding`` block into a target artifact's markdown
 frontmatter (so :mod:`progress` can roll it up) and appends the examination
-outcome — including any logged override or per-gap acknowledgement — to an
-append-only accountability log.
+outcome — the full per-point evidentiary record (ADR-0033) plus any logged
+override or per-gap acknowledgement — to an append-only accountability log.
 
 It records **observed facts**, never a substantive verdict: there is no field for
 a "correct answer", a score, or a pass/fail, and it never writes ``verdict`` /
-``decision`` / ``defensible``. Design: ``docs/design/proposals/defend-record-helper.md``.
+``decision`` / ``defensible``. Design: ``docs/design/proposals/defend-record-helper.md``,
+ADR-0033 (evidentiary points, shared with the ``digest`` skill).
 ``pyyaml`` + stdlib only.
 """
 
@@ -15,11 +16,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date as date_cls
 from pathlib import Path
 
-TARGETS = frozenset({"claim", "cited-work", "methodology"})
+TARGETS = frozenset(
+    {"claim", "cited-work", "methodology", "paper-comprehension"}
+)
 DEFAULT_LOG_DIR = Path("docs/research/defend-log")
 
 
@@ -30,6 +33,40 @@ class RecordError(ValueError):
 def _today() -> str:
     """Return today's date as an ISO string (indirection eases testing)."""
     return date_cls.today().isoformat()
+
+
+# --- evidentiary point records (ADR-0033) -----------------------------------
+
+
+@dataclass(frozen=True)
+class PointRecord:
+    """One probed load-bearing point, with its grounding evidence (ADR-0033).
+
+    :param point: Which load-bearing point this is (e.g. ``assumptions``,
+        ``key-result``, ``cited-work-support``).
+    :param source_quote: The exact quote grounding it — from the *paper* for
+        ``digest``, from the author's own artifact/claim for ``defend``.
+    :param reader_answer: What the reader/author actually said, in their own
+        words.
+    :param resolved: Whether the point held after teaching + re-probe.
+    :param location: Where the quote lives (section/equation/sentence), when
+        locatable.
+    :param gap_note: A short free-text gap fact, used verbatim in the
+        artifact's ``unresolved`` list when `resolved` is ``False``. Falls
+        back to `point` when absent.
+    """
+
+    point: str
+    source_quote: str
+    reader_answer: str
+    resolved: bool
+    location: str | None = None
+    gap_note: str | None = None
+
+
+def _unresolved_gaps(points: list[PointRecord]) -> list[str]:
+    """Return the compact gap-fact strings frontmatter's ``unresolved`` carries."""
+    return [p.gap_note or p.point for p in points if not p.resolved]
 
 
 # --- frontmatter patching ---------------------------------------------------
@@ -135,9 +172,12 @@ class LogEntry:
 
     :param date: ISO examination date.
     :param artifact: Path to the examined artifact.
-    :param target: ``claim`` / ``cited-work`` / ``methodology``.
+    :param target: ``claim`` / ``cited-work`` / ``methodology`` /
+        ``paper-comprehension``.
     :param status: ``ok`` or ``gaps``.
-    :param gaps: The observed gap facts (verbatim, never a judgement).
+    :param points: Every probed load-bearing point, resolved or not — the
+        evidentiary record (ADR-0033): what grounds it and what the reader/
+        author actually said.
     :param outcome: ``resolved`` / ``unresolved`` / ``overridden`` /
         ``acknowledged-per-gap``.
     :param acknowledgements: Per-gap sign-offs ``[{"gap": …, "by": …}]``.
@@ -149,7 +189,7 @@ class LogEntry:
     artifact: str
     target: str
     status: str
-    gaps: list[str]
+    points: list[PointRecord]
     outcome: str
     acknowledgements: list[dict[str, str]] = field(default_factory=list)
     signed_off_by: str | None = None
@@ -173,7 +213,7 @@ def _log_yaml(entry: LogEntry) -> str:
     """Render a log entry as a YAML list item (stable key order)."""
     import yaml
 
-    return yaml.safe_dump([entry.__dict__], sort_keys=False, allow_unicode=True)
+    return yaml.safe_dump([asdict(entry)], sort_keys=False, allow_unicode=True)
 
 
 # --- top-level record -------------------------------------------------------
@@ -198,7 +238,7 @@ class RecordResult:
 def record(
     artifact: str | Path,
     target: str,
-    gaps: list[str],
+    points: list[PointRecord],
     *,
     signed_off_by: str | None = None,
     override: bool = False,
@@ -210,8 +250,10 @@ def record(
     """Record an examination outcome: patch the artifact and append the log.
 
     :param artifact: The examined markdown artifact.
-    :param target: ``claim`` / ``cited-work`` / ``methodology``.
-    :param gaps: Observed gap facts (verbatim); empty means no gaps.
+    :param target: ``claim`` / ``cited-work`` / ``methodology`` /
+        ``paper-comprehension``.
+    :param points: Every probed load-bearing point, resolved or not — the
+        evidentiary record (ADR-0033).
     :param signed_off_by: Named human; required when gaps are waved through.
     :param override: A blanket logged override of the surfaced gaps.
     :param acknowledgements: Per-gap acknowledgements (thesis gate, ADR-0021).
@@ -226,6 +268,7 @@ def record(
         raise RecordError(f"target must be one of {sorted(TARGETS)}, got {target!r}")
     acks = acknowledgements or []
     date = today or _today()
+    gaps = _unresolved_gaps(points)
     status = "gaps" if gaps else "ok"
     outcome = _derive_outcome(gaps, override, acks)
 
@@ -248,7 +291,7 @@ def record(
         artifact=str(artifact_path),
         target=target,
         status=status,
-        gaps=gaps,
+        points=points,
         outcome=outcome,
         acknowledgements=acks,
         signed_off_by=signed_off_by,
