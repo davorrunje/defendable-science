@@ -1,8 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
   <defs><linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#2a1cc8"></stop><stop offset="100%" stop-color="#3a28e0"></stop></linearGradient></defs>
   <rect width="1280" height="640" fill="url(#bg)"></rect>
-  <circle cx="640" cy="256" r="70" fill="#f9463c"></circle>
-  <rect x="619" y="235" width="42" height="42" rx="9" fill="#ffffff"></rect>
-  <text x="640" y="400" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="72" fill="#ffffff" text-anchor="middle" letter-spacing="-1">Honest Scholar</text>
-  <text x="640" y="450" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="30" fill="#ff8a82" text-anchor="middle">Research you can defend.</text>
+  <text x="274" y="322" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="72" fill="#ffffff" letter-spacing="-1">Defendable Science</text>
+  <rect x="965" y="282" width="40" height="40" rx="10" fill="none" stroke="#f9463c" stroke-width="8.5"></rect>
+  <text x="640" y="410" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="30" fill="#ff8a82" text-anchor="middle">Research you can defend.</text>
 </svg>

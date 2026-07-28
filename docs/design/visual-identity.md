@@ -1,6 +1,6 @@
 # Visual identity
 
-Honest Scholar's identity is built to read as rigorous, not decorative: a bold
+Defendable Science's identity is built to read as rigorous, not decorative: a bold
 electric blue grounds the system with confidence, a single punchy red accent carries every
 call to action and moment of confirmation — the QED square that ends a proof,
 the sign-off, the "demonstrated." Quietly confident, understated: built for
@@ -14,10 +14,10 @@ researchers evaluating a new tool, not for a landing page.
   <img src="../../assets/wordmark-lockup-light.svg" alt="Lockup on light" width="380">
 </p>
 
-The icon mark (`assets/icon-mark.svg`) is a red circle with a white QED
-square (∎, the mark that ends a proof — "demonstrated"), used standalone as the
-favicon and app icon at 32/24/16px, and paired with the wordmark in the lockups
-above.
+The icon mark (`assets/icon-mark.svg`) is the bare QED square (∎, the mark that
+ends a proof — "demonstrated") in red — as a standalone favicon and app icon at
+32/24/16px it reads cleanly with no nested shapes, and it pairs with the wordmark
+in the lockups above.
 
 **Clearspace & minimum size.** Keep clearspace equal to the icon's radius on
 every side. Never render the lockup narrower than 120px, or the icon alone
@@ -76,3 +76,12 @@ All source files live in [`assets/`](../../assets):
 - `wordmark-lockup-light.svg` — horizontal lockup, transparent, for light surfaces
 - `wordmark-lockup-dark.svg` — horizontal lockup, transparent, for dark surfaces
 - `social-preview.svg` — GitHub social preview (1280×640)
+- `qed-endmark.svg` — QED tombstone (∎) to close text pages
+
+## End mark
+
+Close long-form text pages (guides, docs, specs) with the QED tombstone,
+right-aligned on its own line — the way a proof ends with ∎. A quiet signal that
+the argument is complete and defensible. Use `assets/qed-endmark.svg`.
+
+<p align="right"><img src="../../assets/qed-endmark.svg" alt="QED" width="22"></p>
