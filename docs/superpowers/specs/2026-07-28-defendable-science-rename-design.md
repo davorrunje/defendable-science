@@ -16,7 +16,7 @@ release.
 
 Two independently-versioned artifacts change name together (CLAUDE.md, ADR-0026):
 the **plugin** at the repo root and the **package** in the `honest-scholar/`
-subdirectory. Roughly 890 occurrences across 116 tracked files, plus two
+subdirectory. Roughly 890 occurrences across 115 tracked files, plus two
 directory renames.
 
 Out of scope: the eleven skill names (`defend`, `digest`, `literature`, …) are
@@ -77,7 +77,7 @@ pass must preserve it deliberately.
 ## The sweep
 
 A script, `tools/rename-sweep.sh`, performs the mechanical substitution, so the
-transformation is auditable rather than a 116-file mystery diff. It lands as the
+transformation is auditable rather than a 115-file mystery diff. It lands as the
 PR's **first** commit and is deleted in the PR's **last** commit: reviewers can
 read it in the commit history, and the merged tree does not carry a one-shot
 script forever.

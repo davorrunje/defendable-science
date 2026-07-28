@@ -84,11 +84,14 @@ technical terms and are unaffected.
 - **The `0.1.0` and `0.1.1` CHANGELOG entries keep the old name verbatim.**
   Those releases really did ship under it; rewriting them would be the kind of
   tidy lie the failure-honesty rule exists to prevent.
-- **Two names had to be secured before the work could proceed**, and neither was
-  held when the rename was designed: the `defendable-science` distribution on
-  PyPI/TestPyPI, and the `defendable.science` domain — which appeared registered
-  in a registrar panel but was absent from the registry (RDAP 404) and had to be
-  re-registered. A registrar panel is not evidence of registration; RDAP is.
+- **Two names had to be secured, and neither was held when the rename was
+  designed.** The `defendable.science` domain appeared registered in a
+  registrar panel but was absent from the registry (RDAP 404); it was
+  re-registered on 2026-07-28. A registrar panel is not evidence of
+  registration; RDAP is. The `defendable-science` distribution on
+  PyPI/TestPyPI remains **unreserved** — both indexes still 404 — and is an
+  outstanding prerequisite that must be secured before the first release under
+  the new name.
 
 ## Rejected alternatives
 

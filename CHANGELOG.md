@@ -34,7 +34,7 @@ consumer.
 - **Commit trailer**: `HonestScholar-Skill:` → `DefendableScience-Skill:`
 - **Docs**: `honest-scholar.science` → `defendable.science`
 - **Repository**: `davorrunje/honest-scholar` →
-  `davorrunje/defendable-science` (GitHub redirects the old URLs)
+  `davorrunje/defendable-science`
 
 ### Removed
 

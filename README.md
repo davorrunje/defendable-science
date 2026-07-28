@@ -130,7 +130,7 @@ consuming repo's `.claude/settings.json`:
 }
 ```
 
-To pin a fixed release, add `"ref": "v0.1.0"` inside the marketplace `source`;
+To pin a fixed release, add `"ref": "v0.2.0"` inside the marketplace `source`;
 omit it to track the plugin's `main`. See [`STATUS.md`](STATUS.md) for the current
 state.
 

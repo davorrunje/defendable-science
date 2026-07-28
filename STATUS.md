@@ -37,10 +37,10 @@ Commits are authored by **Davor Runje** with a `Co-Authored-By: Claude` trailer.
 ## Released
 
 - **`v0.1.0` — first final** (2026-07-19). The plugin (10 skills) and the
-  `defendable-science` CLI are published: the package is on **PyPI**
-  (`uv tool install defendable-science`), the `v0.1.0` tag doubles as the plugin's
+  `honest-scholar` CLI are published: the package is on **PyPI**
+  (`uv tool install honest-scholar`), the `v0.1.0` tag doubles as the plugin's
   marketplace pin, and the docs are live at
-  [defendable.science](https://defendable.science/). Plugin and package
+  [honest-scholar.science](https://honest-scholar.science/). Plugin and package
   version independently (ADR-0026); see [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Planned
