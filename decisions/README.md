@@ -46,5 +46,6 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0032](0032-keys-store-outside-repo-by-default.md) | Key store defaults outside the repo (XDG); in-repo store is an explicit, gitignored opt-in with a committable-store runtime guardrail | accepted |
 | [0033](0033-evidentiary-point-records.md) | Evidentiary per-point accountability records (`points`, not a bare pass/fail), shared by `defend` and `digest` | accepted |
 | [0034](0034-digest-skill.md) | Dedicated `digest` skill for inbound paper comprehension, not a `defend` target | accepted |
+| [0035](0035-rename-to-defendable-science.md) | Rename the project to Defendable Science — repo, plugin, distribution, CLI, config dir, env vars, and docs domain; old PyPI packages dropped | accepted |
 
 Format: MADR (Markdown Any Decision Records). Deciders: Davor Runje (with Claude).
