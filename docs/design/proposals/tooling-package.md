@@ -92,9 +92,10 @@ uvx --from "git+https://github.com/davorrunje/defendable-science.git#subdirector
   release candidates are validated from **TestPyPI** first. The git-subdirectory
   install (`uv tool install "git+…#subdirectory=defendable-science"`) is the fallback
   for unreleased refs or when PyPI is unreachable.
-- **Names claimed:** distribution `defendable-science`, CLI `defendable-science` (+ short
-  alias `dsci`); the name is reserved on both PyPI and TestPyPI (pre-release
-  `0.0.0a0` published).
+- **Names claimed:** distribution `defendable-science`, CLI `defendable-science`
+  (+ short alias `dsci`); the name must be reserved on both PyPI and TestPyPI by
+  publishing a `0.0.0a0` pre-release before the first real release (cutover
+  step 0 in the rename spec).
 
 ## Open questions
 

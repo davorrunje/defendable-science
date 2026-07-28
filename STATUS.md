@@ -12,10 +12,10 @@ Commits are authored by **Davor Runje** with a `Co-Authored-By: Claude` trailer.
 
 ## Done
 
-- **All 10 skills** authored and reviewed (`skills/*/SKILL.md`, each with valid
+- **All 11 skills** authored and reviewed (`skills/*/SKILL.md`, each with valid
   `name`/`description` frontmatter): `research-init`, `hypothesis-exploration`,
   `hypothesis-testing`, `paper-exploration`, `paper-synthesis`, `thesis`,
-  `literature`, `dataset`, `progress`, `defend`.
+  `literature`, `dataset`, `progress`, `defend`, `digest`.
 - **The `defendable-science` CLI is implemented** and JSON-emitting across all groups:
   `literature` (citation graph over OpenAlex + Semantic Scholar), `dataset`
   (manifest / Croissant / SHA-256 retrieval / rclone mirror / audit),
