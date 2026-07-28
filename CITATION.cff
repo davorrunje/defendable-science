@@ -16,7 +16,7 @@ authors:
     email: davor.runje@fer.hr
 repository-code: "https://github.com/davorrunje/defendable-science"
 url: "https://github.com/davorrunje/defendable-science"
-version: 0.1.1
+version: 0.2.0
 license: Apache-2.0
 keywords:
   - research integrity

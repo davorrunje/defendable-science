@@ -22,7 +22,7 @@ environment changes** (installing `uv`/Python is the user's call), **honest stop
    - else `python3` (with `venv` + `pip`).
 3. **Install, isolated** — **PyPI-first**. The primary source is the published
    package `defendable-science` on PyPI, pinned to a **compatible range**
-   (`defendable-science>=0.1.0,<0.2.0` — the minimum package version this plugin
+   (`defendable-science>=0.2.0,<0.3.0` — the minimum package version this plugin
    release requires, up to the next incompatible boundary; see the *Version
    pinning* note):
    - `uv tool install defendable-science` — installs Python + deps in an isolated tool
@@ -60,7 +60,7 @@ environment changes** (installing `uv`/Python is the user's call), **honest stop
 - **Idempotency:** step 1 must be cheap; only steps 2–3 touch the network.
 - **Version pinning:** the plugin and the `defendable-science` package are versioned
   **independently** (ADR-0026). The plugin pins a *compatible range* (currently
-  `>=0.1.0,<0.2.0`), not an exact string-lock — the lower bound is the minimum
+  `>=0.2.0,<0.3.0`), not an exact string-lock — the lower bound is the minimum
   package version the plugin's skills need (bump it deliberately when a skill
   starts using a new CLI capability), the upper bound the next incompatible
   boundary. The package's own releases (PEP 440, `v*` tags → PyPI) proceed on

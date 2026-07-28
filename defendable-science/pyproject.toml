@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "defendable-science"
-version = "0.1.1"
+version = "0.2.0"
 description = "defendable-science — a CLI for honest, defensible AI-assisted research (tooling for the defendable-science plugin)"
 authors = [{ name = "Davor Runje", email = "davor@synthpop.ai" }]
 maintainers = [{ name = "Davor Runje", email = "davor@synthpop.ai" }]
