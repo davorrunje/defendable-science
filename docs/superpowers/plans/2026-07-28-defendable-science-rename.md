@@ -630,7 +630,7 @@ migration bullets, and the pre-existing `0.1.1` / `0.1.0` sections. The `0.1.1`
 section must still read `honest-scholar.science/get-started/user-guide` and
 `the honest-scholar CLI` verbatim. The sweep did rewrite those entries; they
 were restored (via `git checkout 5f483ac -- CHANGELOG.md`) in commit
-`178030a`, so this step only needs to verify, not restore.
+`9be6a1c`, so this step only needs to verify, not restore.
 
 - [ ] **Step 4: Commit**
 
