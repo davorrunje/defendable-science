@@ -96,3 +96,16 @@ See *Considered options* 2–4 above. Option 4 was the closest call: it is
 strictly kinder to existing users, and was rejected only because the user
 population nine days after first release is very likely zero, and a permanent
 deprecation shim on PyPI is a lasting cost to avoid a transient one.
+
+## Links
+
+`docs/superpowers/specs/2026-07-28-defendable-science-rename-design.md` (the
+full naming map this ADR defers to);
+`docs/superpowers/plans/2026-07-28-defendable-science-rename.md` (the
+implementation plan); `resources/ensure-tooling.md` (carries the
+compatibility pin this rename bumped); `docs/design/visual-identity.md` (the
+v2 identity, built on the QED mark, that motivated the rename);
+`CHANGELOG.md` (the retained `0.1.0`/`0.1.1` entries, which keep the old name
+verbatim); ADR-0026 (independent versioning of the two artifacts — this
+rename's `0.2.0` alignment is coincidental); ADR-0030 (the docs site, whose
+domain moved from `honest-scholar.science` to `defendable.science`).
