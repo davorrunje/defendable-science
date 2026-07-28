@@ -173,7 +173,8 @@ Per meta-spec §5: `papers.md` registry; per-paper roots with
 `hypotheses/<YYYY-MM-DD-slug>/{hypothesis,strategy,design,plan,findings}.md`,
 `backlog.md`, `paper/{pitch,positioning,outline,ledger,decision,sections/}`;
 `portfolio-backlog.md`; optional `thesis/{kappa,aims.md,milestones.yml}`;
-`literature/{references.bib,triage.yml,digests/<citekey>.md}`; generated
+`literature/{references.json,triage.yml,digests/<citekey>.md}` (CSL-JSON is the
+source of truth per ADR-0020; `.bib` is an on-demand export); generated
 `dashboard.md`. Status frontmatter on every hypothesis/paper/thesis artifact
 feeds `progress`; examination transcripts + logged overrides form the
 accountability trail.

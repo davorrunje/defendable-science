@@ -118,7 +118,7 @@ may be committed vs. mirror-only.
   clients, snowballing, intent classification, clustering); the bib-loader +
   triage-schema; the PRISMA-log + concept-matrix generators; reference digests.
   Deps: HTTP client + `pyyaml` (+ the substrate's rclone mirror). No heavy deps.
-- **Consumer:** the `references.bib` + `triage.yml`; mirrored PDFs; API config
+- **Consumer:** the `references.json` + `triage.yml`; mirrored PDFs; API config
   (anchors, keys) in `.defendable-science/config.yml`.
 
 ## 7. Open items

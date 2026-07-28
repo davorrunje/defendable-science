@@ -644,7 +644,7 @@ def _parse_points(raw: str) -> list[record_mod.PointRecord]:
         ``location``/``gap_note`` are optional per item; empty input means no
         points.
     :raises record_mod.RecordError: If `raw` isn't a JSON array of point objects
-        with the expected fields.
+        with the expected fields and field types.
     """
     if not raw.strip():
         return []
@@ -658,10 +658,7 @@ def _parse_points(raw: str) -> list[record_mod.PointRecord]:
     for item in data:
         if not isinstance(item, dict):
             raise record_mod.RecordError("--points item must be a JSON object")
-        try:
-            points.append(record_mod.PointRecord(**item))
-        except TypeError as exc:
-            raise record_mod.RecordError(f"--points item is malformed: {exc}") from exc
+        points.append(record_mod.point_record_from_mapping(item))
     return points
 
 
