@@ -1,8 +1,8 @@
 name: Docs publish
 
-# Builds the Mintlify docs site from this repo's markdown + the honest-scholar
+# Builds the Mintlify docs site from this repo's markdown + the defendable-science
 # Typer CLI (tools/build_docs_site.py) and publishes it to the generated docs repo
-# davorrunje/honest-scholar-docs, which Mintlify renders at honest-scholar.science.
+# davorrunje/defendable-science-docs, which Mintlify renders at defendable.science.
 # See docs/design/proposals/docs-site.md and ADR-0030.
 #
 #   * pull_request      → strict build check (fails on any build error / broken
@@ -11,7 +11,7 @@ name: Docs publish
 #   * workflow_dispatch → build + push (the first / manual publish).
 #
 # Maintainer prerequisite: create a repo Actions secret DOCS_DEPLOY_TOKEN — a
-# fine-grained PAT with Contents: read and write on davorrunje/honest-scholar-docs
+# fine-grained PAT with Contents: read and write on davorrunje/defendable-science-docs
 # (only). Without it the publish job fails fast with an explanatory message.
 
 on:
@@ -27,7 +27,7 @@ on:
       - "decisions/**"
       - "resources/references/**"
       - "assets/**"
-      - "honest-scholar/**"
+      - "defendable-science/**"
       - "tools/build_docs_site.py"
       - ".github/workflows/docs-publish.yml"
 
@@ -51,11 +51,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Sync honest-scholar
-        run: uv sync --project honest-scholar
+      - name: Sync defendable-science
+        run: uv sync --project defendable-science
       - name: Build the docs site (strict)
         run: |
-          uv run --project honest-scholar python tools/build_docs_site.py \
+          uv run --project defendable-science python tools/build_docs_site.py \
             --out "$RUNNER_TEMP/docs-site"
       - name: Validate MDX compilation + internal links (Mintlify)
         run: |
@@ -84,14 +84,14 @@ jobs:
           DOCS_DEPLOY_TOKEN: ${{ secrets.DOCS_DEPLOY_TOKEN }}
         run: |
           if [ -z "$DOCS_DEPLOY_TOKEN" ]; then
-            echo "::error::DOCS_DEPLOY_TOKEN is not set. Create a fine-grained PAT with Contents:write on davorrunje/honest-scholar-docs and add it as a repo Actions secret named DOCS_DEPLOY_TOKEN."
+            echo "::error::DOCS_DEPLOY_TOKEN is not set. Create a fine-grained PAT with Contents:write on davorrunje/defendable-science-docs and add it as a repo Actions secret named DOCS_DEPLOY_TOKEN."
             exit 1
           fi
-      - name: Sync honest-scholar
-        run: uv sync --project honest-scholar
+      - name: Sync defendable-science
+        run: uv sync --project defendable-science
       - name: Build the docs site (strict)
         run: |
-          uv run --project honest-scholar python tools/build_docs_site.py \
+          uv run --project defendable-science python tools/build_docs_site.py \
             --out "$RUNNER_TEMP/docs-site"
       - name: Validate MDX compilation + internal links (Mintlify)
         run: |
@@ -109,7 +109,7 @@ jobs:
       - name: Checkout the docs repo
         uses: actions/checkout@v7
         with:
-          repository: davorrunje/honest-scholar-docs
+          repository: davorrunje/defendable-science-docs
           token: ${{ secrets.DOCS_DEPLOY_TOKEN }}
           path: docs-repo
       - name: Replace generated content (preserve LICENSE + README.md)
@@ -126,7 +126,7 @@ jobs:
       - name: Commit and push
         run: |
           cd docs-repo
-          git config user.name "honest-scholar docs bot"
+          git config user.name "defendable-science docs bot"
           git config user.email "davor@synthpop.ai"
           git add -A
           if git diff --cached --quiet; then
@@ -134,11 +134,11 @@ jobs:
             exit 0
           fi
           git commit --no-gpg-sign \
-            -m "docs: publish site from davorrunje/honest-scholar@${GITHUB_SHA}"
+            -m "docs: publish site from davorrunje/defendable-science@${GITHUB_SHA}"
           git push
 
   live-link-check:
-    # After the push, Mintlify rebuilds honest-scholar.science asynchronously.
+    # After the push, Mintlify rebuilds defendable.science asynchronously.
     # Wait for that deploy to land, then check the *live* site for broken
     # internal links. Internal 404s (e.g. a page that failed to compile and was
     # silently dropped) fail the job; external links are excluded so a
@@ -147,7 +147,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     env:
-      SITE: https://honest-scholar.science
+      SITE: https://defendable.science
       EXPECTED_PAGES: ${{ needs.publish.outputs.pages }}
     steps:
       - name: Wait for Mintlify to reflect the new deploy
@@ -159,7 +159,7 @@ jobs:
           deadline=$((SECONDS + 900))
           while :; do
             live=$(curl -fsSL --max-time 20 "$SITE/llms.txt" 2>/dev/null \
-              | grep -coE 'https?://[^)[:space:]]*honest-scholar\.science' || true)
+              | grep -coE 'https?://[^)[:space:]]*defendable-science\.science' || true)
             live=${live:-0}
             echo "live llms.txt page links: $live / expected >= ${EXPECTED_PAGES:-?}"
             if [ -n "$EXPECTED_PAGES" ] && [ "$live" -ge "$EXPECTED_PAGES" ]; then
@@ -181,7 +181,7 @@ jobs:
           # absolute site URL — this catches a silently-dropped page directly,
           # even if it never made it into the sitemap/llms.txt.
           curl -fsSL --max-time 30 \
-            "https://raw.githubusercontent.com/davorrunje/honest-scholar-docs/main/docs.json" \
+            "https://raw.githubusercontent.com/davorrunje/defendable-science-docs/main/docs.json" \
             -o docs.json
           python3 - <<'PY' > expected-urls.txt
           import json, os
@@ -221,11 +221,11 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           # Fetch every published page and check the links found on it, but only
-          # for the honest-scholar.science host — external links are ignored so
+          # for the defendable.science host — external links are ignored so
           # CI never flakes on a third-party outage. Any internal 404 fails.
           args: >-
             --no-progress
-            --include 'honest-scholar\.science'
+            --include 'defendable-science\.science'
             --accept 200,206,429
             expected-urls.txt
           fail: true

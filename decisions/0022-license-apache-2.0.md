@@ -1,4 +1,4 @@
-# ADR-0022: License the `honest-scholar` plugin under Apache-2.0
+# ADR-0022: License the `defendable-science` plugin under Apache-2.0
 
 - Status: accepted · Date: 2026-07-17 · Deciders: Davor Runje
 

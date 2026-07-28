@@ -1,6 +1,6 @@
 # The Understanding Principle & the `defend` skill — grounding digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` meta-spec §2.2 + the cross-cutting `defend` skill (sub-spec 1). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` meta-spec §2.2 + the cross-cutting `defend` skill (sub-spec 1). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 Companion to the [agency principle](agency-principle.md). Where agency says *the human decides and is accountable*, the **Understanding principle** says *the human must understand their own work and the methods they use, well enough to decide and defend* — and the plugin **examines and teaches** to ensure it. Goal: growth, not producing papers/theses the author cannot understand or defend.
 
@@ -46,11 +46,11 @@ Following rigor rituals without understanding defeats them. Examine the *why*, n
 - *TOST / equivalence:* a non-significant p is NOT "no effect"; equivalence needs a pre-set bound. *(The most cargo-culted null claim.)*
 - *Disclosure / file-drawer:* selective reporting is what makes p-values unreliable.
 - *PRISMA:* a reconstructable audit trail vs. cherry-picking — not a diagram drawn after an ad-hoc search.
-- *Explore/confirm firewall (`honest-scholar`'s own):* it operationalizes forking-paths avoidance — letting exploration set the confirmatory test is the mechanism that invalidates it.
+- *Explore/confirm firewall (`defendable-science`'s own):* it operationalizes forking-paths avoidance — letting exploration set the confirmatory test is the mechanism that invalidates it.
 
 ## Matt Pocock's "grill me" — same mechanic, inverted purpose
 
-His skill ([marketplace](https://claudemarketplaces.com/skills/mattpocock/skills/grill-me); [writeup](https://www.aihero.dev/my-grill-me-skill-has-gone-viral)) interviews a developer to *elicit requirements they already hold*, one question at a time, and **lets the AI recommend answers** — the human is the ground truth. `honest-scholar`'s `defend` skill verifies understanding of an **external** truth (claims/methods/literature); it **must not supply an answer key** for novel claims. Same machinery, opposite epistemics.
+His skill ([marketplace](https://claudemarketplaces.com/skills/mattpocock/skills/grill-me); [writeup](https://www.aihero.dev/my-grill-me-skill-has-gone-viral)) interviews a developer to *elicit requirements they already hold*, one question at a time, and **lets the AI recommend answers** — the human is the ground truth. `defendable-science`'s `defend` skill verifies understanding of an **external** truth (claims/methods/literature); it **must not supply an answer key** for novel claims. Same machinery, opposite epistemics.
 
 ## Design (as settled in discussion)
 

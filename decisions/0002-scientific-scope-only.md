@@ -15,7 +15,7 @@ evidence). Mature engineering workflows already handle the latter well
 
 ## Decision drivers
 
-- Don't reinvent engineering workflows; keep `honest-scholar`'s identity sharp.
+- Don't reinvent engineering workflows; keep `defendable-science`'s identity sharp.
 - The scientific parts (rigor, positioning, decisions) are what's missing.
 
 ## Considered options
@@ -33,10 +33,10 @@ hypothesis folder.
 
 ## Consequences
 
-- Clean separation; `honest-scholar` composes with an engineering backend rather than
+- Clean separation; `defendable-science` composes with an engineering backend rather than
   competing with one.
 - A dependency on some engineering backend for the engineering leg (acceptable;
-  the consumer binds whatever it uses in `.honest-scholar/config.yml`).
+  the consumer binds whatever it uses in `.defendable-science/config.yml`).
 
 ## Rejected alternatives
 

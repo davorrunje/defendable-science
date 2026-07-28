@@ -1,15 +1,15 @@
 # Releasing
 
-`honest-scholar` ships **two independently-versioned artifacts**:
+`defendable-science` ships **two independently-versioned artifacts**:
 
 | Artifact | What | Distributed via | Version source |
 |---|---|---|---|
 | **Plugin** | the Claude Code plugin (skills + docs) | this repo's git **marketplace** | `.claude-plugin/plugin.json` (semver) |
-| **Package** | the `honest-scholar` CLI tooling (`honest-scholar/`) | **PyPI** | `honest-scholar/pyproject.toml` (PEP 440) |
+| **Package** | the `defendable-science` CLI tooling (`defendable-science/`) | **PyPI** | `defendable-science/pyproject.toml` (PEP 440) |
 
 They version **independently** — a skill edit needn't cut a PyPI release, and a
 CLI fix needn't re-cut the plugin. The plugin declares a *compatible range* of
-the package (`honest-scholar>=<min>,<<next>`) in
+the package (`defendable-science>=<min>,<<next>`) in
 [`resources/ensure-tooling.md`](resources/ensure-tooling.md); that pin is the
 coupling, not a shared version string.
 
@@ -41,7 +41,7 @@ Driven by three workflows — no local build / `twine` needed:
    | start 0.1.0's alpha | minor | alpha | `0.1.0a0` |
    | patch release | patch | keep | `0.0.1` |
 
-   It edits `pyproject.toml` and opens a **`release: honest-scholar v<version>`** PR.
+   It edits `pyproject.toml` and opens a **`release: defendable-science v<version>`** PR.
 
 2. **Review & merge the release PR** into `main` (wait for CI).
 
@@ -53,8 +53,8 @@ Driven by three workflows — no local build / `twine` needed:
    uv tool install \
      --index-url https://test.pypi.org/simple/ \
      --extra-index-url https://pypi.org/simple/ \
-     --prerelease=allow honest-scholar==<version>
-   honest-scholar --version
+     --prerelease=allow defendable-science==<version>
+   defendable-science --version
    ```
 
 4. **Publish to PyPI — create a GitHub Release.** The published Release creates
@@ -66,7 +66,7 @@ Driven by three workflows — no local build / `twine` needed:
    ```
    (or use the Releases UI — tick *"Set as a pre-release"* for `a`/`b`/`rc`). The
    Publish run's summary/annotation shows
-   `https://pypi.org/project/honest-scholar/<version>/`.
+   `https://pypi.org/project/defendable-science/<version>/`.
 
    > Re-running a publish without a new Release (e.g. after a transient failure):
    > Actions → **Publish** → `target: pypi`. Don't push a bare `v*` tag — the
@@ -77,7 +77,7 @@ Driven by three workflows — no local build / `twine` needed:
 ## Releasing the plugin
 
 The plugin has **no build or upload step** — it's served from git through the
-marketplace (`/plugin marketplace add davorrunje/honest-scholar`). A "release" is
+marketplace (`/plugin marketplace add davorrunje/defendable-science`). A "release" is
 just a versioned, validated snapshot users can pin.
 
 1. **Bump** `.claude-plugin/plugin.json` `version` (semver: `patch` / `minor` /
@@ -85,7 +85,7 @@ just a versioned, validated snapshot users can pin.
 2. **Re-pin the package if needed.** If the plugin's skills now rely on a newer
    CLI capability, raise the compatibility floor in
    [`resources/ensure-tooling.md`](resources/ensure-tooling.md)
-   (`honest-scholar>=<min>`).
+   (`defendable-science>=<min>`).
 3. **Validate:** `claude plugin validate .`.
 4. **Open a PR and merge to `main`.**
 5. **How users pin it.** In their `.claude/settings.json` marketplace source,
@@ -103,7 +103,7 @@ just a versioned, validated snapshot users can pin.
 ## One-time setup (already done; for reference)
 
 - **Trusted Publishing (OIDC, no tokens)** — registered publishers on PyPI and
-  TestPyPI for repo `davorrunje/honest-scholar`, workflow `publish.yml`,
+  TestPyPI for repo `davorrunje/defendable-science`, workflow `publish.yml`,
   environments `testpypi` / `pypi`.
 - **`RELEASE_PAT` secret** — a fine-grained PAT (Contents: read/write, Pull
   requests: read/write) so **Bump version** can open the release PR *and* have CI

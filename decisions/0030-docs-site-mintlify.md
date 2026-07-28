@@ -4,7 +4,7 @@
 
 ## Context
 
-`honest-scholar` had no rendered docs site (#6) — the design record, `README.md`,
+`defendable-science` had no rendered docs site (#6) — the design record, `README.md`,
 `docs/USER-GUIDE.md`, and the CLI `--help` were the docs, all as in-repo markdown.
 A single navigable "one portal" site (users **and** the design record) is now
 wanted. The choice must fit the project's posture: it targets the **whole research
@@ -38,8 +38,8 @@ future arXiv paper (#7).
 ## Decision
 
 **Mintlify**, sourced from the in-repo markdown, published by CI to a **dedicated,
-generated docs repo** (`honest-scholar-docs`) that Mintlify renders at the custom
-domain **`honest-scholar.science`**.
+generated docs repo** (`defendable-science-docs`) that Mintlify renders at the custom
+domain **`defendable.science`**.
 
 - **Ecosystem-native + proven**: Anthropic's own docs (claude.com/docs) run on
   Mintlify — well-supported, fitting for a Claude-ecosystem tool.
@@ -60,7 +60,7 @@ domain **`honest-scholar.science`**.
 
 ## Consequences
 
-- A polished, ecosystem-native site at `honest-scholar.science`, release-gated, on
+- A polished, ecosystem-native site at `defendable.science`, release-gated, on
   the free tier, with the markdown source owned in-repo.
 - One-time maintainer setup: register the domain + DNS, create the docs repo,
   connect Mintlify, add a least-privilege deploy secret to CI.

@@ -173,6 +173,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: thesis
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: thesis
 ```

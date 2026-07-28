@@ -1,4 +1,4 @@
-# Proposal: Citation-graph client (`honest_scholar/literature/graph.py`)
+# Proposal: Citation-graph client (`defendable_science/literature/graph.py`)
 
 `Status: implemented (designed 2026-07-18) · Skill: literature`
 
@@ -12,12 +12,12 @@ recommendations). Today there is no client: `../../../skills/literature/SKILL.md
 the graph step manually / via direct tool calls — persisting raw JSON as the
 provenance root and editing `references.json` / `triage.yml` — which is
 unreproducible and pushes pagination, degradation, and rate-limit handling onto the
-operator. Once `honest-scholar` is installed (via
+operator. Once `defendable-science` is installed (via
 [`ensure-tooling`](../../../resources/ensure-tooling.md)) the skill calls
-`honest-scholar literature …` instead.
+`defendable-science literature …` instead.
 
-This proposes the first cut of `honest_scholar/literature/graph.py` (exposed as
-`honest-scholar literature …`): the read/enrich half of the
+This proposes the first cut of `defendable_science/literature/graph.py` (exposed as
+`defendable-science literature …`): the read/enrich half of the
 substrate (graph traversal + enrichment + neighbor sets). The registry
 loader/appender, triage join, PRISMA-log and concept-matrix generators are noted as
 out of scope here (separate proposal) so this stays focused.
@@ -33,18 +33,18 @@ S2 key is present. Reproducible: same id + filters + search date → same set.
 
 ## Design sketch
 
-**CLI** (`honest-scholar literature <cmd> [args] --json`), each command prints one
+**CLI** (`defendable-science literature <cmd> [args] --json`), each command prints one
 JSON document to stdout; raw upstream responses are written to a `--provenance-dir`
 as the provenance root before any enrichment. The same functions are importable
-from `honest_scholar.literature.graph`.
+from `defendable_science.literature.graph`.
 
 | Command | Purpose | Key args |
 |---|---|---|
-| `honest-scholar literature resolve <id>` | id → canonical work | `--id` (DOI/arXiv/OpenAlex W…/S2) |
-| `honest-scholar literature cites <id>` | forward citations (who cited it) | `--per-page`, `--max`, `--since` |
-| `honest-scholar literature refs <id>` | backward references | `--max` |
-| `honest-scholar literature enrich <id>...` | per-work metadata bundle | `--fields`, `--context` |
-| `honest-scholar literature neighbors <id>` | co-citation + coupling sets | `--kind {cocite,couple,both}`, `--top` |
+| `defendable-science literature resolve <id>` | id → canonical work | `--id` (DOI/arXiv/OpenAlex W…/S2) |
+| `defendable-science literature cites <id>` | forward citations (who cited it) | `--per-page`, `--max`, `--since` |
+| `defendable-science literature refs <id>` | backward references | `--max` |
+| `defendable-science literature enrich <id>...` | per-work metadata bundle | `--fields`, `--context` |
+| `defendable-science literature neighbors <id>` | co-citation + coupling sets | `--kind {cocite,couple,both}`, `--top` |
 
 **Identifier resolution.** `resolve()` normalizes DOI / `arXiv:` / OpenAlex `W…` /
 S2 (`CorpusId:` / SHA) to a canonical record `{openalex, doi, s2, arxiv, title,
@@ -84,14 +84,14 @@ marker — the caller records it in run provenance.
 ## Dependencies & posture
 
 Light-dep, per SKILL.md and `../../../resources/substrate/asset-registry.md`:
-- **HTTP:** `requests` — the house HTTP client for `honest-scholar` (decided in
+- **HTTP:** `requests` — the house HTTP client for `defendable-science` (decided in
   `tooling-package.md`; already pulled by `pooch`, so zero net dep). No OpenAlex/S2
   SDKs, no graph libraries (`networkx` etc.); neighbor math is stdlib
   `set`/`collections.Counter`.
 - **stdlib** for JSON and the on-disk cache; the CLI layer is **Typer** (the
   package's house CLI framework, per `tooling-package.md`), not argparse.
 - `mailto=` on every OpenAlex call (polite pool); `x-api-key` header on S2 iff a key
-  is configured (env / `.honest-scholar/config.yml`), else omit and degrade.
+  is configured (env / `.defendable-science/config.yml`), else omit and degrade.
 - **Rate-limits / caching:** respect OpenAlex 10 req/s + 100k/day and S2's lower
   keyless ceiling; exponential backoff on 429; a content-addressed on-disk response
   cache (keyed by URL) so re-runs are cheap and reproducible. Cache is the
@@ -106,7 +106,7 @@ Light-dep, per SKILL.md and `../../../resources/substrate/asset-registry.md`:
 - S2 batch endpoint (`/paper/batch`) vs. per-id calls for hydration — batch cuts
   request count but couples to a second response shape.
 - ~~Where does the cache live~~ — **settled** (ADR-0031): gitignored under
-  `.honest-scholar/cache/http`, sharing the `cache_dir:`-configured root with
+  `.defendable-science/cache/http`, sharing the `cache_dir:`-configured root with
   the dataset substrate cache (`<cache_dir>/datasets`). TTL / invalidation
   policy is still open.
 - Does `resolve` need Crossref as a DOI fallback when OpenAlex misses, or is

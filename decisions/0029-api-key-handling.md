@@ -3,9 +3,9 @@
 - Status: accepted · Date: 2026-07-19 · Deciders: Davor Runje
 
 > **Refined by ADR-0032.** The default store location moves outside the
-> consumer repo's work tree (XDG config, not `.honest-scholar/keys.json`),
+> consumer repo's work tree (XDG config, not `.defendable-science/keys.json`),
 > closing a secret-leak gap the in-repo default left open
-> (honest-scholar#66). The in-repo path below remains available as an
+> (defendable-science#66). The in-repo path below remains available as an
 > explicit opt-in and is still gitignored by `research-init`.
 
 ## Context
@@ -46,12 +46,12 @@ not do**: convenience storage is not encryption.
 
 Option 2.
 
-- **Store.** A CLI-owned JSON file `.honest-scholar/keys.json` — gitignored,
+- **Store.** A CLI-owned JSON file `.defendable-science/keys.json` — gitignored,
   created `0600` — holding each key plus light metadata (service, how-to-obtain
   link). JSON (not `.env`) because the CLI is the only writer/reader, so a
   structured, metadata-carrying format beats line-parsing; and a global `.env`
   auto-loaded by unrelated tools is a foot-gun.
-- **Command group.** `honest-scholar keys set|list|check|unset|path`. `set` reads
+- **Command group.** `defendable-science keys set|list|check|unset|path`. `set` reads
   the value from **stdin / a hidden prompt** (never `argv`), and accepts a JSON
   blob on stdin to set many at once or to run a one-shot without persisting.
   `list`/`check` report **presence, never values**, and which source each key
@@ -96,7 +96,7 @@ Option 2.
 
 ## Links
 
-`honest-scholar/honest_scholar/cli.py` (`_lit_client`, the `keys` group);
+`defendable-science/defendable_science/cli.py` (`_lit_client`, the `keys` group);
 `resources/ensure-tooling.md`; #42 (implementation), #49 (OS-keychain backend
 follow-up), #41 (rate-limit handling — the "get a key" complement); ADR-0024
 (light-dependency / optional-extra posture).

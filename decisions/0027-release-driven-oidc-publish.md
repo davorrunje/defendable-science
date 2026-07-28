@@ -4,7 +4,7 @@
 
 ## Context
 
-The `honest-scholar` package (ADR-0024) is distributed on PyPI, with release
+The `defendable-science` package (ADR-0024) is distributed on PyPI, with release
 candidates validated on TestPyPI first. Publishing needs a trigger (when does a
 build go out?) and credentials (how does CI authenticate to the index?). Long-lived
 PyPI API tokens stored as repo secrets are a standing exfiltration risk and drift

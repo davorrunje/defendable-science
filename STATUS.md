@@ -1,11 +1,11 @@
-# honest-scholar — status
+# defendable-science — status
 
 An honest ledger of what is **done**, **in progress**, and **planned**.
-`honest-scholar` ships two independently-versioned artifacts:
+`defendable-science` ships two independently-versioned artifacts:
 
 - the **plugin** — the skill instruction files (`skills/*/SKILL.md`) plus
   templates, contracts, and the migrated design record (its primary deliverable);
-- the **`honest-scholar` package** — the CLI those skills call, published to PyPI
+- the **`defendable-science` package** — the CLI those skills call, published to PyPI
   and installed isolated from your project's ML environment.
 
 Commits are authored by **Davor Runje** with a `Co-Authored-By: Claude` trailer.
@@ -16,7 +16,7 @@ Commits are authored by **Davor Runje** with a `Co-Authored-By: Claude` trailer.
   `name`/`description` frontmatter): `research-init`, `hypothesis-exploration`,
   `hypothesis-testing`, `paper-exploration`, `paper-synthesis`, `thesis`,
   `literature`, `dataset`, `progress`, `defend`.
-- **The `honest-scholar` CLI is implemented** and JSON-emitting across all groups:
+- **The `defendable-science` CLI is implemented** and JSON-emitting across all groups:
   `literature` (citation graph over OpenAlex + Semantic Scholar), `dataset`
   (manifest / Croissant / SHA-256 retrieval / rclone mirror / audit),
   `defend record`, `backlog`, and `doctor` — with a strict-mypy, 100%-covered test
@@ -37,16 +37,16 @@ Commits are authored by **Davor Runje** with a `Co-Authored-By: Claude` trailer.
 ## Released
 
 - **`v0.1.0` — first final** (2026-07-19). The plugin (10 skills) and the
-  `honest-scholar` CLI are published: the package is on **PyPI**
-  (`uv tool install honest-scholar`), the `v0.1.0` tag doubles as the plugin's
+  `defendable-science` CLI are published: the package is on **PyPI**
+  (`uv tool install defendable-science`), the `v0.1.0` tag doubles as the plugin's
   marketplace pin, and the docs are live at
-  [honest-scholar.science](https://honest-scholar.science/). Plugin and package
+  [defendable.science](https://defendable.science/). Plugin and package
   version independently (ADR-0026); see [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Planned
 
 - A citable **arXiv report** describing the skills and their rationale — ideally
-  written *using* `honest-scholar` itself (the preferred citation once it exists).
+  written *using* `defendable-science` itself (the preferred citation once it exists).
 - Cross-repo thesis aggregation (design in `docs/design/proposals/`).
 
 ## How to review

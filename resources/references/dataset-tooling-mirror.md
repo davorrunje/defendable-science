@@ -1,6 +1,6 @@
 # Dataset Tooling & Mirror Architecture — digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` `dataset` capability (sub-spec 3). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` `dataset` capability (sub-spec 3). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 ## Bottom line
 Thin custom **`datasets.yml`** + **rclone** (private mirror) + **pooch** (Tier-B fetch) + a ~200-line resolution-chain core. Reject DVC/DataLad/lakeFS/Quilt on dependency-weight grounds. Adopt `huggingface_hub` opportunistically for HF-hosted/gated data. git-annex is the fallback single-tool option if a Haskell binary is acceptable.
@@ -32,7 +32,7 @@ mirror:
   base_path: "<project>/datasets"
   hash: md5                       # lowest common denominator GDrive/S3
 ```
-Keep private while registry stays public: (1) gitignore `rclone.conf`, point via `RCLONE_CONFIG=$PWD/.honest-scholar/rclone.conf`, commit `rclone.conf.example` (name/type only); or (2) **env-var remotes** (`RCLONE_CONFIG_<NAME>_TYPE=drive`, `_TOKEN=…`) from CI secrets — preferred for CI. Caveats: `rclone obscure` is **not** encryption (never commit it); env-var remote names use underscores; GDrive service account for CI, MD5 present on all files, 750 GiB/day upload quota.
+Keep private while registry stays public: (1) gitignore `rclone.conf`, point via `RCLONE_CONFIG=$PWD/.defendable-science/rclone.conf`, commit `rclone.conf.example` (name/type only); or (2) **env-var remotes** (`RCLONE_CONFIG_<NAME>_TYPE=drive`, `_TOKEN=…`) from CI secrets — preferred for CI. Caveats: `rclone obscure` is **not** encryption (never commit it); env-var remote names use underscores; GDrive service account for CI, MD5 present on all files, 750 GiB/day upload quota.
 
 Mirror × tier: A → redundant (skip, or large redistributable blobs); B → **primary durability** vs link-rot (populate on first fetch); C → **essential** (only re-fetchable copy after one-time gated acquisition).
 

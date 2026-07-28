@@ -64,9 +64,9 @@ carries provenance so any candidate can be traced to where it came from:
 - **frame** — `gap-spotting` or `problematization` (see Ranking).
 - **note** — for a dropped row, the recorded drop reason.
 
-> **Tooling.** Row append/transition is the `honest-scholar backlog
+> **Tooling.** Row append/transition is the `defendable-science backlog
 > park|add|list|rank|promote|drop` CLI group
-> (`honest_scholar/exploration/backlog.py`) — ensure via
+> (`defendable_science/exploration/backlog.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); shared with
 > `paper-exploration`. `add` realizes the `generate` verb's row-append; `list` is a
 > read-only inspection command. By hand (if the CLI isn't available): edit the
@@ -186,6 +186,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: hypothesis-exploration
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: hypothesis-exploration
 ```

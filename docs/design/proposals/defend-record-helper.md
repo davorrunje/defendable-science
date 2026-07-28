@@ -9,9 +9,9 @@ The `defend` skill's record step (SKILL.md step 6) currently has no tooling. Its
 **Interim (until the module is implemented):** the skill
 orchestrates the write by hand — editing the target artifact's frontmatter to add an
 `understanding` block, and (if a transcript is kept) dropping it beside the artifact
-as `defend-<date>.md`; once `honest-scholar` is installed (via
+as `defend-<date>.md`; once `defendable-science` is installed (via
 [`ensure-tooling`](../../../resources/ensure-tooling.md)) the skill calls
-`honest-scholar defend record …` instead. Two problems with the manual path:
+`defendable-science defend record …` instead. Two problems with the manual path:
 
 - **Drift-prone frontmatter.** `progress` rolls up the `understanding` field
   (`../../../skills/progress/SKILL.md`, "Status frontmatter"); a hand-edited block
@@ -27,8 +27,8 @@ it consistently.
 
 ## Goal
 
-A single small module, `honest_scholar/defend/record.py` (exposed as
-`honest-scholar defend record`), that a `defend` session invokes at step 6 to
+A single small module, `defendable_science/defend/record.py` (exposed as
+`defendable-science defend record`), that a `defend` session invokes at step 6 to
 (a) append/update the `understanding` status block in a target artifact's markdown
 **frontmatter** so `progress` can roll it up, and (b) append the transcript plus
 any logged overrides / per-gap acknowledgements to an accountability log. It

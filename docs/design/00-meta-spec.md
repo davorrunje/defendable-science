@@ -1,13 +1,13 @@
-# honest-scholar — Scientific Research-Workflow Plugin (Meta-Spec)
+# defendable-science — Scientific Research-Workflow Plugin (Meta-Spec)
 
 **Date:** 2026-07-17
 **Author:** Davor Runje
-**Status:** Implemented. Parent meta-spec for the `honest-scholar` plugin; the four
+**Status:** Implemented. Parent meta-spec for the `defendable-science` plugin; the four
 sub-specs (§8) and the CLI proposals (`proposals/`) are realized in this repo.
 Retained as the design record.
 
 > **Scope of this document.** This is the *parent* spec for a new, standalone
-> Claude Code plugin — **`honest-scholar`** — that packages the scientific
+> Claude Code plugin — **`defendable-science`** — that packages the scientific
 > research-workflow skills originally designed inside `mononet`
 > (`docs/superpowers/specs/2026-07-15-*`). It establishes the global picture:
 > identity, scope, plugin architecture, the plugin↔consumer boundary, the
@@ -15,7 +15,7 @@ Retained as the design record.
 > The detailed designs live in four sub-specs (§8). **Read this first.**
 >
 > **Historical note.** The plugin has since been extracted into its own
-> repository (`davorrunje/honest-scholar`) and the migration described in §9 is
+> repository (`davorrunje/defendable-science`) and the migration described in §9 is
 > complete. This document is retained as the design record; where it cites
 > `mononet` PRs or `docs/superpowers/` paths, that is the origin context, not a
 > live dependency.
@@ -24,7 +24,7 @@ Retained as the design record.
 
 **This principle overrides everything else in this document.**
 
-The `honest-scholar` skills are **assistants, not researchers.** They keep the accounts
+The `defendable-science` skills are **assistants, not researchers.** They keep the accounts
 of a research program, advise as a mentor, and discuss as a colleague — but they
 do **not** perform independent research and do **not** make material scientific
 decisions. Accountability for research is *non-delegable and attaches only to
@@ -78,7 +78,7 @@ and
   test authoring are delegated to the bound **engineering backend** via the
   engineering-delegation contract (`resources/contracts/engineering.md`;
   capabilities `design` / `plan` / `implement`, bound per project in
-  `.honest-scholar/config.yml` as `engineering_backend:`). `honest-scholar` calls out to it; it
+  `.defendable-science/config.yml` as `engineering_backend:`). `defendable-science` calls out to it; it
   does not reimplement it. This boundary is deliberate and load-bearing.
 - **No domain assumptions.** Nothing monotonic-network- or even
   ML-specific ships in the plugin. Domain content is supplied by the consuming
@@ -86,7 +86,7 @@ and
 - **No hosted services as source of truth.** No MLflow/W&B/Zotero-DB
   dependency for provenance. Optional authoring front-ends (e.g. Zotero) may
   *export* into the git-tracked artifacts, but the repo is authoritative.
-- **No experiment *runner*.** `honest-scholar` defines the experiment-backend
+- **No experiment *runner*.** `defendable-science` defines the experiment-backend
   *contract* and bundles no default; each consuming repo supplies and binds its own
   implementation.
 - **No cross-repo aggregation.** Work-research and a PhD thesis live in
@@ -99,7 +99,7 @@ and
 
 ## 2. Identity & scope
 
-`honest-scholar` covers the **scientific** workflow; the *engineering* is delegated to
+`defendable-science` covers the **scientific** workflow; the *engineering* is delegated to
 the bound engineering backend via the engineering-delegation contract.
 Its unit of work is a *scientific claim* and its lifecycle; its outputs are
 hypotheses, evidence, decisions, and papers. Everything that is "how do I build
@@ -107,7 +107,7 @@ the thing that produces the evidence" is the engineering backend's job.
 
 ### 2.1 Core principle — assistant, not researcher
 
-`honest-scholar` skills are **assistants, not autonomous researchers.** They keep the
+`defendable-science` skills are **assistants, not autonomous researchers.** They keep the
 accounts of a research program, advise as a mentor, and discuss as a colleague —
 but they do **not** perform independent research, and they do **not** make
 material decisions. The researcher is in the driving seat. This is the highest
@@ -368,11 +368,11 @@ respecting the firewall by producing evidence the human acts on).
 
 ## 4. Plugin repo layout
 
-Standalone repo, distributed as a Claude Code plugin. Working name `honest-scholar`;
-skills are namespaced `honest-scholar:<skill>`.
+Standalone repo, distributed as a Claude Code plugin. Working name `defendable-science`;
+skills are namespaced `defendable-science:<skill>`.
 
 ```
-honest-scholar/                                  # plugin repo root
+defendable-science/                                  # plugin repo root
 ├── .claude-plugin/
 │   └── plugin.json                       # manifest: name, version, description
 ├── skills/
@@ -434,7 +434,7 @@ the experiment-backend implementation. After `init`/`adopt`, a consumer repo
 │       ├── references.bib                # or CSL-JSON — bibliographic facts
 │       └── triage.yml                    # decision sidecar (keyed by citekey/DOI)
 ├── datasets.yml                          # dataset registry (entries + checksums + tiers)
-├── .honest-scholar/
+├── .defendable-science/
 │   ├── config.yml                        # rclone remote name, lit anchors, cache_dir, experiment-backend + engineering_backend bindings
 │   ├── cache/                            # gitignored materialized data + HTTP cache (path from `cache_dir:`; ADR-0031)
 │   ├── rclone.conf                       # gitignored (creds)
@@ -444,7 +444,7 @@ the experiment-backend implementation. After `init`/`adopt`, a consumer repo
 
 | Lives in the **plugin** | Lives in the **consumer** |
 |---|---|
-| the 7 skills; capability engines (literature, dataset); templates; rigor kit; methodology digests; the substrate + experiment-backend **contracts** | `docs/research/` content; `datasets.yml` entries + blobs; `.honest-scholar/` config + mirror creds; the experiment-backend **implementation**; literature anchors |
+| the 7 skills; capability engines (literature, dataset); templates; rigor kit; methodology digests; the substrate + experiment-backend **contracts** | `docs/research/` content; `datasets.yml` entries + blobs; `.defendable-science/` config + mirror creds; the experiment-backend **implementation**; literature anchors |
 
 ## 6. The `research-init` skill (init / adopt)
 
@@ -452,7 +452,7 @@ One skill, two modes — both drive a repo to the layout of §5; `adopt` is `ini
 plus an inventory-and-map phase.
 
 - **`init` (greenfield)** — scaffold the `docs/research/` layout, the registries
-  (`papers.md`, `datasets.yml`, `references.bib` + `triage.yml`), `.honest-scholar/`
+  (`papers.md`, `datasets.yml`, `references.bib` + `triage.yml`), `.defendable-science/`
   config (rclone remote name, literature anchors, cache directory,
   experiment-backend + engineering-backend bindings),
   and the staged-doc templates. Delegates per-item registration to the
@@ -470,7 +470,7 @@ plus an inventory-and-map phase.
     `monotone-depth-collapse-lean-brief.md`) → retroactive hypothesis docs with
     findings — the "detailed record per hypothesis" applied historically.
   - the benchmark orchestration (PR #127) → bound as `mononet`'s
-    experiment-backend implementation in `.honest-scholar/config.yml`.
+    experiment-backend implementation in `.defendable-science/config.yml`.
 
 `adopt` is the direct payoff for the "benchmarks folder out of control, no
 systematic record" problem that motivated this whole effort.
@@ -478,10 +478,10 @@ systematic record" problem that motivated this whole effort.
 ## 7. Distribution
 
 Distributed as a **public** Claude Code plugin (git-repo marketplace install),
-named **`honest-scholar`** (ADR-0019) — for the author's own repos, company colleagues,
+named **`defendable-science`** (ADR-0019) — for the author's own repos, company colleagues,
 PhD peers, and the broader research community. The plugin must therefore be
 genuinely domain-neutral and self-documenting from day one — most "users" are not
-the author. A root `README.md` (staged at `docs/superpowers/honest-scholar/README.md`)
+the author. A root `README.md` (staged at `docs/superpowers/defendable-science/README.md`)
 explains purpose + reasoning and links to the decision log and reference digests.
 Licensed **Apache-2.0** (ADR-0022), matching `mononet`.
 
@@ -515,13 +515,13 @@ This meta-spec defers detail to four sub-specs (each date-prefixed under
 ## 9. Migration of existing in-repo work
 
 > **Status: complete.** This migration has been executed — the plugin now lives in
-> `davorrunje/honest-scholar` and `mononet` consumes it. The plan is retained below
+> `davorrunje/defendable-science` and `mononet` consumes it. The plan is retained below
 > for provenance; the `mononet` PR / path references are the origin context.
 
 The scientific-workflow work originally lived inside `mononet`. It relocated:
 
 - **PR #128** (four research-workflow specs + `docs/research/README.md` + four
-  reference digests) → **retargets the `honest-scholar` plugin repo** instead of
+  reference digests) → **retargets the `defendable-science` plugin repo** instead of
   `mononet/docs/superpowers/`. Content is refactored to depend on the
   capability contracts rather than `mononet` internals.
 - **PR #127** (benchmark experiment orchestration) → **stays in `mononet`** as
@@ -537,7 +537,7 @@ implementation plans, then the plugin repo is created and `mononet` adopts it.
 
 ## 10. Open items to confirm before implementation
 
-- **Plugin repo name / visibility** — *resolved:* public, named `honest-scholar`
+- **Plugin repo name / visibility** — *resolved:* public, named `defendable-science`
   (ADR-0019).
 - **Bibliography format** — *resolved:* CSL-JSON as source of truth, BibTeX
   exported on demand (ADR-0020).
@@ -547,7 +547,7 @@ implementation plans, then the plugin repo is created and `mononet` adopts it.
 - **Mirror hash algorithm** — *resolved:* SHA-256 is authoritative (identity ==
   integrity == citation-verifiability); rclone's per-backend hash is a transport
   check only, and bytes are always re-hashed against the manifest (ADR-0011).
-- **`.honest-scholar/` vs existing conventions** — confirm the config directory name
+- **`.defendable-science/` vs existing conventions** — confirm the config directory name
   and that it does not collide with existing repo conventions.
 - **Thesis milestone schema** — the shape of `milestones.yml` (institution
   gates are time-boxed and vary); keep configurable, resolve in sub-spec 1.

@@ -1,8 +1,8 @@
-# honest-scholar sub-spec 3 — Dataset capability (`dataset`)
+# defendable-science sub-spec 3 — Dataset capability (`dataset`)
 
 **Date:** 2026-07-17
 **Author:** Davor Runje
-**Status:** Implemented. Sub-spec of the `honest-scholar` meta-spec; realized in this repo (skills + CLI).
+**Status:** Implemented. Sub-spec of the `defendable-science` meta-spec; realized in this repo (skills + CLI).
 
 > Sub-spec of [00-meta-spec.md](00-meta-spec.md).
 > Builds on the asset substrate of
@@ -104,7 +104,7 @@ deps; HTTP/FTP/SFTP + `doi:`); Tier-A uses git/LFS; Tier-C is instruct-drop-veri
   hash as transport check only.
 - **Croissant version** — target the current MLCommons spec; treat as export
   format, registry is the superset source of truth.
-- **`.datasets-cache/` vs `.honest-scholar/`** — **settled** (ADR-0031): the cache
-  lives under `.honest-scholar/cache/` by default, sourced from a `cache_dir:`
+- **`.datasets-cache/` vs `.defendable-science/`** — **settled** (ADR-0031): the cache
+  lives under `.defendable-science/cache/` by default, sourced from a `cache_dir:`
   key in `config.yml` so `research-init`'s `.gitignore` scaffold and the CLI's
   runtime cache path cannot drift apart; `.datasets-cache/` is retired.

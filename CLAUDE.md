@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-`honest-scholar` ships **two independently-versioned artifacts** — this split is the single most important thing to understand:
+`defendable-science` ships **two independently-versioned artifacts** — this split is the single most important thing to understand:
 
 1. **The plugin** (repo root) — the primary deliverable. Markdown **skills** (`skills/<name>/SKILL.md`) plus `resources/`, the design record, and `.claude-plugin/{plugin.json,marketplace.json}`. Pure markdown; distributed as a git self-marketplace. Versioned by `plugin.json` (semver).
-2. **The `honest-scholar` package** (`honest-scholar/` subdirectory) — a **Typer CLI** the skills shell out to. Published to PyPI, installed **isolated** from a consumer's ML env. Versioned by `honest-scholar/pyproject.toml` (PEP 440).
+2. **The `defendable-science` package** (`defendable-science/` subdirectory) — a **Typer CLI** the skills shell out to. Published to PyPI, installed **isolated** from a consumer's ML env. Versioned by `defendable-science/pyproject.toml` (PEP 440).
 
 They release on separate cadences; the plugin pins a compatible package range in [`resources/ensure-tooling.md`](resources/ensure-tooling.md) (ADR-0026). Do **not** lock the two versions together, and do not bump `plugin.json` from the package's version-bump automation.
 
@@ -29,14 +29,14 @@ This is guidance for **working on this repo**. It is *not* a shipped artifact an
 
 Cross-cutting: `progress` (reads status frontmatter → dashboard; never a productivity score), `defend` (Socratic tutor-examiner guardrail), and `digest` (defend's inbound counterpart — verified comprehension of external papers). Shared capabilities: `literature`, `dataset`. Onboarding: `research-init` (`init`/`adopt`). Two load-bearing principles run through everything: **agency** (the human makes and signs every material decision) and **understanding** (`defend` verifies + teaches before a decision is recorded). *Engineering* (design/plan/code) is deliberately **delegated** to a bound backend via the engineering-delegation contract (ADR-0023) — the plugin never implements it.
 
-**The package mirrors the skill verbs.** `honest-scholar/honest_scholar/` (note the underscore): `core/` (a caching `requests` HTTP client + config), `literature/graph.py` (OpenAlex + Semantic Scholar), `dataset/{manifest,retrieval}.py` (manifest/Croissant + pooch/rclone fixity), `defend/record.py`, `exploration/backlog.py`, `cli.py` (the authoritative Typer tree). Each command emits JSON; skills call `honest-scholar <group> <cmd>` after the `ensure-tooling` bootstrap. Kernels/parsers are pure and injectable (HTTP transport, the rclone `run`, the Tier-B fetcher) so everything is tested without network or the rclone binary.
+**The package mirrors the skill verbs.** `defendable-science/defendable_science/` (note the underscore): `core/` (a caching `requests` HTTP client + config), `literature/graph.py` (OpenAlex + Semantic Scholar), `dataset/{manifest,retrieval}.py` (manifest/Croissant + pooch/rclone fixity), `defend/record.py`, `exploration/backlog.py`, `cli.py` (the authoritative Typer tree). Each command emits JSON; skills call `defendable-science <group> <cmd>` after the `ensure-tooling` bootstrap. Kernels/parsers are pure and injectable (HTTP transport, the rclone `run`, the Tier-B fetcher) so everything is tested without network or the rclone binary.
 
 ## Commands
 
-Package work runs from the **`honest-scholar/` subdirectory**:
+Package work runs from the **`defendable-science/` subdirectory**:
 
 ```bash
-cd honest-scholar
+cd defendable-science
 uv sync                                          # install / sync
 uv run pytest -q                                 # full suite — enforces 100% branch coverage
 uv run pytest tests/test_literature.py::test_resolve_openalex  # a single test
@@ -46,14 +46,14 @@ uv run mypy            # strict    (or ./tools/typecheck.sh from root)
 ```
 
 - **100% statement+branch coverage is a hard gate** (`fail_under = 100`, ADR-0028). New code lands with the tests that cover it, including error/degradation branches. `# pragma: no cover` only for genuinely unreachable branches, with a reason.
-- **Live/integration tests are opt-in** and skipped by default (`@pytest.mark.live`). They hit real OpenAlex/S2 + real pooch/rclone: `HONEST_SCHOLAR_LIVE=1 uv run pytest -m live --no-cov` (rclone tests skip if the binary is absent). The hermetic suite + coverage gate stay intact without them.
+- **Live/integration tests are opt-in** and skipped by default (`@pytest.mark.live`). They hit real OpenAlex/S2 + real pooch/rclone: `DEFENDABLE_SCIENCE_LIVE=1 uv run pytest -m live --no-cov` (rclone tests skip if the binary is absent). The hermetic suite + coverage gate stay intact without them.
 
 From the repo root (plugin side):
 
 ```bash
 ./tools/validate-plugin.sh          # claude plugin validate (structural fallback if the CLI is absent)
 pre-commit run --all-files          # ruff, mypy, codespell, bandit, detect-secrets
-/plugin marketplace add ./ && /plugin install honest-scholar@honest-scholar   # test-install the plugin
+/plugin marketplace add ./ && /plugin install defendable-science@defendable-science   # test-install the plugin
 ```
 
 ## Conventions
@@ -68,4 +68,4 @@ pre-commit run --all-files          # ruff, mypy, codespell, bandit, detect-secr
 
 ## Development posture
 
-This repo is built with the [`superpowers`](https://github.com/obra/superpowers) workflow (brainstorming → writing-plans → implementation), enabled in `.claude/settings.json`. That is a maintainer choice for building *this* plugin; **using** `honest-scholar` requires no engineering tool (engineering is delegated via the contract, ADR-0023). The author is Davor Runje — default to a senior-collaborator tone.
+This repo is built with the [`superpowers`](https://github.com/obra/superpowers) workflow (brainstorming → writing-plans → implementation), enabled in `.claude/settings.json`. That is a maintainer choice for building *this* plugin; **using** `defendable-science` requires no engineering tool (engineering is delegated via the contract, ADR-0023). The author is Davor Runje — default to a senior-collaborator tone.

@@ -7,9 +7,9 @@
 Both **generate** skills run the same small state machine over a markdown backlog
 table, and both currently leave the mechanics unimplemented. **Interim (until the
 module is implemented):** each skill orchestrates the row edits by hand / via direct
-tool calls; once `honest-scholar` is installed (via
+tool calls; once `defendable-science` is installed (via
 [`ensure-tooling`](../../../resources/ensure-tooling.md)) the skill calls
-`honest-scholar backlog …` instead. The two skills:
+`defendable-science backlog …` instead. The two skills:
 
 - `hypothesis-exploration` (`../../../skills/hypothesis-exploration/SKILL.md`, §Verbs,
   § *Tooling*) drives rows in a paper's `docs/research/<paper>/backlog.md`.
@@ -35,7 +35,7 @@ scientific judgment** and never selects what to promote.
 ## Design sketch
 
 **One module, two column profiles.** A single module,
-`honest_scholar/exploration/backlog.py` (exposed as `honest-scholar backlog`, shared by both
+`defendable_science/exploration/backlog.py` (exposed as `defendable-science backlog`, shared by both
 exploration skills), parameterized by `--level {hypothesis|paper}`. The row state
 machine, provenance rules, and drop discipline are identical across levels; only
 the scored columns and the `promote` target differ.
@@ -51,7 +51,7 @@ paper:      | id | one-line | lens      | provenance |  —  | feas | interest |
 - *EIG* and *frame* (gap-spotting vs. problematization) exist only at the
   hypothesis level; the paper level ranks on feasibility × interest alone.
 
-**Transition verbs** (invoked as `honest-scholar backlog <verb>`; each validates the source
+**Transition verbs** (invoked as `defendable-science backlog <verb>`; each validates the source
 state and refuses illegal moves):
 
 | Verb | Args | Effect | Guard |
@@ -65,7 +65,7 @@ state and refuses illegal moves):
 `park` and `add` never rank; `promote` and `drop` are terminal and **never delete**
 a row (file-drawer discipline — `../01-lifecycle.md` §3).
 
-A read-only **`list`** companion (`honest-scholar backlog list [--level L] [--status S]`)
+A read-only **`list`** companion (`defendable-science backlog list [--level L] [--status S]`)
 prints matching rows and mutates nothing — the everyday inspection command, the
 backlog analog of `progress status`. It performs no transition, so it sits outside
 the transition table above.
@@ -102,7 +102,7 @@ unchanged by this proposal.
 ## Dependencies & posture
 
 - **Light-dep:** `pyyaml` + stdlib only (matches `literature`'s
-  `honest_scholar/literature/graph.py` and the substrate). `pyyaml` covers the status
+  `defendable_science/literature/graph.py` and the substrate). `pyyaml` covers the status
   frontmatter it writes on
   `promote` and the `papers.md` row; the backlog table itself is plain markdown.
 - **Firewall — proposes only.** Every verb but `promote` stays inside exploration;
@@ -111,7 +111,7 @@ unchanged by this proposal.
   auto-promotes the top row, and never writes a verdict (meta-spec §2.1, §2.3,
   `../00-meta-spec.md`).
 - **Interim path stays valid.** Until the module lands, both skills keep editing
-  the table by hand in the documented column order; the `honest-scholar backlog` command is
+  the table by hand in the documented column order; the `defendable-science backlog` command is
   additive.
 
 ## Open questions

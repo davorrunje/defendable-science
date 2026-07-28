@@ -51,9 +51,9 @@ paper. Only `promote` moves a candidate out of exploration, and only on an
 explicit human pick — the exploration/resolution firewall
 (`../../docs/design/00-meta-spec.md` §2.3).
 
-> **Tooling.** Row append/transition is the shared `honest-scholar backlog
+> **Tooling.** Row append/transition is the shared `defendable-science backlog
 > park|add|list|rank|promote|drop` CLI group
-> (`honest_scholar/exploration/backlog.py`, shared with `hypothesis-exploration`)
+> (`defendable_science/exploration/backlog.py`, shared with `hypothesis-exploration`)
 > — ensure via [`ensure-tooling`](../../resources/ensure-tooling.md),
 > operating on `portfolio-backlog.md` at the paper level. `add` realizes the
 > `generate` verb's row-append; `list` is a read-only inspection command. By hand
@@ -178,6 +178,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: paper-exploration
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: paper-exploration
 ```

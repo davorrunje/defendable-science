@@ -1,11 +1,11 @@
 ---
 name: research-init
-description: Use when onboarding a repository onto the honest-scholar research workflow — either scaffolding a fresh repo (init) or backfilling an existing one that already has papers, datasets, benchmarks, and prior results (adopt). Drives any repo to the standard consumer layout so hypotheses, papers, literature, and datasets are tracked the same way everywhere.
+description: Use when onboarding a repository onto the defendable-science research workflow — either scaffolding a fresh repo (init) or backfilling an existing one that already has papers, datasets, benchmarks, and prior results (adopt). Drives any repo to the standard consumer layout so hypotheses, papers, literature, and datasets are tracked the same way everywhere.
 ---
 
 # Research Init
 
-Onboards a repository onto the `honest-scholar` workflow. One skill, **two modes** —
+Onboards a repository onto the `defendable-science` workflow. One skill, **two modes** —
 both drive the repo to the same consumer layout (see the meta-spec
 [§5](../../docs/design/00-meta-spec.md) and the content layout in
 [lifecycle §7](../../docs/design/01-lifecycle.md)). `adopt` is `init` **plus** an
@@ -21,7 +21,7 @@ experiment-backend implementation.
 ## When to use
 
 - **First time** a repository adopts the workflow — there is no `docs/research/`
-  or `.honest-scholar/` yet.
+  or `.defendable-science/` yet.
 - A repo already has research artifacts (reference PDFs, a bibliography, dataset
   files or download scripts, prior results, an existing benchmark/experiment
   harness) that are **not yet systematically recorded** — use `adopt`.
@@ -65,12 +65,12 @@ docs/research/
     references.json              # CSL-JSON — bibliographic facts (source of truth; ADR-0020)
     triage.yml                    # decision sidecar (role, disposition, rationale), keyed by id/DOI
 datasets.yml                     # dataset registry (entries + checksums + tiers + license)
-.honest-scholar/
+.defendable-science/
   config.yml                     # rclone remote name, literature anchors, cache_dir, experiment-backend + engineering_backend bindings
   cache/                         # gitignored materialized data + HTTP cache (path from config.yml `cache_dir:`)
   rclone.conf.example            # committed template (remote name/type only)
   rclone.conf                    # gitignored (credentials)
-  # keys.json is NOT scaffolded here — `honest-scholar keys` stores API keys
+  # keys.json is NOT scaffolded here — `defendable-science keys` stores API keys
   # outside the repo by default (ADR-0032); see the note below.
 ```
 
@@ -80,24 +80,24 @@ paper comes from the shared templates in
 [`resources/templates/`](../../resources/templates/); every hypothesis/paper/thesis
 artifact carries the status frontmatter block that feeds `progress`.
 
-`.honest-scholar/config.yml` records the five consumer bindings: the **rclone remote
+`.defendable-science/config.yml` records the five consumer bindings: the **rclone remote
 name** for the private mirror, the **literature anchors** (seed works/authors the
 `literature` capability ranks around), the **experiment-backend binding**
 (which repo-local harness implements the run/evidence/tables/is-current
 contract), the **engineering-backend binding** (`engineering_backend:` — the
 `design`/`plan`/`implement` delegate the pipeline skills hand engineering off to;
-ADR-0023), and the **cache directory** (`cache_dir:`, default `.honest-scholar/cache/`
+ADR-0023), and the **cache directory** (`cache_dir:`, default `.defendable-science/cache/`
 — the CLI's dataset + HTTP caches always live under exactly this path;
 [ADR-0031](../../decisions/0031-config-driven-cache-dir.md)). `.gitignore` is
-updated to exclude the configured `cache_dir:` path, `.honest-scholar/rclone.conf`,
-and (defense-in-depth) `.honest-scholar/keys.json`.
+updated to exclude the configured `cache_dir:` path, `.defendable-science/rclone.conf`,
+and (defense-in-depth) `.defendable-science/keys.json`.
 
-**API keys never enter the repo by default.** `honest-scholar keys set` (ADR-0029)
+**API keys never enter the repo by default.** `defendable-science keys set` (ADR-0029)
 stores credentials at an XDG config path outside the repo's work tree —
-`$XDG_CONFIG_HOME/honest-scholar/keys.json`, falling back to
-`~/.config/honest-scholar/keys.json` — never at a path this skill scaffolds
-(ADR-0032, honest-scholar#66). An author can opt into the legacy in-repo path
-(`HONEST_SCHOLAR_KEYS_PATH=.honest-scholar/keys.json`), which is why the
+`$XDG_CONFIG_HOME/defendable-science/keys.json`, falling back to
+`~/.config/defendable-science/keys.json` — never at a path this skill scaffolds
+(ADR-0032, defendable-science#66). An author can opt into the legacy in-repo path
+(`DEFENDABLE_SCIENCE_KEYS_PATH=.defendable-science/keys.json`), which is why the
 `.gitignore` entry above still exists; `keys set` also warns if the resolved
 store ever sits in a git work tree without being gitignored.
 
@@ -136,7 +136,7 @@ material classification* — never silently guessed. The generic mapping rules
    material decision).
 
 5. **Experiment backend.** An existing benchmark/experiment harness → bound as
-   the repo's experiment-backend **implementation** in `.honest-scholar/config.yml`
+   the repo's experiment-backend **implementation** in `.defendable-science/config.yml`
    (the plugin ships only the contract; the harness stays in the consumer).
 
 Present proposals as a reviewable diff/table before writing. Anything the skill
@@ -187,6 +187,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: research-init
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: research-init
 ```

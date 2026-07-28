@@ -21,7 +21,7 @@ be absent, and Python itself can't be assumed.
 ## Considered options
 
 1. Loose `scripts/*.py`.
-2. **One `honest-scholar` package — `core` + a Typer CLI (authoritative) + an
+2. **One `defendable-science` package — `core` + a Typer CLI (authoritative) + an
    optional thin MCP wrapper — installed in an isolated env, bootstrapped by a
    markdown `ensure-tooling` procedure the agent runs.**
 3. A plugin install/build hook that provisions the env.
@@ -29,12 +29,12 @@ be absent, and Python itself can't be assumed.
 
 ## Decision
 
-Option 2. **CLI-first** (`honest-scholar …`, Typer); the **MCP server is a later, thin
+Option 2. **CLI-first** (`defendable-science …`, Typer); the **MCP server is a later, thin
 wrapper** over the same `core` (nothing depends on MCP alone). The five script
-proposals become **modules** of `honest-scholar`. Bootstrap is a shared markdown
+proposals become **modules** of `defendable-science`. Bootstrap is a shared markdown
 [`ensure-tooling`](../resources/ensure-tooling.md) procedure: detect
 `uv`→`pipx`→`python3`, install the package **isolated** (prefer `uv tool install`,
-which also provisions Python), record the CLI path in `.honest-scholar/config.yml`, and
+which also provisions Python), record the CLI path in `.defendable-science/config.yml`, and
 **stop with instructions** when the environment can't self-heal. Installing
 `uv`/Python itself requires user consent (no unprompted `curl|sh`).
 
@@ -42,10 +42,10 @@ which also provisions Python), record the CLI path in `.honest-scholar/config.ym
 
 - The plugin stays markdown-authored but gains a runtime dependency (the CLI),
   set up on demand, isolated per-user.
-- Distribution is **PyPI-first**: `honest-scholar` is published to PyPI (release
+- Distribution is **PyPI-first**: `defendable-science` is published to PyPI (release
   candidates validated on TestPyPI first) and installed from there by default; the
   git-subdirectory install from the repo is the versioned fallback.
-- Skills call `honest-scholar <group> <cmd>` via Bash after `ensure-tooling`.
+- Skills call `defendable-science <group> <cmd>` via Bash after `ensure-tooling`.
 - Supersedes the loose-script framing in the five proposals (now modules).
 
 ## Rejected alternatives

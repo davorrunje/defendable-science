@@ -1,6 +1,6 @@
-# honest-scholar — Decision Log (ADRs)
+# defendable-science — Decision Log (ADRs)
 
-MADR-style Architecture Decision Records for the `honest-scholar` plugin. Each records
+MADR-style Architecture Decision Records for the `defendable-science` plugin. Each records
 the context, the options considered, the rejected alternatives **and why**, and
 links to the spec section + grounding digest. Captured 2026-07-17 during the
 design session; the reasoning here is not reconstructable from the specs alone.
@@ -8,7 +8,7 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 
 > Purpose beyond the record: this log is the raw material for a planned blog
 > post / paper explaining the skills and the reasoning behind them — the intent
-> is eventually to write that *using* `honest-scholar` (`paper-synthesis` + `defend`).
+> is eventually to write that *using* `defendable-science` (`paper-synthesis` + `defend`).
 
 | ADR | Decision | Status |
 |---|---|---|
@@ -30,7 +30,7 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0016](0016-mentor-personas.md) | Mentor personas author-selectable; no personality inference | accepted |
 | [0017](0017-research-init-one-skill.md) | `research-init` one skill, init/adopt modes | accepted |
 | [0018](0018-git-native-source-of-truth.md) | Git-native plain text as source of truth; cross-repo out of scope | accepted |
-| [0019](0019-public-plugin-visibility.md) | Public plugin, named `honest-scholar` | accepted |
+| [0019](0019-public-plugin-visibility.md) | Public plugin, named `defendable-science` | accepted |
 | [0020](0020-bib-format-csl-json.md) | CSL-JSON source of truth; BibTeX exported on demand | accepted |
 | [0021](0021-thesis-gate-per-gap-confirmation.md) | Thesis gate — per-gap acknowledged confirmation | accepted |
 | [0022](0022-license-apache-2.0.md) | License the plugin under Apache-2.0 | accepted |
@@ -41,7 +41,7 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0027](0027-release-driven-oidc-publish.md) | Publish via GitHub Releases + PyPI Trusted Publishing (OIDC, no tokens) | accepted |
 | [0028](0028-100-percent-coverage-gate.md) | 100% statement + branch coverage gate on the package | accepted |
 | [0029](0029-api-key-handling.md) | Unified API-key handling — a CLI-managed JSON store (not `.env`), stdin writes, scoped in-memory env for children | accepted |
-| [0030](0030-docs-site-mintlify.md) | Docs site on Mintlify, published from a generated docs repo to `honest-scholar.science` | accepted |
+| [0030](0030-docs-site-mintlify.md) | Docs site on Mintlify, published from a generated docs repo to `defendable.science` | accepted |
 | [0031](0031-config-driven-cache-dir.md) | Source the cache root from `config.yml` (`cache_dir:`), not a hardcoded literal | accepted |
 | [0032](0032-keys-store-outside-repo-by-default.md) | Key store defaults outside the repo (XDG); in-repo store is an explicit, gitignored opt-in with a committable-store runtime guardrail | accepted |
 | [0033](0033-evidentiary-point-records.md) | Evidentiary per-point accountability records (`points`, not a bare pass/fail), shared by `defend` and `digest` | accepted |

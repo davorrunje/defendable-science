@@ -1,6 +1,6 @@
 # Thesis-by-Publication & Multi-Level Progress Tracking — digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` sub-spec 1 (thesis level + `progress` skill). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` sub-spec 1 (thesis level + `progress` skill). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 ## Part A — Thesis-by-publication & PhD milestones
 

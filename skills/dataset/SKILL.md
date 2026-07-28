@@ -51,7 +51,7 @@ conclusion, or promote a tier because a mirror exists — those are out of scope
 
 | Verb | Action |
 |---|---|
-| `init` | Scaffold `datasets.yml`, `.honest-scholar/rclone.conf.example` (remote name + type only), and a gitignored cache dir. |
+| `init` | Scaffold `datasets.yml`, `.defendable-science/rclone.conf.example` (remote name + type only), and a gitignored cache dir. |
 | `register` | Add an entry (ingest a published Croissant if present); *propose* a tier; write/link a datasheet; **the human confirms tier + license**. |
 | `fetch` | Materialize via the resolution chain (cache → mirror → source → gated). Hard-fail on any SHA-256 mismatch. |
 | `verify` | Recompute SHA-256 of on-disk files vs. the manifest; report `verified-against-registry`. Never downloads. |
@@ -107,8 +107,8 @@ datasets:
     sensitivity: none                 # required if PII/confidential
 ```
 
-**Tooling.** This is `honest_scholar/dataset/manifest.py`, exposed via
-`honest-scholar dataset validate` (loader/validator) and `honest-scholar dataset
+**Tooling.** This is `defendable_science/dataset/manifest.py`, exposed via
+`defendable-science dataset validate` (loader/validator) and `defendable-science dataset
 ingest|emit` (Croissant) — ensure via [`ensure-tooling`](../../resources/ensure-tooling.md);
 design in `../../docs/design/proposals/dataset-manifest-tooling.md`. By hand (if
 the CLI isn't available):
@@ -157,12 +157,12 @@ file failing verification is treated as absent and the chain continues:
 - The mirror is populated on first successful acquisition → link-rot insurance
   (Tier B) and a re-acquirable home for gated assets (Tier C).
 - Credentials never enter the repo: gitignore `rclone.conf`, point via
-  `RCLONE_CONFIG=$PWD/.honest-scholar/rclone.conf`, commit only `rclone.conf.example`
+  `RCLONE_CONFIG=$PWD/.defendable-science/rclone.conf`, commit only `rclone.conf.example`
   (remote name + type). CI uses env-var remotes from secrets. `rclone obscure` is
   **not** encryption — never commit it.
 
-**Tooling.** The resolution chain is `honest_scholar/dataset/retrieval.py`, exposed
-via `honest-scholar dataset fetch|verify|mirror|audit` — ensure via
+**Tooling.** The resolution chain is `defendable_science/dataset/retrieval.py`, exposed
+via `defendable-science dataset fetch|verify|mirror|audit` — ensure via
 [`ensure-tooling`](../../resources/ensure-tooling.md); design in
 `../../docs/design/proposals/dataset-retrieval-mirror-tooling.md`. rclone
 is an optional external binary the wrappers shell out to, not a Python dep.
@@ -170,7 +170,7 @@ By hand (if the CLI isn't available):
 - **Tier-B fetch** — `curl`/`wget` then `sha256sum` and manually compare to the
   manifest before use (the module will use `pooch.retrieve(url, known_hash="sha256:…")`
   into the content-addressed cache).
-- **rclone mirror** — run the commands by hand with `--config .honest-scholar/rclone.conf`:
+- **rclone mirror** — run the commands by hand with `--config .defendable-science/rclone.conf`:
   `mirror` = `rclone copyto <local> mirror:base/sha256/<hash>`; resolution step 2 =
   `rclone copyto mirror:base/sha256/<hash> <cache>` then re-hash; `audit` may use
   `rclone check --download` when backend hash sets are disjoint.
@@ -220,6 +220,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: dataset
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: dataset
 ```

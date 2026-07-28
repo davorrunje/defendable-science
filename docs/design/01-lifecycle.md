@@ -1,8 +1,8 @@
-# honest-scholar sub-spec 1 — Lifecycle, pipeline skills, rigor, progress & defend
+# defendable-science sub-spec 1 — Lifecycle, pipeline skills, rigor, progress & defend
 
 **Date:** 2026-07-17
 **Author:** Davor Runje
-**Status:** Implemented. Sub-spec of the `honest-scholar` meta-spec; realized in this repo (skills + CLI).
+**Status:** Implemented. Sub-spec of the `defendable-science` meta-spec; realized in this repo (skills + CLI).
 
 > Sub-spec of [00-meta-spec.md](00-meta-spec.md).
 > The integrative capstone: the three-level lifecycle, the five pipeline skills,
@@ -202,7 +202,7 @@ every one.
   engineering backend, `literature`, `dataset`) and delegates engineering to
   the bound engineering backend via the engineering-delegation contract.
 - **Consumer:** all `docs/research/` content; the `papers.md` bindings; the
-  experiment-backend implementation; `.honest-scholar/` config.
+  experiment-backend implementation; `.defendable-science/` config.
 
 ## 10. Open items
 

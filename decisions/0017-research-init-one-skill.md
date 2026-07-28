@@ -4,7 +4,7 @@
 
 ## Context
 
-A repo must be set up to use `honest-scholar` — both fresh repos and existing ones with
+A repo must be set up to use `defendable-science` — both fresh repos and existing ones with
 prior research artifacts (mononet has benchmarks, reference PDFs, informal
 hypotheses). This is the payoff for the "benchmarks folder out of control"
 problem that motivated the effort.

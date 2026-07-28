@@ -2,20 +2,20 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the `digest` skill (honest-scholar#68) — an inbound, cross-cutting comprehension-verification skill for external papers — plus the evidentiary accountability-record upgrade it and `defend` now share.
+**Goal:** Ship the `digest` skill (defendable-science#68) — an inbound, cross-cutting comprehension-verification skill for external papers — plus the evidentiary accountability-record upgrade it and `defend` now share.
 
-**Architecture:** A shared, evidentiary `points`-based record schema lands first in `honest_scholar/defend/record.py` + its CLI (used by both `defend` and the new `digest`). Then the new `skills/digest/SKILL.md` and its composition edits to `defend`/`literature`/`progress`/design docs. Two new ADRs record the two material decisions (the record-schema change; the new skill). Resolves the spec at `docs/superpowers/specs/2026-07-22-digest-skill-design.md`.
+**Architecture:** A shared, evidentiary `points`-based record schema lands first in `defendable_science/defend/record.py` + its CLI (used by both `defend` and the new `digest`). Then the new `skills/digest/SKILL.md` and its composition edits to `defend`/`literature`/`progress`/design docs. Two new ADRs record the two material decisions (the record-schema change; the new skill). Resolves the spec at `docs/superpowers/specs/2026-07-22-digest-skill-design.md`.
 
 **Tech Stack:** Python 3.11+, Typer CLI, pytest + pytest-cov (100% statement+branch gate), ruff, mypy strict, stdlib `dataclasses` + `pyyaml`. Plugin side is pure Markdown (SKILL.md files, MADR ADRs).
 
 ## Global Constraints
 
-- 100% statement+branch coverage is a hard gate on the `honest-scholar` package (ADR-0028, `honest-scholar/pyproject.toml` `fail_under = 100`). Every new branch needs a test.
+- 100% statement+branch coverage is a hard gate on the `defendable-science` package (ADR-0028, `defendable-science/pyproject.toml` `fail_under = 100`). Every new branch needs a test.
 - Python 3.11+, line length 88, MyST field-list docstrings (`:param:`/`:returns:`/`:raises:`) on public API, strict mypy, stdlib `dataclasses` for value objects. No Pydantic.
 - Never commit to `main` — branch, then open a PR via the local `create-pr` skill.
 - Any material design decision gets a new MADR ADR in `decisions/`, linked from `decisions/README.md`.
 - Commits: authored Davor Runje `<davor@synthpop.ai>` with a `Co-Authored-By: Claude …` trailer; skill-produced-artifact commits additionally carry the discovery trailers in `resources/commit-attribution.md` (not applicable to this plan's own commits — this plan modifies the plugin/package itself, it doesn't run a skill to produce research artifacts).
-- Package work runs from the `honest-scholar/` subdirectory (`uv run pytest -q`, `uv run ruff check`, `uv run ruff format`, `uv run mypy`); plugin-side validation is `./tools/validate-plugin.sh` from the repo root.
+- Package work runs from the `defendable-science/` subdirectory (`uv run pytest -q`, `uv run ruff check`, `uv run ruff format`, `uv run mypy`); plugin-side validation is `./tools/validate-plugin.sh` from the repo root.
 
 ---
 
@@ -23,9 +23,9 @@
 
 | File | Responsibility |
 |---|---|
-| `honest-scholar/honest_scholar/defend/record.py` | `PointRecord` dataclass; `record()`/`LogEntry` moved from bare `gaps: list[str]` to evidentiary `points: list[PointRecord]`; `TARGETS` gains `paper-comprehension`. |
-| `honest-scholar/honest_scholar/cli.py` | `defend record`'s `--gaps` flag replaced by `--points <file>`/`--points -` (JSON). |
-| `honest-scholar/tests/test_record.py` | Updated + new tests for the schema change and the CLI flag. |
+| `defendable-science/defendable_science/defend/record.py` | `PointRecord` dataclass; `record()`/`LogEntry` moved from bare `gaps: list[str]` to evidentiary `points: list[PointRecord]`; `TARGETS` gains `paper-comprehension`. |
+| `defendable-science/defendable_science/cli.py` | `defend record`'s `--gaps` flag replaced by `--points <file>`/`--points -` (JSON). |
+| `defendable-science/tests/test_record.py` | Updated + new tests for the schema change and the CLI flag. |
 | `decisions/0033-evidentiary-point-records.md` (new) | ADR for the shared record-schema change. |
 | `decisions/0034-digest-skill.md` (new) | ADR for the new `digest` skill. |
 | `decisions/README.md` | Index entries for ADR-0033, ADR-0034. |
@@ -45,19 +45,19 @@ Tasks 1–2 (code) must land before Tasks 4–9 (prose) reference `--points`/`pa
 ### Task 1: Evidentiary `PointRecord` + `record()`/`LogEntry` schema
 
 **Files:**
-- Modify: `honest-scholar/honest_scholar/defend/record.py` (full-file replacement below)
-- Test: `honest-scholar/tests/test_record.py` (non-CLI tests; Task 2 handles the CLI tests in the same file)
+- Modify: `defendable-science/defendable_science/defend/record.py` (full-file replacement below)
+- Test: `defendable-science/tests/test_record.py` (non-CLI tests; Task 2 handles the CLI tests in the same file)
 
 **Interfaces:**
-- Produces: `honest_scholar.defend.record.PointRecord` (frozen dataclass: `point: str`, `source_quote: str`, `reader_answer: str`, `resolved: bool`, `location: str | None = None`, `gap_note: str | None = None`); `record(artifact, target, points: list[PointRecord], *, signed_off_by=None, override=False, acknowledgements=None, transcript=None, log_dir=DEFAULT_LOG_DIR, today=None) -> RecordResult` (third positional arg renamed from `gaps` and retyped); `TARGETS` now includes `"paper-comprehension"`. `patch_understanding()` is **unchanged** (still `(text, status, gaps: list[str], *, last_updated)`).
+- Produces: `defendable_science.defend.record.PointRecord` (frozen dataclass: `point: str`, `source_quote: str`, `reader_answer: str`, `resolved: bool`, `location: str | None = None`, `gap_note: str | None = None`); `record(artifact, target, points: list[PointRecord], *, signed_off_by=None, override=False, acknowledgements=None, transcript=None, log_dir=DEFAULT_LOG_DIR, today=None) -> RecordResult` (third positional arg renamed from `gaps` and retyped); `TARGETS` now includes `"paper-comprehension"`. `patch_understanding()` is **unchanged** (still `(text, status, gaps: list[str], *, last_updated)`).
 - Consumes: nothing new — stdlib `dataclasses`, `json`, `re`, `datetime`, `pathlib` (as before), plus `dataclasses.asdict` (new import).
 
 - [ ] **Step 1: Write the failing/updated tests**
 
-Replace `honest-scholar/tests/test_record.py` in full with the content below (this task covers everything except the CLI tests at the bottom, which Task 2 rewrites in place — they're included here unchanged from today's file so the file stays runnable after this step; Task 2 will replace them):
+Replace `defendable-science/tests/test_record.py` in full with the content below (this task covers everything except the CLI tests at the bottom, which Task 2 rewrites in place — they're included here unchanged from today's file so the file stays runnable after this step; Task 2 will replace them):
 
 ```python
-"""Tests for the ``defend record`` helper (honest-scholar#4, honest-scholar#68)."""
+"""Tests for the ``defend record`` helper (defendable-science#4, defendable-science#68)."""
 
 from __future__ import annotations
 
@@ -68,8 +68,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from honest_scholar.cli import app
-from honest_scholar.defend import record as r
+from defendable_science.cli import app
+from defendable_science.defend import record as r
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -463,14 +463,14 @@ replacements.
 
 - [ ] **Step 2: Run the tests to see the expected failures**
 
-Run: `cd honest-scholar && uv run pytest tests/test_record.py -v`
+Run: `cd defendable-science && uv run pytest tests/test_record.py -v`
 Expected: `AttributeError` / `TypeError` failures in the new `PointRecord`-based
 tests (`r.PointRecord` doesn't exist yet, `r._unresolved_gaps` doesn't exist
 yet), and the `_gap`/`_resolved` helpers fail wherever `record()` still expects
 bare strings. The pre-existing `patch_*` tests should still pass (untouched
 surface).
 
-- [ ] **Step 3: Replace `honest_scholar/defend/record.py` in full**
+- [ ] **Step 3: Replace `defendable_science/defend/record.py` in full**
 
 ```python
 """``defend record`` — persist understanding status + the accountability trail (#4).
@@ -796,21 +796,21 @@ def _append_log(log_dir: Path, entry: LogEntry) -> Path:
 
 - [ ] **Step 4: Run the tests to verify the non-CLI tests pass**
 
-Run: `cd honest-scholar && uv run pytest tests/test_record.py -v -k "not cli"`
+Run: `cd defendable-science && uv run pytest tests/test_record.py -v -k "not cli"`
 Expected: PASS for every test except the three CLI tests kept in Step 1 (those
 should already pass unchanged, since `test_cli_record`, the stdin transcript
 test, and the unreadable-transcript test never used `--gaps`).
 
 - [ ] **Step 5: Run the full file and check coverage**
 
-Run: `cd honest-scholar && uv run pytest tests/test_record.py -v`
+Run: `cd defendable-science && uv run pytest tests/test_record.py -v`
 Expected: all PASS. Full-suite coverage is checked in Task 2's final step
 (after the CLI tests are back in place) and Task 10's verification pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add honest-scholar/honest_scholar/defend/record.py honest-scholar/tests/test_record.py
+git add defendable-science/defendable_science/defend/record.py defendable-science/tests/test_record.py
 git commit -m "$(cat <<'EOF'
 feat(defend): evidentiary per-point accountability records (ADR-0033)
 
@@ -831,8 +831,8 @@ EOF
 ### Task 2: CLI `defend record --points` (replaces `--gaps`)
 
 **Files:**
-- Modify: `honest-scholar/honest_scholar/cli.py:625-703` (the `# --- defend` section)
-- Test: `honest-scholar/tests/test_record.py` (append the CLI tests below)
+- Modify: `defendable-science/defendable_science/cli.py:625-703` (the `# --- defend` section)
+- Test: `defendable-science/tests/test_record.py` (append the CLI tests below)
 
 **Interfaces:**
 - Consumes: `record_mod.PointRecord`, `record_mod.record()` (Task 1).
@@ -842,7 +842,7 @@ EOF
 
 - [ ] **Step 1: Write the failing CLI tests**
 
-Append to `honest-scholar/tests/test_record.py` (after
+Append to `defendable-science/tests/test_record.py` (after
 `test_cli_record_unreadable_transcript_exits_1_cleanly`, replacing nothing —
 these are new):
 
@@ -1104,18 +1104,18 @@ def test_cli_record_points_bad_shape_exits_1_cleanly(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd honest-scholar && uv run pytest tests/test_record.py -k points -v`
+Run: `cd defendable-science && uv run pytest tests/test_record.py -k points -v`
 Expected: FAIL — `--points` is not a recognised option yet (Typer reports "no
 such option").
 
 - [ ] **Step 3: Replace the `# --- defend` CLI section**
 
-In `honest-scholar/honest_scholar/cli.py`, replace the block from
-`# --- defend (honest-scholar#4) ----...` through the end of the `record`
+In `defendable-science/defendable_science/cli.py`, replace the block from
+`# --- defend (defendable-science#4) ----...` through the end of the `record`
 function (currently lines 625–703) with:
 
 ```python
-# --- defend (honest-scholar#4, honest-scholar#68) ----------------------------------
+# --- defend (defendable-science#4, defendable-science#68) ----------------------------------
 defend = typer.Typer(help="Defensibility record helpers.", no_args_is_help=True)
 app.add_typer(defend, name="defend")
 
@@ -1255,12 +1255,12 @@ added here per YAGNI.)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cd honest-scholar && uv run pytest tests/test_record.py -v`
+Run: `cd defendable-science && uv run pytest tests/test_record.py -v`
 Expected: all PASS (this is now the complete, final `test_record.py`).
 
 - [ ] **Step 5: Run the full suite with coverage**
 
-Run: `cd honest-scholar && uv run pytest -q`
+Run: `cd defendable-science && uv run pytest -q`
 Expected: 100% statement+branch coverage, all tests pass. If any line/branch
 in `_parse_points` or the updated `record` command is uncovered, add the
 missing test case from Step 1's list (all documented failure branches should
@@ -1269,13 +1269,13 @@ kwargs/`TypeError`, unreadable file, stdin path).
 
 - [ ] **Step 6: Lint and type-check**
 
-Run: `cd honest-scholar && uv run ruff check . && uv run ruff format --check . && uv run mypy`
+Run: `cd defendable-science && uv run ruff check . && uv run ruff format --check . && uv run mypy`
 Expected: all clean.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add honest-scholar/honest_scholar/cli.py honest-scholar/tests/test_record.py
+git add defendable-science/defendable_science/cli.py defendable-science/tests/test_record.py
 git commit -m "$(cat <<'EOF'
 feat(cli): defend record --points replaces --gaps (ADR-0033)
 
@@ -1316,7 +1316,7 @@ Create `decisions/0033-evidentiary-point-records.md`:
 
 ## Context
 
-`honest_scholar/defend/record.py`'s `record()` only ever stored the *failed*
+`defendable_science/defend/record.py`'s `record()` only ever stored the *failed*
 load-bearing points, as bare strings (`gaps: list[str]`), deriving
 `status.understanding: {status: ok|gaps, unresolved: [...]}`. The accountability
 log (`docs/research/defend-log/*.yml`) inherited the same shape: a `gaps` list
@@ -1325,7 +1325,7 @@ what the author/reader actually said when probed. This makes the log auditable
 only at the coarsest level ("something didn't resolve") — a reviewer of the log
 can't tell *what was checked*, *against which text*, or *what the person's
 actual answer was*, without re-running the examination. Filing `digest`
-(honest-scholar#68, the inbound comprehension-verification skill) surfaced this
+(defendable-science#68, the inbound comprehension-verification skill) surfaced this
 gap concretely: a meaningful accountability record for "did the reader
 understand this paper" needs to show the exact quote grounding each
 load-bearing point and the reader's own explanation, not just whether it
@@ -1378,7 +1378,7 @@ structured or multiline text) is replaced by `--points <file>` / `--points -`
 - Existing log entries (pre-dating this change) keep their old flat `gaps`
   shape; they are immutable, append-only files, so no migration is needed —
   only new entries use `points`.
-- `honest_scholar/defend/record.py`'s and `honest_scholar/cli.py`'s existing
+- `defendable_science/defend/record.py`'s and `defendable_science/cli.py`'s existing
   tests needed updating for the new call shape (not a silent, invisible
   change — every caller of `record()` is affected).
 
@@ -1396,9 +1396,9 @@ structured or multiline text) is replaced by `--points <file>` / `--points -`
 
 ## Links
 
-`honest_scholar/defend/record.py` (`PointRecord`, `record`, `LogEntry`);
-`honest_scholar/cli.py` (`defend record`'s `--points`); ADR-0015 (the `defend`
-record step this refines); honest-scholar#68 (`digest`, the skill that
+`defendable_science/defend/record.py` (`PointRecord`, `record`, `LogEntry`);
+`defendable_science/cli.py` (`defend record`'s `--points`); ADR-0015 (the `defend`
+record step this refines); defendable-science#68 (`digest`, the skill that
 surfaced this gap).
 ```
 
@@ -1430,7 +1430,7 @@ meta-spec §3.7; sub-spec 1 §6; digest `understanding-and-defense.md`.
 > **Refined by ADR-0033.** The Record step's accountability log now carries
 > the full per-point evidentiary record (the exact quote grounding each
 > probed point + what the author actually said), not a bare pass/fail —
-> shared with the `digest` skill (honest-scholar#68).
+> shared with the `digest` skill (defendable-science#68).
 ```
 
 - [ ] **Step 4: Verify**
@@ -1545,11 +1545,11 @@ surfaces as a flagged, unresolved point, never a verdict.
 
 ## Record — evidentiary, not a pass flag
 
-Uses the same `honest-scholar defend record` CLI as `defend` (ADR-0033),
+Uses the same `defendable-science defend record` CLI as `defend` (ADR-0033),
 target `paper-comprehension`:
 
 ```
-honest-scholar defend record \
+defendable-science defend record \
   --artifact docs/research/literature/digests/smith2024.md \
   --target paper-comprehension \
   --points points.json
@@ -1652,8 +1652,8 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: digest
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: digest
 ```
 ```
 
@@ -1709,7 +1709,7 @@ via `cited-work`, whether a citation supports a specific sentence. There is no
 inbound counterpart: a skill for reading an external paper with *verified*
 comprehension — building and checking understanding of the whole paper, not
 just one cited sentence — before it's triaged, positioned, or cited.
-honest-scholar#68 filed this gap, motivated by `davorrunje/mononet`'s
+defendable-science#68 filed this gap, motivated by `davorrunje/mononet`'s
 `survey-monotonicity-ml` reading list (~21 method papers a `literature scout`
 run surfaced, which must be genuinely read and understood, not skimmed) and
 that consumer repo's existing hand-curated-digest convention.
@@ -1781,7 +1781,7 @@ tutoring context), not `defend`'s critical-examiner default. Output:
 escalation note); `skills/literature/SKILL.md` (Composition);
 `skills/progress/SKILL.md` (literature reading roll-up); ADR-0033 (the shared
 evidentiary record mechanism); ADR-0015 (`defend`'s original design);
-honest-scholar#68.
+defendable-science#68.
 ```
 
 - [ ] **Step 2: Add the index row**
@@ -1828,8 +1828,8 @@ after it):
    Unanswered probes and any logged overrides are the accountability trail. If
    fired as a guardrail, follow Guardrail semantics.
 
-> **Tooling.** The record step is the `honest-scholar defend record` CLI command
-> (`honest_scholar/defend/record.py`) — ensure via
+> **Tooling.** The record step is the `defendable-science defend record` CLI command
+> (`defendable_science/defend/record.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); it appends the
 > `understanding` frontmatter block and persists the transcript. By hand (if the CLI
 > isn't available): under the `status:` block set `understanding: {status: ok|gaps,
@@ -1849,8 +1849,8 @@ Replace with:
    logged overrides are the accountability trail. If fired as a guardrail,
    follow Guardrail semantics.
 
-> **Tooling.** The record step is the `honest-scholar defend record` CLI command
-> (`honest_scholar/defend/record.py`) — ensure via
+> **Tooling.** The record step is the `defendable-science defend record` CLI command
+> (`defendable_science/defend/record.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); it appends the
 > `understanding` frontmatter block and the log entry, and persists the
 > transcript. Pass the probed points as `--points <file>` (or `--points -` for
@@ -2169,13 +2169,13 @@ EOF
 
 - [ ] **Step 1: Full package test suite with coverage**
 
-Run: `cd honest-scholar && uv run pytest -q`
+Run: `cd defendable-science && uv run pytest -q`
 Expected: 100% statement+branch coverage, all tests pass (no skips beyond the
 pre-existing `@pytest.mark.live` ones).
 
 - [ ] **Step 2: Lint, format, type-check**
 
-Run: `cd honest-scholar && uv run ruff check . && uv run ruff format --check . && uv run mypy`
+Run: `cd defendable-science && uv run ruff check . && uv run ruff format --check . && uv run mypy`
 Expected: all clean.
 
 - [ ] **Step 3: Plugin structural validation**
@@ -2196,8 +2196,8 @@ Expected: every hit is genuinely about ADR-0031 (config-driven cache dir) —
 none about keys or points/digest (guards against repeating the ADR-numbering
 mix-up from PR #71).
 
-Run: `grep -rln "paper-comprehension" honest-scholar/honest_scholar honest-scholar/tests skills/`
-Expected: `honest_scholar/defend/record.py`, `honest_scholar/cli.py`,
+Run: `grep -rln "paper-comprehension" defendable-science/defendable_science defendable-science/tests skills/`
+Expected: `defendable_science/defend/record.py`, `defendable_science/cli.py`,
 `tests/test_record.py`, `skills/digest/SKILL.md`.
 
 - [ ] **Step 6: Open the PR**

@@ -1,17 +1,17 @@
-# Contributing to honest-scholar
+# Contributing to defendable-science
 
-## Built with `superpowers` — but honest-scholar does **not** require it
+## Built with `superpowers` — but defendable-science does **not** require it
 
-`honest-scholar`'s own development uses the [`superpowers`](https://github.com/obra/superpowers)
+`defendable-science`'s own development uses the [`superpowers`](https://github.com/obra/superpowers)
 engineering workflow (brainstorming → writing-plans → implementation). It is
 enabled for maintainers in this repo's [`.claude/settings.json`](.claude/settings.json).
 
-**This is a maintainer choice for building *this* plugin. Using `honest-scholar` does not
-require `superpowers`.** `honest-scholar` names no engineering tool: its skills delegate
+**This is a maintainer choice for building *this* plugin. Using `defendable-science` does not
+require `superpowers`.** `defendable-science` names no engineering tool: its skills delegate
 engineering through the **engineering-delegation contract**
 ([`resources/contracts/engineering.md`](resources/contracts/engineering.md)), and
 each consuming repo binds whatever engineering backend it uses (or none) via
-`.honest-scholar/config.yml`. The build-vs-use line is deliberate (ADR-0023).
+`.defendable-science/config.yml`. The build-vs-use line is deliberate (ADR-0023).
 
 ## Repo layout
 
@@ -38,7 +38,7 @@ each consuming repo binds whatever engineering backend it uses (or none) via
   trailers in [`resources/commit-attribution.md`](resources/commit-attribution.md).
 - **Validate before publishing:** `claude plugin validate .`
 - **Test-install locally:** `/plugin marketplace add ./` then
-  `/plugin install honest-scholar@honest-scholar`.
+  `/plugin install defendable-science@defendable-science`.
 
 ## Releasing
 
@@ -49,6 +49,6 @@ plugin.
 
 ## Domain-neutrality
 
-`honest-scholar` must stay domain-neutral: no ML-, monotonic-network-, or repo-specific
+`defendable-science` must stay domain-neutral: no ML-, monotonic-network-, or repo-specific
 assumptions in the plugin. Consumer-specific details (anchors, datasets, backends)
 live in the consuming repo's config/content, never here.

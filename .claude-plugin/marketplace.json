@@ -1,13 +1,13 @@
 {
-  "name": "honest-scholar",
+  "name": "defendable-science",
   "owner": {
     "name": "Davor Runje",
     "email": "davor@synthpop.ai"
   },
-  "description": "honest-scholar — the scientist's research-workflow plugin for Claude Code.",
+  "description": "defendable-science — the scientist's research-workflow plugin for Claude Code.",
   "plugins": [
     {
-      "name": "honest-scholar",
+      "name": "defendable-science",
       "source": "./",
       "description": "From hypothesis to thesis — research you can defend. Assistants, not researchers: you drive."
     }

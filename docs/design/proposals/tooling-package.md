@@ -1,4 +1,4 @@
-# Proposal: `honest-scholar` package (Typer CLI, optional MCP)
+# Proposal: `defendable-science` package (Typer CLI, optional MCP)
 
 `Status: implemented (designed 2026-07-18) · Umbrella for the supporting-script proposals`
 
@@ -13,16 +13,16 @@ procedure.
 
 ## Package
 
-`honest-scholar` (distribution name; exposes the **`honest-scholar`** CLI). It lives as a
-**`honest-scholar/` subdirectory of this plugin repo** — a monorepo, co-versioned
+`defendable-science` (distribution name; exposes the **`defendable-science`** CLI). It lives as a
+**`defendable-science/` subdirectory of this plugin repo** — a monorepo, co-versioned
 with the plugin, not a separate repo. Isolated env (ADR-0024) — free to depend on
 `typer` + `requests` (HTTP) + `pyyaml` + `pooch` without touching a consumer's ML
 environment.
 
 ```
-honest-scholar/                     # subdirectory of the plugin repo
-├── pyproject.toml                 # deps + [project.scripts] honest-scholar / hsch = honest_scholar.cli:app + [project.optional-dependencies] mcp
-├── honest_scholar/
+defendable-science/                     # subdirectory of the plugin repo
+├── pyproject.toml                 # deps + [project.scripts] defendable-science / dsci = defendable_science.cli:app + [project.optional-dependencies] mcp
+├── defendable_science/
 │   ├── core/                      # shared: requests-based http client, on-disk cache, config read, provenance
 │   ├── literature/graph.py        # ← proposal: literature-citation-graph-client
 │   ├── dataset/manifest.py        # ← proposal: dataset-manifest-tooling
@@ -39,11 +39,11 @@ honest-scholar/                     # subdirectory of the plugin repo
 A Typer command tree that mirrors the skill verbs; each command emits JSON:
 
 ```
-honest-scholar literature resolve | cites | refs | enrich | neighbors
-honest-scholar dataset    validate | ingest | emit | fetch | verify | mirror | audit
-honest-scholar defend     record
-honest-scholar backlog    park | add | list | rank | promote | drop   # shared by both exploration skills
-honest-scholar --version
+defendable-science literature resolve | cites | refs | enrich | neighbors
+defendable-science dataset    validate | ingest | emit | fetch | verify | mirror | audit
+defendable-science defend     record
+defendable-science backlog    park | add | list | rank | promote | drop   # shared by both exploration skills
+defendable-science --version
 ```
 
 (`register` / `export` are *skill* verbs that call these CLI commands — `register`
@@ -62,24 +62,24 @@ CLI-first); nothing depends on it. Adding it is a wrapper, not a rewrite.
 
 Install/upgrade is handled entirely by [`ensure-tooling`](../../../resources/ensure-tooling.md):
 detect `uv`→`pipx`→`python3`, install isolated + pinned (prefer `uv tool install`,
-which also provisions Python), record the CLI in `.honest-scholar/config.yml`, stop with
+which also provisions Python), record the CLI in `.defendable-science/config.yml`, stop with
 instructions if the env can't self-heal.
 
 Distribution is **PyPI-first** — the primary install is the published
-`honest-scholar` package:
+`defendable-science` package:
 
 ```
-uv tool install honest-scholar
+uv tool install defendable-science
 # ad-hoc, no persistent install:
-uvx honest-scholar …
+uvx defendable-science …
 ```
 
 The **git-subdirectory install is the fallback** (an unreleased ref, or PyPI
 unreachable); release candidates are validated from **TestPyPI** first:
 
 ```
-uv tool install "git+https://github.com/davorrunje/honest-scholar.git#subdirectory=honest-scholar"
-uvx --from "git+https://github.com/davorrunje/honest-scholar.git#subdirectory=honest-scholar" honest-scholar …
+uv tool install "git+https://github.com/davorrunje/defendable-science.git#subdirectory=defendable-science"
+uvx --from "git+https://github.com/davorrunje/defendable-science.git#subdirectory=defendable-science" defendable-science …
 ```
 
 ## Decided
@@ -87,30 +87,30 @@ uvx --from "git+https://github.com/davorrunje/honest-scholar.git#subdirectory=ho
 - **House HTTP client = `requests`** (applies to `core`, used by literature + any
   http fetch). `pooch` already pulls it, so it is a zero-net-dep choice; no async
   surface is needed. Used everywhere an HTTP call is made.
-- **Distribution = PyPI-first**: primary install is the published `honest-scholar`
-  package (`uv tool install honest-scholar`, or `uvx honest-scholar …` ad-hoc);
+- **Distribution = PyPI-first**: primary install is the published `defendable-science`
+  package (`uv tool install defendable-science`, or `uvx defendable-science …` ad-hoc);
   release candidates are validated from **TestPyPI** first. The git-subdirectory
-  install (`uv tool install "git+…#subdirectory=honest-scholar"`) is the fallback
+  install (`uv tool install "git+…#subdirectory=defendable-science"`) is the fallback
   for unreleased refs or when PyPI is unreachable.
-- **Names claimed:** distribution `honest-scholar`, CLI `honest-scholar` (+ short
-  alias `hsch`); the name is reserved on both PyPI and TestPyPI (pre-release
+- **Names claimed:** distribution `defendable-science`, CLI `defendable-science` (+ short
+  alias `dsci`); the name is reserved on both PyPI and TestPyPI (pre-release
   `0.0.0a0` published).
 
 ## Open questions
 
 - **MCP timing:** ship the wrapper in v0.1, or wait for a concrete need?
-- **Version pin source:** how the plugin communicates its pinned `honest-scholar`
+- **Version pin source:** how the plugin communicates its pinned `defendable-science`
   version to `ensure-tooling`. Since the package is co-versioned in the same repo,
   a git ref/tag (or a `VERSION` file read by the skills) — pick the mechanism.
 
 ## Acceptance criteria
 
-- [x] `honest-scholar` skeleton: `pyproject.toml`, `core/`, Typer `cli.py`, `tests/`.
-- [x] `honest-scholar --version` works via an isolated `uv tool` / `pipx` / venv install.
+- [x] `defendable-science` skeleton: `pyproject.toml`, `core/`, Typer `cli.py`, `tests/`.
+- [x] `defendable-science --version` works via an isolated `uv tool` / `pipx` / venv install.
 - [x] `ensure-tooling` provisions it on a machine with only `uv` (no prior Python).
 - [x] Each module implemented per its own proposal; CLI subcommands wired.
 - [x] Skills updated: interim manual / direct-tool-call orchestration replaced with
-      `ensure-tooling` + `honest-scholar …` calls.
+      `ensure-tooling` + `defendable-science …` calls.
 - [ ] (Later) MCP wrapper exposing the same functions.
 
 ## Links

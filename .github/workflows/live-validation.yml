@@ -1,7 +1,7 @@
 name: Live validation
 
 # Opt-in end-to-end checks against REAL services — live OpenAlex / Semantic
-# Scholar, and real pooch + rclone (honest-scholar#30). NOT part of the required
+# Scholar, and real pooch + rclone (defendable-science#30). NOT part of the required
 # PR gate (the hermetic suite + 100% coverage gate is in ci.yml); this is a
 # manual / weekly job that catches upstream endpoint or tool drift.
 #
@@ -29,9 +29,9 @@ jobs:
           sudo cp rclone-*/rclone /usr/local/bin/rclone
           rclone version
       - name: Run the live suite
-        working-directory: honest-scholar
+        working-directory: defendable-science
         env:
-          HONEST_SCHOLAR_LIVE: "1"
+          DEFENDABLE_SCIENCE_LIVE: "1"
           OPENALEX_MAILTO: davor@synthpop.ai
           S2_API_KEY: ${{ secrets.S2_API_KEY }}
         run: uv run pytest -m live --no-cov -v

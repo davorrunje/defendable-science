@@ -1,6 +1,6 @@
 # Reproducible Dataset Management — standards digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` `dataset` capability (sub-spec 3). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` `dataset` capability (sub-spec 3). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 Grounding for a domain-neutral dataset registry + tiered retrieval + private mirror.
 

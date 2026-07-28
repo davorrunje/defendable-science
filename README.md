@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/wordmark-banner.svg" alt="Honest Scholar" width="640">
+  <img src="assets/wordmark-banner.svg" alt="Defendable Science" width="640">
 </p>
 
 <p align="center"><em>Research you can defend.</em></p>
@@ -7,14 +7,14 @@
 <p align="center">Keep your research honest — <strong>especially now that AI is in the loop</strong>.</p>
 
 <p align="center">
-  <a href="https://github.com/davorrunje/honest-scholar/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/davorrunje/honest-scholar/ci.yml?branch=main&style=flat-square&labelColor=2a1cc8&label=CI" alt="CI"></a>
-  <a href="https://codecov.io/gh/davorrunje/honest-scholar"><img src="https://img.shields.io/codecov/c/github/davorrunje/honest-scholar?style=flat-square&labelColor=2a1cc8&label=coverage" alt="coverage"></a>
-  <a href="https://honest-scholar.science/"><img src="https://img.shields.io/badge/docs-honest--scholar.science-2a1cc8?style=flat-square&labelColor=2a1cc8" alt="docs"></a>
+  <a href="https://github.com/davorrunje/defendable-science/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/davorrunje/defendable-science/ci.yml?branch=main&style=flat-square&labelColor=2a1cc8&label=CI" alt="CI"></a>
+  <a href="https://codecov.io/gh/davorrunje/defendable-science"><img src="https://img.shields.io/codecov/c/github/davorrunje/defendable-science?style=flat-square&labelColor=2a1cc8&label=coverage" alt="coverage"></a>
+  <a href="https://defendable.science/"><img src="https://img.shields.io/badge/docs-defendable.science-2a1cc8?style=flat-square&labelColor=2a1cc8" alt="docs"></a>
 </p>
 
 ---
 
-**`honest-scholar`** gives your whole *scientific* research workflow one uniform,
+**`defendable-science`** gives your whole *scientific* research workflow one uniform,
 git-native home inside Claude Code — idea → literature → hypothesis → test →
 publish-decision → paper → thesis — so you and your collaborators work the same way
 and never re-derive the workflow, or its rigor, per project. Concretely, it:
@@ -35,11 +35,11 @@ and never re-derive the workflow, or its rigor, per project. Concretely, it:
 Because AI is in the loop, it is also built so the science stays honestly *yours*
 and defensible (see [The mechanics of honesty](#the-mechanics-of-honesty)).
 
-> **New here?** Read the docs at **[honest-scholar.science](https://honest-scholar.science/)** — start with the **[User Guide](docs/USER-GUIDE.md)**.
+> **New here?** Read the docs at **[defendable.science](https://defendable.science/)** — start with the **[User Guide](docs/USER-GUIDE.md)**.
 >
 > **Status: pre-release, actively developed.** The design is complete and recorded
 > (see [Design & reasoning](#design--reasoning)); the skills and their supporting
-> `honest-scholar` CLI are implemented. See [`STATUS.md`](STATUS.md) for the current
+> `defendable-science` CLI are implemented. See [`STATUS.md`](STATUS.md) for the current
 > ledger.
 
 ## The mechanics of honesty
@@ -56,7 +56,7 @@ Honesty here is mechanical, not a slogan. Two principles do the load-bearing wor
    produce a paper or thesis — you drive it. **So the science is honestly *yours*.**
 2. **You must understand it (understanding).** Every material claim, decision, and
    method must be understood to the standard a good mentor or reviewer expects.
-   `honest-scholar` verifies *and builds* that understanding through Socratic questioning and
+   `defendable-science` verifies *and builds* that understanding through Socratic questioning and
    teaching (the `defend` skill), and will not let work advance past a gap silently
    — including examining the *why* behind the methodology, to prevent cargo-cult
    rigor. **So "I understand my own paper" is true, not assumed.**
@@ -98,24 +98,24 @@ existing one (`adopt`).
 
 When a paper is done you can add a truthful **AI-use disclosure** — a short,
 evidence-based statement of what you and the AI each did — plus a citation to
-`honest-scholar`. See [`DISCLOSURE.md`](DISCLOSURE.md) for the template, how-to-cite,
+`defendable-science`. See [`DISCLOSURE.md`](DISCLOSURE.md) for the template, how-to-cite,
 and an optional badge. [`paper-synthesis`](skills/paper-synthesis/SKILL.md)
 **proactively proposes** both at finalize (after the publish decision is signed),
 drafted from your provenance record — who signed off what, which run-refs back
 which results. It is opt-in and author-owned: you review, edit, adopt, or decline.
 
 The growth angle, plainly: every published paper that carries the disclosure points
-other researchers to the tool. But Honest Scholar only *supports* honest disclosure
+other researchers to the tool. But Defendable Science only *supports* honest disclosure
 — it does **not** certify that your research is honest, and there is no seal of
 honesty. The statement says what was done and links the record; readers judge.
 
 ## Install
 
-`honest-scholar` is a Claude Code plugin; the repo is its own marketplace.
+`defendable-science` is a Claude Code plugin; the repo is its own marketplace.
 
 ```
-/plugin marketplace add davorrunje/honest-scholar
-/plugin install honest-scholar@honest-scholar
+/plugin marketplace add davorrunje/defendable-science
+/plugin install defendable-science@defendable-science
 ```
 
 **Enable it for a whole project** (so collaborators get it on trust) — add to the
@@ -124,9 +124,9 @@ consuming repo's `.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "honest-scholar": { "source": { "source": "github", "repo": "davorrunje/honest-scholar" } }
+    "defendable-science": { "source": { "source": "github", "repo": "davorrunje/defendable-science" } }
   },
-  "enabledPlugins": { "honest-scholar@honest-scholar": true }
+  "enabledPlugins": { "defendable-science@defendable-science": true }
 }
 ```
 
@@ -145,7 +145,7 @@ The design is captured in three complementary layers:
 - **Reference digests** — the *evidence*: [`resources/references/`](resources/references/)
   — verified primary-source digests behind each skill and principle.
 - **Proposals** — [`docs/design/proposals/`](docs/design/proposals/): the design
-  specs for the `honest-scholar` CLI modules (now implemented) and for cross-repo
+  specs for the `defendable-science` CLI modules (now implemented) and for cross-repo
   thesis aggregation.
 
 Also: the [User Guide](docs/USER-GUIDE.md), the commit-attribution / discovery
@@ -153,12 +153,12 @@ convention ([`resources/commit-attribution.md`](resources/commit-attribution.md)
 and the visual identity ([`docs/design/visual-identity.md`](docs/design/visual-identity.md)).
 
 This record is intended to seed a blog post / paper explaining the skills and
-their rationale — ideally written *using* `honest-scholar` itself.
+their rationale — ideally written *using* `defendable-science` itself.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). `honest-scholar`'s own development uses
-`superpowers`; **using** `honest-scholar` does not require it — engineering is delegated
+See [CONTRIBUTING.md](CONTRIBUTING.md). `defendable-science`'s own development uses
+`superpowers`; **using** `defendable-science` does not require it — engineering is delegated
 via the [engineering contract](resources/contracts/engineering.md).
 
 ## License

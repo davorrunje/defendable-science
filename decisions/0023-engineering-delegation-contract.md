@@ -4,10 +4,10 @@
 
 ## Context
 
-ADR-0002 kept `honest-scholar` scientific-only and delegated engineering to **a specific
+ADR-0002 kept `defendable-science` scientific-only and delegated engineering to **a specific
 named tool**. But naming a specific engineering tool couples the plugin to it and
 specifies *how* engineering is performed — exactly what we avoided for experiments
-(ADR-0013, the experiment-backend contract). `honest-scholar` should be agnostic to the
+(ADR-0013, the experiment-backend contract). `defendable-science` should be agnostic to the
 engineering workflow the same way it is agnostic to the experiment runner, and
 should not advertise or depend on any particular product.
 
@@ -23,12 +23,12 @@ should not advertise or depend on any particular product.
 1. **Define an engineering-delegation contract (`design` / `plan` / `implement`),
    bound per project; name no specific tool.**
 2. Keep naming a specific tool as the engineering backend (ADR-0002 as written).
-3. Bring engineering in-scope for `honest-scholar`.
+3. Bring engineering in-scope for `defendable-science`.
 
 ## Decision
 
 Option 1. Add `resources/contracts/engineering.md` (three capabilities, bound via
-`.honest-scholar/config.yml` `engineering_backend:`). Remove every explicit
+`.defendable-science/config.yml` `engineering_backend:`). Remove every explicit
 engineering-tool mention from the plugin; a consumer binds whatever engineering
 backend it uses (bound in *its own* `.claude/settings.json` / config — the
 consumer's choice, not the plugin's concern). ADR-0002 is refined accordingly

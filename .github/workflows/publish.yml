@@ -1,10 +1,10 @@
 name: Publish
 
-# Publishes the honest-scholar package via PyPI Trusted Publishing (OIDC — no
+# Publishes the defendable-science package via PyPI Trusted Publishing (OIDC — no
 # tokens). A published **GitHub Release** publishes to PyPI; manual dispatch
 # publishes to the chosen `target` index (default **TestPyPI**, for pre-release
 # validation). Requires pending/registered trusted publishers on both indexes
-# for repo davorrunje/honest-scholar, workflow publish.yml, environments
+# for repo davorrunje/defendable-science, workflow publish.yml, environments
 # testpypi / pypi (see README / RELEASING docs).
 
 on:
@@ -34,7 +34,7 @@ jobs:
       - name: Guard — release tag matches package version
         if: github.event_name == 'release'
         run: |
-          version=$(grep -m1 '^version' honest-scholar/pyproject.toml | cut -d'"' -f2)
+          version=$(grep -m1 '^version' defendable-science/pyproject.toml | cut -d'"' -f2)
           tag="${{ github.event.release.tag_name }}"
           if [ "$tag" != "v$version" ]; then
             echo "::error::release tag '$tag' does not match pyproject version 'v$version' — refusing to publish the wrong version"
@@ -42,12 +42,12 @@ jobs:
           fi
           echo "release tag '$tag' matches pyproject 'v$version'"
       - name: Build sdist + wheel
-        working-directory: honest-scholar
+        working-directory: defendable-science
         run: uv build
       - uses: actions/upload-artifact@v4
         with:
           name: dist
-          path: honest-scholar/dist/
+          path: defendable-science/dist/
 
   testpypi:
     # Manual dispatch with target=testpypi (default) — validate before a real release

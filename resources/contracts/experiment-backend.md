@@ -2,7 +2,7 @@
 
 The pipeline skills never run experiments directly — they depend on this
 contract, and each consuming repo binds a concrete implementation. This keeps the
-runner hot-swappable and keeps `honest-scholar` domain-neutral. (Design: `docs/design/04-substrate-and-contract.md` §3; ADR-0013.)
+runner hot-swappable and keeps `defendable-science` domain-neutral. (Design: `docs/design/04-substrate-and-contract.md` §3; ADR-0013.)
 
 ## Binding
 

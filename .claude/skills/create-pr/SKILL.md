@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Use when changes are ready to land on davorrunje/honest-scholar — branch, run the checks, commit with this repo's attribution, and open a PR (never commit to main). Encodes the branch/commit/checks/body ritual and the Closes #NN convention. Templates live in STYLE.md.
+description: Use when changes are ready to land on davorrunje/defendable-science — branch, run the checks, commit with this repo's attribution, and open a PR (never commit to main). Encodes the branch/commit/checks/body ritual and the Closes #NN convention. Templates live in STYLE.md.
 ---
 
 # Create PR
@@ -24,10 +24,10 @@ the two in sync.
    Do the work on that branch.
 
 2. **Go green before opening** — never open a red PR. When package code changed,
-   from the `honest-scholar/` subdirectory:
+   from the `defendable-science/` subdirectory:
 
    ```bash
-   cd honest-scholar
+   cd defendable-science
    uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
    ```
 
