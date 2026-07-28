@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from defendable_science.dataset import retrieval as r
-from defendable_science.dataset.manifest import DatasetEntry, FileRef, Manifest, Retrieval
+from defendable_science.dataset.manifest import (
+    DatasetEntry,
+    FileRef,
+    Manifest,
+    Retrieval,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

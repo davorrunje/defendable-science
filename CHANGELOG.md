@@ -14,7 +14,7 @@ Package patch (metadata + docs). The plugin is unchanged (still `0.1.0`).
 ### Fixed
 
 - PyPI project links: `Documentation` now points to a distinct URL
-  (`defendable.science/get-started/user-guide`) so it renders separately from
+  (`honest-scholar.science/get-started/user-guide`) so it renders separately from
   `Homepage` (both previously pointed at the same URL, which PyPI collapsed).
 
 ### Changed
@@ -26,7 +26,7 @@ Package patch (metadata + docs). The plugin is unchanged (still `0.1.0`).
 ## [0.1.0] - 2026-07-19
 
 First public release — a Claude Code plugin for the scientific research workflow,
-plus the `defendable-science` CLI it calls. The two artifacts are versioned
+plus the `honest-scholar` CLI it calls. The two artifacts are versioned
 independently (ADR-0026); this is `0.1.0` for both.
 
 ### Added
@@ -37,7 +37,7 @@ independently (ADR-0026); this is `0.1.0` for both.
   cross-cutting `progress` and `defend`, and `research-init` onboarding — behind
   the exploration→resolution firewall and the agency + understanding principles.
   Distributed via the repo's git self-marketplace.
-- **`defendable-science` package** (PyPI, installed isolated) — a Typer CLI with fully
+- **`honest-scholar` package** (PyPI, installed isolated) — a Typer CLI with fully
   implemented groups: `literature` (OpenAlex + Semantic Scholar citation graph),
   `dataset` (manifest / Croissant / SHA-256 retrieval / rclone mirror / audit),
   `defend record`, `backlog`, `doctor`, `keys`, and `--version`. Strict mypy;
@@ -46,7 +46,7 @@ independently (ADR-0026); this is `0.1.0` for both.
   genuine not-found and never surface as tracebacks; unified, gitignored API-key
   store (`keys`) with env-var precedence and least-privilege scoped env for child
   processes.
-- **Rendered docs site** at [defendable.science](https://defendable.science)
+- **Rendered docs site** at [honest-scholar.science](https://honest-scholar.science)
   (Mintlify) — generated from the repo's markdown on release (user guide, skills,
   CLI reference, and the full design record), gated in CI by a real MDX compile +
   build-time and post-publish broken-link checks.

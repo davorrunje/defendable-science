@@ -637,7 +637,9 @@ def generate_cli_reference() -> str:
     for name in root.list_commands(root_ctx):
         sub = root.get_command(root_ctx, name)
         assert sub is not None, f"list_commands returned unknown command {name!r}"
-        body.append(_render_command(sub, Context, root_ctx, ["defendable-science", name]))
+        body.append(
+            _render_command(sub, Context, root_ctx, ["defendable-science", name])
+        )
     return "\n".join(body)
 
 
@@ -655,7 +657,9 @@ def build_page(
     """Assemble one MDX page (frontmatter + transformed body)."""
     if source is None:  # the generated CLI reference
         title = "CLI reference"
-        description = "The defendable-science command tree, generated from the Typer app."
+        description = (
+            "The defendable-science command tree, generated from the Typer app."
+        )
         raw = generate_cli_reference()
         body = rewrite_links(
             raw, "docs/USER-GUIDE.md", route_map, routes, errors, site_links
@@ -786,7 +790,9 @@ def build(out: Path) -> dict[str, int]:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Build the defendable-science docs site.")
+    parser = argparse.ArgumentParser(
+        description="Build the defendable-science docs site."
+    )
     parser.add_argument(
         "--out", required=True, type=Path, help="Output directory for the site."
     )

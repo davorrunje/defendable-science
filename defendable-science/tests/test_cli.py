@@ -59,7 +59,9 @@ def test_tool_report_found_but_no_version_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("defendable_science.cli.shutil.which", lambda name: "/bin/x")
-    monkeypatch.setattr("defendable_science.cli.subprocess.run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(
+        "defendable_science.cli.subprocess.run", lambda *a, **k: _Proc()
+    )
     assert "version unknown" in cli._tool_report("x")
 
 
