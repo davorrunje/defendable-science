@@ -87,24 +87,30 @@ package lockfile (regenerated, not patched), and **this spec plus its
 implementation plan** — those two deliberately quote the old name throughout and
 must survive verbatim.
 
-Rules apply **in this order**. The ordering constraint that matters is rule 2
-before rule 7: without it `honest-scholar.science` becomes
-`defendable-science.science`. Rule 1 is redundant with rule 7 (which produces
-`defendable-science-docs` correctly on its own) and is listed only to make the
-docs-repo rename explicit.
+Rules apply **in this order**. Two ordering constraints are load-bearing: the
+`.science` rules (2, 3) must precede the bare-name rules, or the domain becomes
+`defendable-science.science`; and rule 2 must precede rule 4. Rules 2 and 4
+exist because shields.io escapes a literal hyphen by doubling it, so
+`README.md` and `DISCLOSURE.md` contain `honest--scholar` in badge URLs — a form
+the bare rule does not match. They need different replacements: rule 2 is the
+*domain* (which loses its hyphen entirely), rule 4 is the *name* (where
+`defendable--science` renders as `defendable-science`). Rule 1 is redundant with
+rule 9 and is listed only to make the docs-repo rename explicit.
 
 ```
-1  honest-scholar-docs      → defendable-science-docs
-2  honest-scholar\.science  → defendable.science
-3  HONEST_SCHOLAR           → DEFENDABLE_SCIENCE
-4  HonestScholar            → DefendableScience
-5  Honest Scholar           → Defendable Science
-6  honest_scholar           → defendable_science
-7  honest-scholar           → defendable-science
-8  \bhsch\b                 → dsci
+1  honest-scholar-docs       → defendable-science-docs
+2  honest--scholar\.science  → defendable.science      (shields.io escaped hyphen)
+3  honest-scholar\.science   → defendable.science
+4  honest--scholar           → defendable--science     (shields.io escaped hyphen)
+5  HONEST_SCHOLAR            → DEFENDABLE_SCIENCE
+6  HonestScholar             → DefendableScience
+7  Honest Scholar            → Defendable Science
+8  honest_scholar            → defendable_science
+9  honest-scholar            → defendable-science
+10 \bhsch\b                  → dsci
 ```
 
-Rule 8 is word-boundary anchored and hits exactly three sites
+Rule 10 is word-boundary anchored and hits exactly three sites
 (`honest-scholar/pyproject.toml`, `docs/design/proposals/tooling-package.md`).
 
 Then the directory moves, via `git mv` so history follows the files:
@@ -166,9 +172,12 @@ edit these by hand rather than trusting the sweep:
 After the sweep:
 
 ```bash
-grep -rniE 'honest[-_. ]?scholar|\bhsch\b' \
+grep -rniE 'honest[-_. ]*scholar|\bhsch\b' \
   --exclude-dir=.git --exclude-dir=.venv --exclude-dir=.worktrees .
 ```
+
+The `*` (not `?`) is deliberate: `?` allows only one separator character and
+would silently miss the shields.io `honest--scholar` badge form.
 
 must return matches only in these four files, which quote the old name
 deliberately:
