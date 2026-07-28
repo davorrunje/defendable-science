@@ -159,7 +159,7 @@ jobs:
           deadline=$((SECONDS + 900))
           while :; do
             live=$(curl -fsSL --max-time 20 "$SITE/llms.txt" 2>/dev/null \
-              | grep -coE 'https?://[^)[:space:]]*defendable-science\.science' || true)
+              | grep -coE 'https?://[^)[:space:]]*defendable\.science' || true)
             live=${live:-0}
             echo "live llms.txt page links: $live / expected >= ${EXPECTED_PAGES:-?}"
             if [ -n "$EXPECTED_PAGES" ] && [ "$live" -ge "$EXPECTED_PAGES" ]; then
@@ -225,7 +225,7 @@ jobs:
           # CI never flakes on a third-party outage. Any internal 404 fails.
           args: >-
             --no-progress
-            --include 'defendable-science\.science'
+            --include 'defendable\.science'
             --accept 200,206,429
             expected-urls.txt
           fail: true
