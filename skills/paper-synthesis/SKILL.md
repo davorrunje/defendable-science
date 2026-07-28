@@ -61,7 +61,7 @@ be revisited as hypotheses resolve; the decision is gated on the whole.
    + a simplest floor). The closest-prior-work paragraph and the isolating
    ablation guard against overclaimed novelty.
 3. **Outline / plan — delegated.** Structuring the manuscript is **engineering**,
-   so hand it to the engineering backend bound in `.honest-scholar/config.yml`
+   so hand it to the engineering backend bound in `.defendable-science/config.yml`
    (`engineering_backend:`) — its `design` → `plan` capabilities — exactly as
    `hypothesis-testing` delegates `design.md`/`plan.md`.
    Store the resulting
@@ -142,7 +142,7 @@ from `rr-a91f` / `rr-7c02`; the author never types them.
   resolved hypotheses (`hypothesis-testing` `findings.md` verdicts + their
   run-refs).
 - **Calls:** `literature position --level paper` for `positioning.md`; the
-  engineering backend bound in `.honest-scholar/config.yml` (`engineering_backend:`)
+  engineering backend bound in `.defendable-science/config.yml` (`engineering_backend:`)
   for `outline.md`/`plan.md`; and the experiment backend bound in
   `docs/research/papers.md` (`backend:`) — `tables` / `evidence` / `is-current` —
   for result blocks and staleness.
@@ -192,6 +192,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: paper-synthesis
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: paper-synthesis
 ```

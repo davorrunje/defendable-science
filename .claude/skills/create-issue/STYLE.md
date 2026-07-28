@@ -1,6 +1,6 @@
 # Issue Style
 
-The standard format for issues on `davorrunje/honest-scholar`. Every issue is
+The standard format for issues on `davorrunje/defendable-science`. Every issue is
 **self-contained**: completable from the repository content plus the issue text
 alone.
 
@@ -37,9 +37,9 @@ What "done" looks like, in one or two sentences.
 
 The exact repository anchors: file paths, function/class names, line references
 where the work lands or where the relevant code lives. Prefer
-`honest-scholar/honest_scholar/literature/graph.py:resolve` — clickable and
-stable across line drift. (Remember the package dir is `honest-scholar/` and the
-module is `honest_scholar/`.)
+`defendable-science/defendable_science/literature/graph.py:resolve` — clickable and
+stable across line drift. (Remember the package dir is `defendable-science/` and the
+module is `defendable_science/`.)
 
 ## Proposed approach   (optional)
 

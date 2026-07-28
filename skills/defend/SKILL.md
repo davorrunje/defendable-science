@@ -66,8 +66,8 @@ the author elects to stop and record the gap.
    logged overrides are the accountability trail. If fired as a guardrail,
    follow Guardrail semantics.
 
-> **Tooling.** The record step is the `honest-scholar defend record` CLI command
-> (`honest_scholar/defend/record.py`) — ensure via
+> **Tooling.** The record step is the `defendable-science defend record` CLI command
+> (`defendable_science/defend/record.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); it appends the
 > `understanding` frontmatter block and the log entry, and persists the
 > transcript. Pass the probed points as `--points <file>` (or `--points -` for
@@ -225,6 +225,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: defend
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: defend
 ```

@@ -45,16 +45,16 @@ deciding novelty/what to publish (a human sign-off, per the agency principle).
 
 A `level` parameter (`hypothesis` \| `paper` \| `thesis`) tunes ranking/depth/stopping
 — see the per-mode "Level tuning" notes below. Both modes run through the
-`honest-scholar literature` CLI (see [Tooling](#tooling)).
+`defendable-science literature` CLI (see [Tooling](#tooling)).
 
 ## How it works — `scout` mode
 
 Grounding: [../../resources/references/citation-scouting.md](../../resources/references/citation-scouting.md).
 
-Steps 1–5 are `honest-scholar literature` commands (`resolve` / `cites` / `refs` /
+Steps 1–5 are `defendable-science literature` commands (`resolve` / `cites` / `refs` /
 `enrich` / `neighbors`) — install via `ensure-tooling`; see [Tooling](#tooling).
 
-1. **Fix the anchor set** — own papers + rival anchors from `.honest-scholar/config.yml`
+1. **Fix the anchor set** — own papers + rival anchors from `.defendable-science/config.yml`
    (or args). Resolve each to a stable id (DOI / arXiv / OpenAlex / S2).
 2. **Pull forward citations** per anchor — OpenAlex `filter=cites:<WORKID>` and
    S2 `/paper/{id}/citations`. Store the raw JSON as the provenance root.
@@ -89,7 +89,7 @@ papers), unioned and deduplicated across the papers' sets.
 
 Grounding: [../../resources/references/related-works-synthesis.md](../../resources/references/related-works-synthesis.md).
 
-Snowball steps use the same `honest-scholar literature` commands (`resolve` /
+Snowball steps use the same `defendable-science literature` commands (`resolve` /
 `cites` / `refs` / `enrich`); see [Tooling](#tooling).
 
 1. **Frame the claim(s)** as 1–3 falsifiable delta statements *before* searching.
@@ -194,11 +194,11 @@ gate whether a PDF may be committed vs. mirror-only.
 
 ## Tooling
 
-The graph work is the **`honest_scholar/literature/graph.py`** module of the
-`honest-scholar` package, exposed as the CLI group **`honest-scholar literature`**
+The graph work is the **`defendable_science/literature/graph.py`** module of the
+`defendable-science` package, exposed as the CLI group **`defendable-science literature`**
 (`resolve | cites | refs | enrich | neighbors`), each emitting JSON. **Ensure it
 before use** via [`ensure-tooling`](../../resources/ensure-tooling.md) (`uv tool
-install honest-scholar`, git/TestPyPI fallbacks). It wraps the OpenAlex + Semantic
+install defendable-science`, git/TestPyPI fallbacks). It wraps the OpenAlex + Semantic
 Scholar clients, the CSL-JSON bib loader/appender, and the triage-join +
 PRISMA-log / concept-matrix generators. Package deps: `requests` + `pyyaml` (+ the
 substrate's rclone mirror). Design: `../../docs/design/proposals/literature-citation-graph-client.md`.
@@ -219,6 +219,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: literature
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: literature
 ```

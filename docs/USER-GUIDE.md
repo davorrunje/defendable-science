@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="../assets/wordmark-banner.svg" alt="Honest Scholar" width="640">
+  <img src="../assets/wordmark-banner.svg" alt="Defendable Science" width="640">
 </p>
 
-<!-- honest-scholar user guide -->
+<!-- defendable-science user guide -->
 
 # User Guide
 
-A hands-on guide for a researcher meeting `honest-scholar` for the first time. It walks
+A hands-on guide for a researcher meeting `defendable-science` for the first time. It walks
 you from install to a signed finding to a submitted paper, using one running
 example throughout. It is practical: every step is a command you type and a file
 you fill in.
@@ -14,16 +14,16 @@ you fill in.
 For the *why* behind the design, read [`README.md`](../README.md) and the specs
 under [`docs/design/`](design/); this guide is the *how*.
 
-## 1. What Honest Scholar is (and the two rules it runs on)
+## 1. What Defendable Science is (and the two rules it runs on)
 
-`honest-scholar` helps you keep research honest — **especially now that AI is in the
+`defendable-science` helps you keep research honest — **especially now that AI is in the
 loop**. It is a Claude Code plugin for the **scientific** side of research — idea →
 literature → hypothesis → test → publish-decision → paper → (optional) thesis. It
 delegates the *engineering* (design, plans, code) to the bound **engineering
-backend** via the engineering-delegation contract; `honest-scholar` calls out to that
+backend** via the engineering-delegation contract; `defendable-science` calls out to that
 backend for all of that rather than reimplementing it.
 
-To be clear up front: Honest Scholar does **not** certify that your work is honest —
+To be clear up front: Defendable Science does **not** certify that your work is honest —
 there is no seal of honesty. It gives you the *mechanics* to do honest work and to
 disclose truthfully what you and the AI each did; readers judge the result.
 
@@ -35,7 +35,7 @@ They are not decoration — they change how the skills behave at every step:
    you: whether a hypothesis is confirmed or refuted, whether a result is real,
    whether a paper is worth publishing, whether a thesis is defensible. Each of
    those is recorded in the artifact with a **named human sign-off + date**. You
-   cannot "run" Honest Scholar to produce a paper — you drive it. In practice: expect the
+   cannot "run" Defendable Science to produce a paper — you drive it. In practice: expect the
    skill to stop at every judgement point and ask you. *So the science is honestly
    yours.*
 
@@ -61,11 +61,11 @@ proposes a claim and adjudicates it.
 
 ## 2. Install
 
-`honest-scholar` is distributed as a Claude Code plugin; its repo is its own marketplace.
+`defendable-science` is distributed as a Claude Code plugin; its repo is its own marketplace.
 
 ```
-/plugin marketplace add davorrunje/honest-scholar
-/plugin install honest-scholar@honest-scholar
+/plugin marketplace add davorrunje/defendable-science
+/plugin install defendable-science@defendable-science
 ```
 
 To enable it for a whole project (so collaborators get it on trust), add to the
@@ -74,14 +74,14 @@ consuming repo's `.claude/settings.json`:
 ```json
 {
   "extraKnownMarketplaces": {
-    "honest-scholar": { "source": { "source": "github", "repo": "davorrunje/honest-scholar" } }
+    "defendable-science": { "source": { "source": "github", "repo": "davorrunje/defendable-science" } }
   },
-  "enabledPlugins": { "honest-scholar@honest-scholar": true }
+  "enabledPlugins": { "defendable-science@defendable-science": true }
 }
 ```
 
 Commit that file and every collaborator gets the same skills auto-enabled. To pin
-a fixed release, add `"ref": "v0.1.0"` inside the marketplace `source`; omit it to
+a fixed release, add `"ref": "v0.2.0"` inside the marketplace `source`; omit it to
 track the plugin's `main`. Skills are
 invoked by name (`research-init`, `hypothesis-testing`, …) in your Claude Code
 session.
@@ -120,7 +120,7 @@ docs/research/
     references.json         # CSL-JSON bibliography (source of truth)
     triage.yml              # decision sidecar: role, disposition, rationale
 datasets.yml                # dataset registry (entries + checksums + tiers + license)
-.honest-scholar/
+.defendable-science/
   config.yml                # rclone remote, literature anchors, experiment-backend binding
   rclone.conf.example       # committed template; real rclone.conf is gitignored
 ```
@@ -175,7 +175,7 @@ documents, in order, under `docs/research/<paper>/hypotheses/<slug>/`:
    the datasets it needs. **`defend` fires here** on the strategy — expect to
    defend your assumptions and falsifiers before moving on.
 3. **`design.md` / `plan.md`** — *the engineering, delegated to the bound
-   engineering backend* (its `design` → `plan` capabilities). Honest Scholar stores the
+   engineering backend* (its `design` → `plan` capabilities). Defendable Science stores the
    results here but does not design experiments or write code itself. Executing
    the plan produces the runs.
 4. **`findings.md`** — *the verdict:* `confirmed | refuted | inconclusive`, tied
@@ -216,8 +216,8 @@ claim is false is successful science.
 
 ### 4d. How runs become evidence — the experiment-backend contract
 
-Honest Scholar defines a **contract**; your repo supplies the implementation (bound in
-`.honest-scholar/config.yml`, named per paper in `papers.md`). The contract has four
+Defendable Science defines a **contract**; your repo supplies the implementation (bound in
+`.defendable-science/config.yml`, named per paper in `papers.md`). The contract has four
 capabilities:
 
 | Capability | What it gives you |
@@ -261,7 +261,7 @@ The paper level mirrors the hypothesis level one step up.
 ### 5a. Honest AI use — disclose & cite
 
 When the paper is finalized you can add a truthful **AI-use disclosure** — a short
-statement of what you and the AI each did — plus a citation to `honest-scholar`. The
+statement of what you and the AI each did — plus a citation to `defendable-science`. The
 template, how-to-cite, and an optional badge live in
 [`../DISCLOSURE.md`](../DISCLOSURE.md).
 
@@ -272,7 +272,7 @@ which decisions, which run-refs back which results) — so it is evidence-based,
 boilerplate. It is opt-in and author-owned: you review, edit, adopt, or decline.
 
 Plainly: every published paper that carries the disclosure points other researchers
-to the tool. But Honest Scholar only *supports* honest disclosure — it does **not**
+to the tool. But Defendable Science only *supports* honest disclosure — it does **not**
 certify that your research is honest, and there is no seal of honesty. The statement
 says what was done and links the record; readers judge.
 
@@ -334,23 +334,23 @@ the throttling that otherwise stalls citation-graph work.
 | `OPENALEX_MAILTO` | OpenAlex | Joins the "polite pool" (a contact email) for faster, more reliable responses. | <https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication> |
 | `RCLONE_CONFIG_<REMOTE>_*` | Private dataset mirror | rclone remote credentials, handed to rclone as scoped env vars (no config file needed). | Per your rclone remote (see `rclone config`). |
 
-Honest Scholar keeps keys in a **CLI-managed JSON store** — never a `.env` — at
+Defendable Science keeps keys in a **CLI-managed JSON store** — never a `.env` — at
 an XDG config path **outside any repo's work tree**:
-`$XDG_CONFIG_HOME/honest-scholar/keys.json`, falling back to
-`~/.config/honest-scholar/keys.json` (ADR-0032). A stored key can therefore
+`$XDG_CONFIG_HOME/defendable-science/keys.json`, falling back to
+`~/.config/defendable-science/keys.json` (ADR-0032). A stored key can therefore
 never be committed by accident. Keys are read with **`os.environ` > store >
 unset** precedence, so an environment variable always wins (CI / secrets
 injection is unaffected) and an unset key just degrades the service. Manage
 the store with the `keys` command group:
 
 ```
-honest-scholar keys set S2_API_KEY        # prompts hidden, or reads piped stdin
-echo "$MY_KEY" | honest-scholar keys set S2_API_KEY
-honest-scholar keys set < keys.json       # a JSON object sets many at once
-honest-scholar keys list                  # metadata + presence + source (never values)
-honest-scholar keys check                 # compact presence/source report
-honest-scholar keys unset S2_API_KEY
-honest-scholar keys path                  # print the resolved store path
+defendable-science keys set S2_API_KEY        # prompts hidden, or reads piped stdin
+echo "$MY_KEY" | defendable-science keys set S2_API_KEY
+defendable-science keys set < keys.json       # a JSON object sets many at once
+defendable-science keys list                  # metadata + presence + source (never values)
+defendable-science keys check                 # compact presence/source report
+defendable-science keys unset S2_API_KEY
+defendable-science keys path                  # print the resolved store path
 ```
 
 The value is **never** taken from the command line — only from stdin or a hidden
@@ -358,8 +358,8 @@ prompt — so a secret never lands in your shell history or the process list.
 `keys list`/`check` and `doctor` report only **presence and source**, never a
 value.
 
-Set `HONEST_SCHOLAR_KEYS_PATH` to opt into a different location, e.g. the
-legacy in-repo `.honest-scholar/keys.json` — `research-init` still gitignores
+Set `DEFENDABLE_SCIENCE_KEYS_PATH` to opt into a different location, e.g. the
+legacy in-repo `.defendable-science/keys.json` — `research-init` still gitignores
 that path for anyone who does — but the store then warns (never silently) if
 the resolved path sits in a git work tree and is not confirmed gitignored.
 
@@ -371,15 +371,15 @@ the resolved path sits in a git work tree and is not confirmed gitignored.
 
 ## 9. Everyday tips
 
-- **What Honest Scholar will NOT do.** It will not make a material decision for you
+- **What Defendable Science will NOT do.** It will not make a material decision for you
   (confirm/refute, publish/no-go, defensible), will not write your paper
   unattended, will not hand-copy result numbers, and will not produce a
   productivity score. Every judgement point stops and asks.
 - **Trust the firewall.** If a skill refuses to test a claim it also generated, or
   refuses to adjudicate its own decision, that is by design — use the paired
   skill.
-- **Commits are attributed.** Commits made via Honest Scholar skills carry a discovery
-  trailer, so provenance of an automated change is visible in `git log`. Honest Scholar
+- **Commits are attributed.** Commits made via Defendable Science skills carry a discovery
+  trailer, so provenance of an automated change is visible in `git log`. Defendable Science
   never auto-commits `research-init` scaffolding — you review and commit.
 - **Evidence is run-refs, not numbers.** If a number can't be traced to a run-ref,
   it doesn't go in a findings doc or a paper section.
@@ -396,5 +396,5 @@ the resolved path sits in a git work tree and is not confirmed gitignored.
 **The shortest possible path:** `research-init` → `hypothesis-exploration
 promote` → `hypothesis-testing` (strategy, examined → delegate design/plan →
 sign findings) → `paper-exploration promote` → `paper-synthesis` (positioning →
-sign decision → sections) → `progress dashboard`. You drive every arrow; Honest Scholar
+sign decision → sections) → `progress dashboard`. You drive every arrow; Defendable Science
 keeps the accounts and makes sure you can defend each signature.

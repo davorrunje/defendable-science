@@ -1,8 +1,8 @@
-# honest-scholar sub-spec 4 — Shared substrate & experiment-backend contract
+# defendable-science sub-spec 4 — Shared substrate & experiment-backend contract
 
 **Date:** 2026-07-17
 **Author:** Davor Runje
-**Status:** Implemented. Sub-spec of the `honest-scholar` meta-spec; realized in this repo (skills + CLI).
+**Status:** Implemented. Sub-spec of the `defendable-science` meta-spec; realized in this repo (skills + CLI).
 
 > Sub-spec of [00-meta-spec.md](00-meta-spec.md).
 > Defines the foundation that sub-specs 2 (literature) and 3 (dataset) build on:
@@ -193,7 +193,7 @@ staleness; it does not decide to re-run — the researcher does.
   export, or each front-end does; lean toward the shared module for `pid`/citation
   and the front-end for its native format (BibTeX for literature, Croissant for
   dataset).
-- **Cache directory name** — align with the meta-spec's `.honest-scholar/` decision.
+- **Cache directory name** — align with the meta-spec's `.defendable-science/` decision.
 
 ## 5. Downstream
 

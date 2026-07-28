@@ -1,6 +1,6 @@
 # Mentor / Reviewer Personas — grounding digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` `defend` skill + the "advise as a mentor" voice (meta-spec §3.7, sub-spec 1). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` `defend` skill + the "advise as a mentor" voice (meta-spec §3.7, sub-spec 1). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 **Bottom line:** style *typologies* are well-described; matching a mentor to the author's *personality* is **not** evidence-based (the learning-styles myth); and an AI *inferring* personality to pick a voice is unreliable and violates agency. The defensible design is **author-selectable personas + situational/task calibration — never system-inferred personality.**
 

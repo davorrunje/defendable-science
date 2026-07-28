@@ -1,4 +1,4 @@
-# ADR-0019: Public plugin, named `honest-scholar`
+# ADR-0019: Public plugin, named `defendable-science`
 
 - Status: accepted · Date: 2026-07-17 · Deciders: Davor Runje
 
@@ -12,18 +12,18 @@ author now decides, the broader research community.
 
 - Reach: share the methodology as widely as possible.
 - The plugin is already domain-neutral by design (no ML/monotonic assumptions).
-- Sharp, science-only identity — `honest-scholar` covers the science; engineering is
+- Sharp, science-only identity — `defendable-science` covers the science; engineering is
   delegated to a bound engineering backend via a contract.
 
 ## Considered options
 
-1. **Public repo, named `honest-scholar`.**
+1. **Public repo, named `defendable-science`.**
 2. Private, shared only with colleagues/peers.
 3. Decide visibility later.
 
 ## Decision
 
-Option 1. Public, `honest-scholar`.
+Option 1. Public, `defendable-science`.
 
 ## Consequences
 

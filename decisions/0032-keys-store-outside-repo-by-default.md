@@ -4,15 +4,15 @@
 
 ## Context
 
-ADR-0029 put the CLI-owned key store at `.honest-scholar/keys.json` — **inside
+ADR-0029 put the CLI-owned key store at `.defendable-science/keys.json` — **inside
 the consumer repo's work tree** — relying on `research-init` to gitignore it.
 Onboarding `davorrunje/mononet` surfaced that `research-init` never actually
-added that entry: `honest-scholar keys path` resolved to
-`.honest-scholar/keys.json`, and `git check-ignore -v` on it produced no
+added that entry: `defendable-science keys path` resolved to
+`.defendable-science/keys.json`, and `git check-ignore -v` on it produced no
 output — not ignored, therefore committable. `keys set` correctly takes values
 from stdin/a hidden prompt (never `argv`), so a secret never lands in shell
 history, but the **at-rest store itself** was one missed scaffolding step away
-from landing in a commit (honest-scholar#66). That is exactly the failure mode
+from landing in a commit (defendable-science#66). That is exactly the failure mode
 ADR-0029 set out to avoid, and it contradicts the secret-hygiene stance applied
 elsewhere in this repo (`rclone.conf` is gitignored and only
 `rclone.conf.example` is tracked).
@@ -39,7 +39,7 @@ second line of defense.
 ## Considered options
 
 1. **Minimal: just add the gitignore line.** `research-init` gitignores
-   `.honest-scholar/keys.json`, store location unchanged.
+   `.defendable-science/keys.json`, store location unchanged.
 2. **Move the default store outside the repo (XDG config), keep the in-repo
    path as an explicit opt-in** + a runtime guardrail that warns if a
    resolved store is ever inside a non-gitignored work tree. *(chosen)*
@@ -49,17 +49,17 @@ second line of defense.
 
 Option 2.
 
-- **Default store location.** `honest_scholar.core.keys.default_store_path()`
-  resolves to `$XDG_CONFIG_HOME/honest-scholar/keys.json`, falling back to
-  `~/.config/honest-scholar/keys.json` per the XDG Base Directory spec —
+- **Default store location.** `defendable_science.core.keys.default_store_path()`
+  resolves to `$XDG_CONFIG_HOME/defendable-science/keys.json`, falling back to
+  `~/.config/defendable-science/keys.json` per the XDG Base Directory spec —
   never inside the consumer repo's work tree. No dependency added
   (`platformdirs` was considered and rejected as unnecessary weight for two
   environment variables); implemented with stdlib `os.environ` + `Path.home()`.
-- **Opt-in override.** `HONEST_SCHOLAR_KEYS_PATH` is an explicit override —
-  set to any path, including the legacy in-repo `.honest-scholar/keys.json`
+- **Opt-in override.** `DEFENDABLE_SCIENCE_KEYS_PATH` is an explicit override —
+  set to any path, including the legacy in-repo `.defendable-science/keys.json`
   (kept as `keys.IN_REPO_STORE_PATH`) — for anyone who wants the store to
   travel with the repo instead of `$HOME`. `research-init` continues to
-  gitignore `.honest-scholar/keys.json`, so that opt-in still lands safely.
+  gitignore `.defendable-science/keys.json`, so that opt-in still lands safely.
 - **Runtime guardrail.** `keys.store_at_risk(path)` reports whether the
   *resolved* store sits inside a git work tree (walking up for a `.git` entry)
   and is not *confirmed* ignored (`git check-ignore`, run in that work tree's
@@ -83,11 +83,11 @@ Option 2.
   never entered the work tree.
 - An existing consumer repo that already has an in-repo store is unaffected by
   the code change alone (nothing migrates automatically) but gets a warning
-  the next time it writes if it opts into `HONEST_SCHOLAR_KEYS_PATH` pointed
+  the next time it writes if it opts into `DEFENDABLE_SCIENCE_KEYS_PATH` pointed
   at an un-ignored location; `research-init` re-runs will still add the
   gitignore line as a backstop.
-- One more environment variable to document (`HONEST_SCHOLAR_KEYS_PATH`,
-  alongside the existing `HONEST_SCHOLAR_LIVE`).
+- One more environment variable to document (`DEFENDABLE_SCIENCE_KEYS_PATH`,
+  alongside the existing `DEFENDABLE_SCIENCE_LIVE`).
 - The guardrail shells out to `git check-ignore` (a fixed, argument-list
   subprocess call, no shell) — the same trust boundary already accepted for
   `rclone` (ADR-0011) and the `--version` probes in `doctor`.
@@ -108,10 +108,10 @@ Option 2.
 
 ## Links
 
-`honest-scholar/honest_scholar/core/keys.py` (`store_path`, `default_store_path`,
-`store_at_risk`, `is_gitignored`); `honest-scholar/honest_scholar/cli.py` (`keys
+`defendable-science/defendable_science/core/keys.py` (`store_path`, `default_store_path`,
+`store_at_risk`, `is_gitignored`); `defendable-science/defendable_science/cli.py` (`keys
 set`'s `_warn_if_store_committable`); `skills/research-init/SKILL.md`;
 ADR-0029 (the store this refines); ADR-0024 (light-dependency posture);
-honest-scholar#66 (this decision); honest-scholar#49 (OS-keychain follow-up,
-unaffected); honest-scholar#65 (a related but distinct scaffolding-vs-runtime
+defendable-science#66 (this decision); defendable-science#49 (OS-keychain follow-up,
+unaffected); defendable-science#65 (a related but distinct scaffolding-vs-runtime
 mismatch for the dataset cache path, fixed separately — not in scope here).

@@ -1,6 +1,6 @@
 # Positioning / Related-Works Synthesis — methodology digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` `literature` capability, `position` mode (sub-spec 2). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` `literature` capability, `position` mode (sub-spec 2). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 For a committed paper: systematically establish novelty, select baselines, situate the contribution. Every named method has a verified identifier below.
 

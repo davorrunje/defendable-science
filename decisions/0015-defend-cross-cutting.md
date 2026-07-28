@@ -51,4 +51,4 @@ meta-spec §3.7; sub-spec 1 §6; digest `understanding-and-defense.md`.
 > **Refined by ADR-0033.** The Record step's accountability log now carries
 > the full per-point evidentiary record (the exact quote grounding each
 > probed point + what the author actually said), not a bare pass/fail —
-> shared with the `digest` skill (honest-scholar#68).
+> shared with the `digest` skill (defendable-science#68).

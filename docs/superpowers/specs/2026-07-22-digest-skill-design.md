@@ -3,11 +3,11 @@
 **Date:** 2026-07-22
 **Author:** Davor Runje (design session with Claude)
 **Status:** Draft — pending review
-**Resolves:** [#68](https://github.com/davorrunje/honest-scholar/issues/68)
+**Resolves:** [#68](https://github.com/davorrunje/defendable-science/issues/68)
 
 ## 1. Problem
 
-`honest-scholar` has `defend` for verifying the author's grasp of *their own*
+`defendable-science` has `defend` for verifying the author's grasp of *their own*
 material decisions (findings verdict, publish decision, thesis defensibility) and,
 via its `cited-work` target, whether a specific citation supports a specific
 sentence. There is no **inbound** counterpart: a skill for digesting an
@@ -83,7 +83,7 @@ substance stance — a misunderstood-or-wrong paper surfaces as the reader's
 
 ## 4. Record — evidentiary, not a pass flag
 
-This changes the **shared** `honest_scholar/defend/record.py` used by both
+This changes the **shared** `defendable_science/defend/record.py` used by both
 `defend` and `digest` — not just adding a target.
 
 Today, `record()` takes `gaps: list[str]` (only the *failed* points, as bare
@@ -163,9 +163,9 @@ posture as the rest of `progress` (coverage + blockers, never a score).
   note; loop description reflects evidentiary `points`.
 - `skills/progress/SKILL.md` — edit: new "literature reading" roll-up section.
 - `skills/literature/SKILL.md` — edit: Composition section mentions `digest`.
-- `honest_scholar/defend/record.py` — `PointRecord` dataclass; `points` replaces
+- `defendable_science/defend/record.py` — `PointRecord` dataclass; `points` replaces
   `gaps`; `TARGETS` gains `paper-comprehension`.
-- `honest_scholar/cli.py` — `defend record`'s `--gaps` → `--points` (file/stdin
+- `defendable_science/cli.py` — `defend record`'s `--gaps` → `--points` (file/stdin
   JSON).
 - Two new ADRs: (a) the `digest` skill itself; (b) the evidentiary-`points`
   record-schema change (cross-linked to/from ADR-0015).
@@ -179,7 +179,7 @@ posture as the rest of `progress` (coverage + blockers, never a score).
 
 ## 8. Testing implications (detail deferred to the implementation plan)
 
-- `honest_scholar/defend/record.py`'s existing test suite needs updating for the
+- `defendable_science/defend/record.py`'s existing test suite needs updating for the
   `points`-schema change; 100%-statement+branch coverage gate applies as usual
   (ADR-0028).
 - New tests for `digest`'s CLI usage (`--target paper-comprehension`, `--points`

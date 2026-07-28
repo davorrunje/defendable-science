@@ -71,11 +71,11 @@ surfaces as a flagged, unresolved point, never a verdict.
 
 ## Record — evidentiary, not a pass flag
 
-Uses the same `honest-scholar defend record` CLI as `defend` (ADR-0033),
+Uses the same `defendable-science defend record` CLI as `defend` (ADR-0033),
 target `paper-comprehension`:
 
 ```
-honest-scholar defend record \
+defendable-science defend record \
   --artifact docs/research/literature/digests/smith2024.md \
   --target paper-comprehension \
   --points points.json
@@ -186,6 +186,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: digest
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: digest
 ```

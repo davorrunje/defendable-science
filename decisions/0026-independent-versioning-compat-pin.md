@@ -4,9 +4,9 @@
 
 ## Context
 
-`honest-scholar` ships two artifacts on different release cadences: the **plugin**
+`defendable-science` ships two artifacts on different release cadences: the **plugin**
 (markdown skills, distributed via the git self-marketplace) and the
-**`honest-scholar` package** (the Typer CLI the skills call, published to PyPI,
+**`defendable-science` package** (the Typer CLI the skills call, published to PyPI,
 ADR-0024). A skill change and a CLI change rarely land together, and the plugin has
 no build step while the package follows PEP 440. Locking the two to one version
 number would force empty "release" bumps on whichever artifact didn't change and
@@ -25,7 +25,7 @@ couple two independent audiences (plugin users vs. `pip`/`uv` installers).
 1. **Independent versions + a compatibility pin** — the plugin (`plugin.json`,
    semver) and the package (`pyproject.toml`, PEP 440) version separately; the
    skills' `ensure-tooling` bootstrap pins a compatible package range
-   (`honest-scholar>=<min>,<<next-major>`).
+   (`defendable-science>=<min>,<<next-major>`).
 2. **Locked versions** — one number bumped in lockstep across both.
 3. **No pin** — independent, with skills tolerating any installed CLI version.
 
@@ -56,5 +56,5 @@ skills change.
 ## Links
 
 `resources/ensure-tooling.md`; `.claude-plugin/plugin.json`;
-`honest-scholar/pyproject.toml`; `.github/workflows/bump-version.yml`; ADR-0024
+`defendable-science/pyproject.toml`; `.github/workflows/bump-version.yml`; ADR-0024
 (tooling package + bootstrap).

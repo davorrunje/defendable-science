@@ -31,14 +31,14 @@ runs:
             exit 1 ;;
         esac
         version=$(basename "$(ls dist/*.whl | head -1)" | cut -d- -f2)
-        url="${project}/honest-scholar/${version}/"
-        echo "::notice title=Published to ${name}::honest-scholar ${version}"
+        url="${project}/defendable-science/${version}/"
+        echo "::notice title=Published to ${name}::defendable-science ${version}"
         {
           echo "### 📦 Published to ${name}"
           echo ""
-          echo "**honest-scholar ${version}** -> <${url}>"
+          echo "**defendable-science ${version}** -> <${url}>"
           echo ""
           echo '```'
-          echo "${install}honest-scholar==${version}"
+          echo "${install}defendable-science==${version}"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the ``honest-scholar`` PyPI package version (PEP 440).
+"""Bump the ``defendable-science`` PyPI package version (PEP 440).
 
 Composes a release-segment bump (``major``/``minor``/``patch``) with a
 pre-release phase (``alpha``/``beta``/``rc``/``final``), so a single run can
@@ -8,7 +8,7 @@ express "start the next minor's alpha" (``--release minor --pre alpha`` ->
 "promote to the next phase" (``--pre rc`` on an alpha -> ``…rc0``), or "cut the
 final" (``--pre final`` -> drop the prerelease).
 
-Edits ``[project].version`` in ``honest-scholar/pyproject.toml`` in place (the
+Edits ``[project].version`` in ``defendable-science/pyproject.toml`` in place (the
 package's source of truth; the runtime ``__version__`` derives from the installed
 metadata) and prints the new version to stdout.
 
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_PYPROJECT = _ROOT / "honest-scholar" / "pyproject.toml"
+_DEFAULT_PYPROJECT = _ROOT / "defendable-science" / "pyproject.toml"
 
 # Matches the [project] version line (line-anchored; no other `^version = "..."`).
 _VERSION_LINE = re.compile(r'(?m)^version\s*=\s*"([^"]+)"')

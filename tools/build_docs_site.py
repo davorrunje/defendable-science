@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the ``honest-scholar`` Mintlify docs site from the in-repo markdown.
+"""Build the ``defendable-science`` Mintlify docs site from the in-repo markdown.
 
 This is a **standalone build tool**, not part of the shipped package (it lives in
 ``tools/`` and is outside the package's coverage/lint gate). It assembles the
@@ -10,7 +10,7 @@ Mintlify site into an output directory:
 * an ``index.mdx`` landing page (from ``README.md``),
 * a Get-started page (from ``docs/USER-GUIDE.md``),
 * one page per ``skills/*/SKILL.md``,
-* a **generated** CLI reference (walked live from the ``honest_scholar`` Typer app,
+* a **generated** CLI reference (walked live from the ``defendable_science`` Typer app,
   so it never drifts from the released CLI),
 * the design record — specs, proposals, the ADR log, reference digests, disclosure,
 * a ``docs.json`` with grouped navigation, brand colours, logo and social links,
@@ -23,14 +23,14 @@ at repo files *not* in the site become absolute ``github.com`` URLs. A link that
 points at a file which does not exist is a **hard error** — the build fails loudly
 rather than silently dropping content (the repo's failure-honesty rule).
 
-Run it from the ``honest-scholar/`` package directory (so the Typer app imports)::
+Run it from the ``defendable-science/`` package directory (so the Typer app imports)::
 
-    cd honest-scholar
+    cd defendable-science
     uv run python ../tools/build_docs_site.py --out ../dist/docs-site
 
 or from the repo root under the package project::
 
-    uv run --project honest-scholar python tools/build_docs_site.py --out dist/docs-site
+    uv run --project defendable-science python tools/build_docs_site.py --out dist/docs-site
 
 The output directory is created (and, if it already exists, emptied) by the build.
 """
@@ -56,11 +56,11 @@ if TYPE_CHECKING:
 # --- constants -------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GH_REPO = "https://github.com/davorrunje/honest-scholar"
+GH_REPO = "https://github.com/davorrunje/defendable-science"
 GH_BLOB = f"{GH_REPO}/blob/main/"
 GH_TREE = f"{GH_REPO}/tree/main/"
 
-SITE_NAME = "Honest Scholar"
+SITE_NAME = "Defendable Science"
 SITE_DESCRIPTION = (
     "Research you can defend — keep your research honest, "
     "especially now that AI is in the loop."
@@ -546,7 +546,7 @@ def _render_command(
     cmd: Command, ctx_cls: type[Context], parent_ctx: Context | None, path: list[str]
 ) -> str:
     """Render one Typer/Click command (or group) to a markdown section."""
-    # Local import: `generate_cli_reference` already imports `honest_scholar`/typer
+    # Local import: `generate_cli_reference` already imports `defendable_science`/typer
     # lazily so the rest of this module works without either installed; mirror
     # that here rather than importing typer unconditionally at module scope.
     from typer.core import TyperGroup
@@ -610,22 +610,22 @@ def _render_command(
 
 
 def generate_cli_reference() -> str:
-    """Render the ``honest-scholar`` Typer command tree to markdown."""
+    """Render the ``defendable-science`` Typer command tree to markdown."""
     import typer
     from typer._click.core import Context
     from typer.core import TyperGroup
 
-    from honest_scholar.cli import app
+    from defendable_science.cli import app
 
     root = typer.main.get_command(app)
-    root_ctx = Context(root, info_name="honest-scholar")
+    root_ctx = Context(root, info_name="defendable-science")
     intro = _clean_command_help(getattr(root, "help", None))
 
     body = [
         intro,
         "",
         "Every command emits JSON on success and a clear, non-zero exit with an "
-        "actionable message on failure. Run `honest-scholar --version` to print the "
+        "actionable message on failure. Run `defendable-science --version` to print the "
         "installed version. This page is generated from the Typer app on every "
         "build, so it always matches the released CLI.",
         "",
@@ -633,11 +633,13 @@ def generate_cli_reference() -> str:
     if not isinstance(
         root, TyperGroup
     ):  # pragma: no cover - the app always has >1 command
-        raise BuildError("honest-scholar CLI root is not a command group")
+        raise BuildError("defendable-science CLI root is not a command group")
     for name in root.list_commands(root_ctx):
         sub = root.get_command(root_ctx, name)
         assert sub is not None, f"list_commands returned unknown command {name!r}"
-        body.append(_render_command(sub, Context, root_ctx, ["honest-scholar", name]))
+        body.append(
+            _render_command(sub, Context, root_ctx, ["defendable-science", name])
+        )
     return "\n".join(body)
 
 
@@ -655,7 +657,9 @@ def build_page(
     """Assemble one MDX page (frontmatter + transformed body)."""
     if source is None:  # the generated CLI reference
         title = "CLI reference"
-        description = "The honest-scholar command tree, generated from the Typer app."
+        description = (
+            "The defendable-science command tree, generated from the Typer app."
+        )
         raw = generate_cli_reference()
         body = rewrite_links(
             raw, "docs/USER-GUIDE.md", route_map, routes, errors, site_links
@@ -786,7 +790,9 @@ def build(out: Path) -> dict[str, int]:
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="Build the honest-scholar docs site.")
+    parser = argparse.ArgumentParser(
+        description="Build the defendable-science docs site."
+    )
     parser.add_argument(
         "--out", required=True, type=Path, help="Output directory for the site."
     )
@@ -798,7 +804,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"built honest-scholar docs site → {args.out}")
+    print(f"built defendable-science docs site → {args.out}")
     print(
         f"  {stats['pages']} pages across {stats['groups']} top-level nav groups; "
         f"{stats['site_links']} intra-site links verified; docs.json valid; "

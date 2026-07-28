@@ -61,7 +61,7 @@ Two mechanisms could realize the pin; both keep provenance git-native:
 
 | Option | How it reads the external repo | Trade-offs |
 |---|---|---|
-| **A1 — manifest + shallow fetch** | Tooling fetches the pinned commit into a gitignored cache (e.g. `.honest-scholar/external/<paper-id>@<commit>/`) and reads the committed `papers.md`, `findings.md`, `decision.md`, and status frontmatter read-only. | Loosest coupling; the thesis repo history stays clean (only the small YAML is committed). Requires a fetch step + cache; the pin lives in YAML, not in git's own object graph. |
+| **A1 — manifest + shallow fetch** | Tooling fetches the pinned commit into a gitignored cache (e.g. `.defendable-science/external/<paper-id>@<commit>/`) and reads the committed `papers.md`, `findings.md`, `decision.md`, and status frontmatter read-only. | Loosest coupling; the thesis repo history stays clean (only the small YAML is committed). Requires a fetch step + cache; the pin lives in YAML, not in git's own object graph. |
 | **A2 — git submodule** | Each external paper root is a submodule pinned to a commit; git records the pin in `.gitmodules` + the gitlink. | Pin is enforced by git itself and survives clone; familiar tooling. But submodules are notoriously sharp (detached HEADs, partial clones, recursive auth), and a whole external repo is heavier than one paper root. |
 
 Either way the thesis repo reads **only committed artifacts** of the external
@@ -123,7 +123,7 @@ whether to re-run.
 
 - **Authentication to private repos.** Work-research repos are typically private.
   Read access needs credentials the thesis repo must *not* commit — reuse the
-  `.honest-scholar/` gitignored-config pattern (a token / SSH agent / `gh auth`), or defer
+  `.defendable-science/` gitignored-config pattern (a token / SSH agent / `gh auth`), or defer
   to the host's ambient git auth. How does tooling degrade when a referenced repo
   is unreachable (offline, revoked token) — hard error, or read last-cached pin
   with a staleness warning?
@@ -158,7 +158,7 @@ A future design that resolves this proposal should:
       external verdict *not* re-adjudicated and the contribution statement authored.
 - [ ] Define **cross-repo `is-current`** for both pin staleness and (reported)
       evidence staleness, and the human-decides re-run/advance behavior.
-- [ ] Define private-repo auth via gitignored `.honest-scholar/` config, and the
+- [ ] Define private-repo auth via gitignored `.defendable-science/` config, and the
       unreachable-repo degradation path.
 - [ ] Land a new ADR that revisits ADR-0018's cross-repo-out-of-scope clause.
 

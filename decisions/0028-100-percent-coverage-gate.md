@@ -4,7 +4,7 @@
 
 ## Context
 
-The `honest-scholar` package (ADR-0024) is small, pure-functional at its core, and
+The `defendable-science` package (ADR-0024) is small, pure-functional at its core, and
 built for **reproducibility and honesty** — it is the tooling an integrity-focused
 plugin tells researchers to trust. Its modules parse untrusted input (manifests,
 Croissant, backlog markdown, API JSON) and degrade across missing keys/binaries,
@@ -54,5 +54,5 @@ error and degradation paths.
 
 ## Links
 
-`honest-scholar/pyproject.toml` (`[tool.pytest.ini_options]`, `[tool.coverage]`);
+`defendable-science/pyproject.toml` (`[tool.pytest.ini_options]`, `[tool.coverage]`);
 `codecov.yml`; `.github/workflows/ci.yml`; ADR-0024 (tooling package).

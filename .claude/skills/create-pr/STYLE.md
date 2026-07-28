@@ -1,6 +1,6 @@
 # PR Style
 
-The concrete templates for landing changes on `davorrunje/honest-scholar`.
+The concrete templates for landing changes on `davorrunje/defendable-science`.
 See [SKILL.md](SKILL.md) for the process and the hard rules.
 
 ## Branch name
@@ -32,7 +32,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
   `git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -F <file>`.
 - Commits of **skill-produced artifacts** (not repo-dev commits) additionally
   carry the discovery trailers from `resources/commit-attribution.md`
-  (`Generated-with:` / `HonestScholar-Skill:`).
+  (`Generated-with:` / `DefendableScience-Skill:`).
 
 ## PR title
 

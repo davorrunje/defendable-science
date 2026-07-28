@@ -76,10 +76,10 @@ order**. Each carries a status frontmatter block that feeds
    > confirmatory.
 
 3. **`design.md` / `plan.md`** — *the engineering, delegated.* Hand off to the
-   engineering backend bound in `.honest-scholar/config.yml` (`engineering_backend:`)
+   engineering backend bound in `.defendable-science/config.yml` (`engineering_backend:`)
    via the engineering-delegation contract: `design` → `plan` → `implement`. Store
    the design and plan under this hypothesis folder (`design.md`, `plan.md`);
-   `implement` builds the experiment harness/code. `honest-scholar` does not design
+   `implement` builds the experiment harness/code. `defendable-science` does not design
    experiments, write plans, or implement — it composes with the engineering backend
    for all of that. The *experiment* backend's `run` (below) then executes the built
    harness to produce the runs.
@@ -187,6 +187,6 @@ When you commit artifacts produced by this skill, add these git trailers —
 discovery + provenance (see [`../../resources/commit-attribution.md`](../../resources/commit-attribution.md)):
 
 ```
-Generated-with: honest-scholar (https://github.com/davorrunje/honest-scholar)
-HonestScholar-Skill: hypothesis-testing
+Generated-with: defendable-science (https://github.com/davorrunje/defendable-science)
+DefendableScience-Skill: hypothesis-testing
 ```

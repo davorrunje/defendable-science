@@ -7,7 +7,7 @@
 The literature registry's bibliographic-facts layer (ADR-0008) needs a concrete
 format. BibTeX and CSL-JSON are losslessly inter-convertible (Zotero/pandoc), so
 the real choice is which is the hand-edited/authoritative source and which is
-generated. The `honest-scholar` skills manipulate this layer programmatically (scout
+generated. The `defendable-science` skills manipulate this layer programmatically (scout
 appends rows, triage joins by key, position builds matrices).
 
 ## Decision drivers

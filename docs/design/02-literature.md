@@ -1,8 +1,8 @@
-# honest-scholar sub-spec 2 — Literature capability (`literature`)
+# defendable-science sub-spec 2 — Literature capability (`literature`)
 
 **Date:** 2026-07-17
 **Author:** Davor Runje
-**Status:** Implemented. Sub-spec of the `honest-scholar` meta-spec; realized in this repo (skills + CLI).
+**Status:** Implemented. Sub-spec of the `defendable-science` meta-spec; realized in this repo (skills + CLI).
 
 > Sub-spec of [00-meta-spec.md](00-meta-spec.md).
 > Builds on the asset substrate of
@@ -119,7 +119,7 @@ may be committed vs. mirror-only.
   triage-schema; the PRISMA-log + concept-matrix generators; reference digests.
   Deps: HTTP client + `pyyaml` (+ the substrate's rclone mirror). No heavy deps.
 - **Consumer:** the `references.bib` + `triage.yml`; mirrored PDFs; API config
-  (anchors, keys) in `.honest-scholar/config.yml`.
+  (anchors, keys) in `.defendable-science/config.yml`.
 
 ## 7. Open items
 

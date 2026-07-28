@@ -1,8 +1,8 @@
-<!-- honest-scholar staged-document templates -->
+<!-- defendable-science staged-document templates -->
 
 # Staged-document templates
 
-Fillable skeletons for every staged document the `honest-scholar` pipeline produces.
+Fillable skeletons for every staged document the `defendable-science` pipeline produces.
 The skills *draft* these as proposals; the **author authors and decides**. Copy a
 template into the consumer repo's `docs/research/` tree at the location its skill
 scaffolds, then fill it in — replace every `<...>` placeholder and delete the
@@ -29,7 +29,7 @@ you add, not in prose the template ships with.
 
 Design/plan (hypothesis) and outline/plan (paper) are **engineering**, delegated to
 the bound engineering backend via the engineering-delegation contract (its
-`design` → `plan` capabilities); `honest-scholar` ships no templates for them. See
+`design` → `plan` capabilities); `defendable-science` ships no templates for them. See
 `hypothesis/design-plan-README.md`.
 
 ## Status-frontmatter convention

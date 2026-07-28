@@ -4,7 +4,7 @@
 
 ## Context
 
-`honest_scholar/defend/record.py`'s `record()` only ever stored the *failed*
+`defendable_science/defend/record.py`'s `record()` only ever stored the *failed*
 load-bearing points, as bare strings (`gaps: list[str]`), deriving
 `status.understanding: {status: ok|gaps, unresolved: [...]}`. The accountability
 log (`docs/research/defend-log/*.yml`) inherited the same shape: a `gaps` list
@@ -13,7 +13,7 @@ what the author/reader actually said when probed. This makes the log auditable
 only at the coarsest level ("something didn't resolve") — a reviewer of the log
 can't tell *what was checked*, *against which text*, or *what the person's
 actual answer was*, without re-running the examination. Filing `digest`
-(honest-scholar#68, the inbound comprehension-verification skill) surfaced this
+(defendable-science#68, the inbound comprehension-verification skill) surfaced this
 gap concretely: a meaningful accountability record for "did the reader
 understand this paper" needs to show the exact quote grounding each
 load-bearing point and the reader's own explanation, not just whether it
@@ -66,7 +66,7 @@ structured or multiline text) is replaced by `--points <file>` / `--points -`
 - Existing log entries (pre-dating this change) keep their old flat `gaps`
   shape; they are immutable, append-only files, so no migration is needed —
   only new entries use `points`.
-- `honest_scholar/defend/record.py`'s and `honest_scholar/cli.py`'s existing
+- `defendable_science/defend/record.py`'s and `defendable_science/cli.py`'s existing
   tests needed updating for the new call shape (not a silent, invisible
   change — every caller of `record()` is affected).
 
@@ -84,7 +84,7 @@ structured or multiline text) is replaced by `--points <file>` / `--points -`
 
 ## Links
 
-`honest_scholar/defend/record.py` (`PointRecord`, `record`, `LogEntry`);
-`honest_scholar/cli.py` (`defend record`'s `--points`); ADR-0015 (the `defend`
-record step this refines); honest-scholar#68 (`digest`, the skill that
+`defendable_science/defend/record.py` (`PointRecord`, `record`, `LogEntry`);
+`defendable_science/cli.py` (`defend record`'s `--points`); ADR-0015 (the `defend`
+record step this refines); defendable-science#68 (`digest`, the skill that
 surfaced this gap).

@@ -11,9 +11,9 @@ public source → gated instructions) with SHA-256 fixity at every hop, but the
 pooch fetcher and rclone wrappers as not-yet-implemented. **Interim (until the module is
 implemented):** the skill orchestrates the resolution chain manually / via direct
 tool calls — fetch, `sha256sum` fixity checks, and hand-run `rclone` — which is
-error-prone; once `honest-scholar` is installed (via
+error-prone; once `defendable-science` is installed (via
 [`ensure-tooling`](../../../resources/ensure-tooling.md)) the skill calls
-`honest-scholar dataset …` instead. This proposal specifies that tooling.
+`defendable-science dataset …` instead. This proposal specifies that tooling.
 
 The substrate that this tooling implements is already fixed by
 `../../../resources/substrate/asset-registry.md`: a git-committed, license-bearing,
@@ -58,7 +58,7 @@ env-var remotes), all keyed by content address `mirror:<base_path>/sha256/<hash>
 - `mirror_get(sha256, dst)` → `rclone copyto mirror:base/sha256/<hash> <dst>`, then re-hash
 - `mirror_check(sha256)` → `rclone check` / `rclone hashsum` as a transport-level
   presence/integrity probe; `--download` when backend hash sets are disjoint
-Config resolution: prefer `RCLONE_CONFIG=$PWD/.honest-scholar/rclone.conf` (untracked),
+Config resolution: prefer `RCLONE_CONFIG=$PWD/.defendable-science/rclone.conf` (untracked),
 fall back to env-var remotes (`RCLONE_CONFIG_<NAME>_TYPE=…`) for CI from secrets.
 
 **Fixity — two layers, SHA-256 authoritative.** rclone's native hash (often MD5)
@@ -78,7 +78,7 @@ is gitignored.
 
 ## API / CLI the verbs call
 
-A single module, `honest_scholar/dataset/retrieval.py` (sharing the package's
+A single module, `defendable_science/dataset/retrieval.py` (sharing the package's
 `core` cache/http/provenance helpers), exposing the seams the verbs invoke:
 
 ```
@@ -98,9 +98,9 @@ Verb → core mapping:
   schema/license/datasheet/tier-consistency completeness (owned by the manifest
   loader/validator)
 
-CLI shape mirrors the verbs: `honest-scholar dataset fetch <id>`,
-`honest-scholar dataset verify [<id>|--all]`, `honest-scholar dataset mirror <id>`,
-`honest-scholar dataset audit`. All read the mirror remote name + base
+CLI shape mirrors the verbs: `defendable-science dataset fetch <id>`,
+`defendable-science dataset verify [<id>|--all]`, `defendable-science dataset mirror <id>`,
+`defendable-science dataset audit`. All read the mirror remote name + base
 path from `datasets.yml`; none embed credentials.
 
 ## Dependencies & posture
@@ -117,7 +117,7 @@ path from `datasets.yml`; none embed credentials.
 
 **Secret hygiene (non-negotiable).** Never commit `rclone.conf`, tokens, or
 `rclone obscure` output (`obscure` is not encryption). `init` ships only
-`.honest-scholar/rclone.conf.example` (remote name + type). The cache and real config are
+`.defendable-science/rclone.conf.example` (remote name + type). The cache and real config are
 gitignored; CI uses env-var remotes sourced from secrets.
 
 ## Open questions

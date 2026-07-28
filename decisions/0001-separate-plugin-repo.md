@@ -17,13 +17,13 @@ cognitive load, not just tidying one repo.
 
 ## Considered options
 
-1. **Standalone Claude Code plugin repo** (`honest-scholar`), mononet as one consumer.
+1. **Standalone Claude Code plugin repo** (`defendable-science`), mononet as one consumer.
 2. Keep the skills in-repo (mononet) only.
 3. A shared internal snippet library copied per repo.
 
 ## Decision
 
-Option 1. `honest-scholar` is a standalone, domain-neutral plugin; `mononet` becomes the
+Option 1. `defendable-science` is a standalone, domain-neutral plugin; `mononet` becomes the
 first *consumer*.
 
 ## Consequences

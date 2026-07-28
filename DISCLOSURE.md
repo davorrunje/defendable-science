@@ -1,18 +1,18 @@
-# Disclosing AI use — and citing Honest Scholar
+# Disclosing AI use — and citing Defendable Science
 
-`honest-scholar` helps you use AI in research **honestly**: you (not the AI) make
+`defendable-science` helps you use AI in research **honestly**: you (not the AI) make
 and sign off every material decision, you can defend the work, and evidence is
 provenance-tracked. This page is how you *tell your readers that* — a short,
 truthful **AI-use disclosure** you can put in a paper, plus how to **cite** the
 tool.
 
-This is also, deliberately, how Honest Scholar spreads: a disclosure that helps
+This is also, deliberately, how Defendable Science spreads: a disclosure that helps
 you (venues increasingly require an AI-use statement) and, because it names the
 protocol you followed, points other researchers to it. See ADR-0025.
 
 ## What it is *not*
 
-- **Not a seal of honesty.** Honest Scholar does not certify that your research is
+- **Not a seal of honesty.** Defendable Science does not certify that your research is
   honest — it gives you a *structured, truthful way to disclose* what you and the
   AI each did, backed by your own recorded sign-offs. Readers judge; the statement
   just tells them what happened and links the record.
@@ -28,7 +28,7 @@ which `run-ref`s back which results, what the AI drafted) — so it is evidence-
 not boilerplate. Edit freely.
 
 > **Use of AI.** This work was conducted with AI assistance under the
-> *Honest Scholar* protocol (github.com/davorrunje/honest-scholar). Every material
+> *Defendable Science* protocol (github.com/davorrunje/defendable-science). Every material
 > scientific decision — the hypotheses, whether results are real, what to publish,
 > and all claims — was made and signed off by the named authors, who understand and
 > can defend the work. AI tools were used for [literature search, bookkeeping and
@@ -38,21 +38,21 @@ not boilerplate. Edit freely.
 Keep it truthful: only claim what the record shows, and cut any line that isn't
 true of your project.
 
-## Citing Honest Scholar
+## Citing Defendable Science
 
 For now, cite the repository (a `CITATION.cff` is included, so GitHub's *"Cite this
 repository"* works):
 
 ```bibtex
-@software{honest_scholar,
-  title  = {honest-scholar: a research-workflow plugin for honest, defensible AI-assisted research},
+@software{defendable_science,
+  title  = {defendable-science: a research-workflow plugin for honest, defensible AI-assisted research},
   author = {Runje, Davor},
   year   = {2026},
-  url    = {https://github.com/davorrunje/honest-scholar}
+  url    = {https://github.com/davorrunje/defendable-science}
 }
 ```
 
-> **Transition:** a short report on Honest Scholar will be posted to **arXiv** and
+> **Transition:** a short report on Defendable Science will be posted to **arXiv** and
 > then submitted to a venue. When the preprint exists, `CITATION.cff`'s
 > `preferred-citation` will point at it, and this BibTeX will be replaced by the
 > arXiv (then published) reference. (Tracking: the "arXiv report" issue.)
@@ -63,7 +63,7 @@ If you keep your research in a public repo, you can add a discovery badge (this
 describes the *disclosure*, it does not certify honesty):
 
 ```markdown
-[![AI use: disclosed with honest-scholar](https://img.shields.io/badge/AI%20use-disclosed%20with%20honest--scholar-f9463c?style=flat-square&labelColor=2a1cc8)](https://github.com/davorrunje/honest-scholar)
+[![AI use: disclosed with defendable-science](https://img.shields.io/badge/AI%20use-disclosed%20with%20defendable--science-f9463c?style=flat-square&labelColor=2a1cc8)](https://github.com/davorrunje/defendable-science)
 ```
 
 ## How it reaches you (the automatic step)

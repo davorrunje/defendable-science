@@ -4,7 +4,7 @@
 
 ## Context
 
-`honest-scholar` should become widely used. The mission-aligned growth vector is
+`defendable-science` should become widely used. The mission-aligned growth vector is
 the honesty mission itself: research venues increasingly require an **AI-use
 disclosure**, and a truthful, structured disclosure that names the protocol
 followed both helps the author and points other researchers to the tool. This is
@@ -40,7 +40,7 @@ preprint then a published paper.
 ## Consequences
 
 - A discovery vector aligned with the mission; every published paper that carries
-  the disclosure exposes honest-scholar to researchers and reviewers.
+  the disclosure exposes defendable-science to researchers and reviewers.
 - The disclosure is evidence-based (from the record), so it is honest and not a
   hollow sticker.
 - `paper-synthesis` gains a finalize-time proposal step; `DISCLOSURE.md` +

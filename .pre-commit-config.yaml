@@ -27,7 +27,7 @@ repos:
         args: [--ignore-words=.codespell-whitelist.txt]
         exclude: |
             (?x)^(
-                honest-scholar/uv.lock
+                defendable-science/uv.lock
             )$
 
 -   repo: local
@@ -73,5 +73,5 @@ repos:
         args: [
             '--baseline', '.secrets.baseline',
         ]
-        exclude: honest-scholar/uv.lock
+        exclude: defendable-science/uv.lock
         stages: [pre-commit, pre-merge-commit, manual]

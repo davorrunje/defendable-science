@@ -1,6 +1,6 @@
 # Generative Citation Scouting — methodology digest
 
-**Date:** 2026-07-17 · **For:** `honest-scholar` `literature` capability, `scout` mode (sub-spec 2). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
+**Date:** 2026-07-17 · **For:** `defendable-science` `literature` capability, `scout` mode (sub-spec 2). · **Status:** verified-source digest; migrates to the plugin's `resources/references/`.
 
 Using the citation graph to generate research ideas, spot gaps, and find collaborators, anchored on an author's paper + rival anchors. Identifiers verified at compile time unless flagged `[unverified]`.
 

@@ -3,8 +3,7 @@
   <rect width="1600" height="420" fill="url(#bg)"></rect>
   <circle cx="1360" cy="80" r="180" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"></circle>
   <circle cx="180" cy="360" r="130" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="2"></circle>
-  <circle cx="800" cy="150" r="72" fill="#f9463c"></circle>
-  <rect x="778" y="128" width="44" height="44" rx="9" fill="#ffffff"></rect>
-  <text x="800" y="290" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="80" fill="#ffffff" text-anchor="middle" letter-spacing="-1">Honest Scholar</text>
-  <text x="800" y="340" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="32" fill="#ff8a82" text-anchor="middle">Research you can defend.</text>
+  <text x="395" y="272" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="80" fill="#ffffff" letter-spacing="-1">Defendable Science</text>
+  <rect x="1161" y="228" width="44" height="44" rx="11" fill="none" stroke="#f9463c" stroke-width="9"></rect>
+  <text x="800" y="342" font-family="Arial, Helvetica, sans-serif" font-weight="600" font-size="32" fill="#ff8a82" text-anchor="middle">Research you can defend.</text>
 </svg>

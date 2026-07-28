@@ -1,7 +1,7 @@
 # Codecov configuration.
 #
 # The *enforcing* coverage gate is pytest's `fail_under = 100` (see
-# honest-scholar/pyproject.toml, ADR-0028) — it fails CI directly. Codecov is
+# defendable-science/pyproject.toml, ADR-0028) — it fails CI directly. Codecov is
 # reporting-only here (informational statuses) to avoid double-gating and Codecov
 # flakiness blocking a PR; the hard gate is the pytest run, not this service.
 coverage:

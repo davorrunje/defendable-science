@@ -1,6 +1,6 @@
 ---
 name: create-issue
-description: Use when a follow-up, deferred task, or known problem is identified that will not be fixed now — turn it into a self-contained GitHub issue on davorrunje/honest-scholar that a future session (with only the repo + the issue, not this conversation) can complete. Also defines how issues are CLOSED. Standard format lives in STYLE.md.
+description: Use when a follow-up, deferred task, or known problem is identified that will not be fixed now — turn it into a self-contained GitHub issue on davorrunje/defendable-science that a future session (with only the repo + the issue, not this conversation) can complete. Also defines how issues are CLOSED. Standard format lives in STYLE.md.
 ---
 
 # Create Issue
@@ -41,7 +41,7 @@ If you catch yourself writing "we should eventually…" — stop and create the 
    title convention, required body sections, labels.
 3. **Run the self-containment check** (in STYLE.md). If any answer is "you'd need
    this conversation to know that", fix the issue text.
-4. **Create it** with the GitHub CLI on `davorrunje/honest-scholar`:
+4. **Create it** with the GitHub CLI on `davorrunje/defendable-science`:
 
    ```bash
    gh issue create --title "<title>" --body-file <path> [--label "<labels>"] [--milestone "<milestone>"]

@@ -1,17 +1,17 @@
 # Engineering-delegation contract
 
-`honest-scholar` covers the **scientific** workflow (claims, evidence, decisions, papers)
+`defendable-science` covers the **scientific** workflow (claims, evidence, decisions, papers)
 but does **not** prescribe *how* engineering is done — designing and building the
 code that produces evidence, and any implementation work. Skills that need
 engineering **hand it off through this contract**; each consuming repo binds an
 **engineering backend**. This mirrors the experiment-backend contract
-(`experiment-backend.md`): `honest-scholar` names no specific engineering tool, so the
+(`experiment-backend.md`): `defendable-science` names no specific engineering tool, so the
 backend is hot-swappable and the plugin stays domain- and tool-neutral.
 (Decision: ADR-0023; supersedes the tool-specific framing of ADR-0002.)
 
 ## Binding
 
-A project binds an engineering backend in `.honest-scholar/config.yml`
+A project binds an engineering backend in `.defendable-science/config.yml`
 (`engineering_backend: <name>`). A backend is anything that provides the three
 capabilities below and writes its artifacts where the calling skill asks (e.g.
 under a hypothesis folder). Pipeline skills contain no backend-specific logic.
@@ -34,14 +34,14 @@ under a hypothesis folder). Pipeline skills contain no backend-specific logic.
 ## Agency-principle interaction
 
 Engineering is still human-driven: the backend produces design/plan/implementation
-*artifacts*; the researcher directs and reviews them. `honest-scholar` never fakes the
+*artifacts*; the researcher directs and reviews them. `defendable-science` never fakes the
 engineering, and the scientific decisions (what to test, what the result means)
 remain the human's, per the agency principle (`docs/design/00-meta-spec.md` §2.1).
 
 ## Notes
 
 - Most consumers will bind a general engineering-workflow tool they already use.
-  `honest-scholar` deliberately does not name one — pick whatever your team uses.
+  `defendable-science` deliberately does not name one — pick whatever your team uses.
 - A repo with no separate engineering backend can treat these capabilities as
   "the researcher (with their assistant) designs, plans, and implements directly,"
   storing the same `design.md`/`plan.md` artifacts.

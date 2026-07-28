@@ -1,6 +1,6 @@
 name: Bump version
 
-# Bumps the honest-scholar PACKAGE version (PEP 440) and opens a release PR.
+# Bumps the defendable-science PACKAGE version (PEP 440) and opens a release PR.
 # Compose a release-segment bump with a pre-release phase, e.g.
 #   release=minor pre=alpha -> 0.1.0a0 · pre=alpha -> …a{n+1} · pre=rc -> …rc0 ·
 #   pre=final -> drop prerelease · release=patch -> 0.0.1
@@ -37,14 +37,14 @@ jobs:
       - name: Compute + write the new version
         id: bump
         run: |
-          old=$(grep -m1 '^version' honest-scholar/pyproject.toml | cut -d'"' -f2)
+          old=$(grep -m1 '^version' defendable-science/pyproject.toml | cut -d'"' -f2)
           version=$(python tools/bump_version.py \
             --release "${{ inputs.release }}" --pre "${{ inputs.pre }}")
           {
             echo "old=$old"
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
-          echo "Bumped honest-scholar $old -> $version"
+          echo "Bumped defendable-science $old -> $version"
       - name: Open release PR
         id: cpr
         uses: peter-evans/create-pull-request@v7
@@ -54,16 +54,16 @@ jobs:
           token: ${{ secrets.RELEASE_PAT || github.token }}
           branch: release/v${{ steps.bump.outputs.version }}
           base: main
-          title: "release: honest-scholar v${{ steps.bump.outputs.version }}"
+          title: "release: defendable-science v${{ steps.bump.outputs.version }}"
           author: Davor Runje <davor@synthpop.ai>
           committer: Davor Runje <davor@synthpop.ai>
           commit-message: |
-            chore(release): honest-scholar v${{ steps.bump.outputs.version }}
+            chore(release): defendable-science v${{ steps.bump.outputs.version }}
 
             Bump the package version (release=${{ inputs.release }}, pre=${{ inputs.pre }}).
           labels: release
           body: |
-            Bumps the **honest-scholar package** to `v${{ steps.bump.outputs.version }}`
+            Bumps the **defendable-science package** to `v${{ steps.bump.outputs.version }}`
             (`--release ${{ inputs.release }} --pre ${{ inputs.pre }}`).
 
             The plugin (`.claude-plugin/plugin.json`) is versioned independently and is
@@ -84,7 +84,7 @@ jobs:
       - name: Job summary
         run: |
           {
-            echo "### 🔖 Bumped honest-scholar → \`${{ steps.bump.outputs.version }}\`"
+            echo "### 🔖 Bumped defendable-science → \`${{ steps.bump.outputs.version }}\`"
             echo ""
             echo "\`${{ steps.bump.outputs.old }}\` → \`${{ steps.bump.outputs.version }}\`  (release=\`${{ inputs.release }}\`, pre=\`${{ inputs.pre }}\`)"
             echo ""

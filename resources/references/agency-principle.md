@@ -1,7 +1,7 @@
 # Agency Principle — "Assistants, Not Researchers" (grounding digest)
 
 **Date:** 2026-07-17
-**For:** `honest-scholar` plugin (meta-spec §2.1) — the single most important guiding principle.
+**For:** `defendable-science` plugin (meta-spec §2.1) — the single most important guiding principle.
 **Status:** Verified-source digest. Migrates to the plugin's `resources/references/`.
 
 > This is a curated, primary-source digest. It exists so the agency principle is
@@ -10,7 +10,7 @@
 
 ## The principle
 
-> The `honest-scholar` skills are **assistants, not researchers.** They keep the
+> The `defendable-science` skills are **assistants, not researchers.** They keep the
 > accounts of a research program, advise as a mentor, and discuss as a colleague,
 > but they do **not** perform independent research and do **not** make material
 > scientific decisions. Every material decision — is a hypothesis confirmed /
@@ -115,7 +115,7 @@ skills useful on the permitted side while structurally refusing to cross it.
 Every policy cited permits AI *assistance* and forbids AI *authorship /
 decision-making*. The principle is that line, not a ban. One caveat: the
 "editing/polishing without disclosure" carve-out (Nature) sits close to the
-line — `honest-scholar` should **default to disclosure** to stay clearly on the safe
+line — `defendable-science` should **default to disclosure** to stay clearly on the safe
 side.
 
 ## Sources

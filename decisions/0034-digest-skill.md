@@ -9,7 +9,7 @@ via `cited-work`, whether a citation supports a specific sentence. There is no
 inbound counterpart: a skill for reading an external paper with *verified*
 comprehension — building and checking understanding of the whole paper, not
 just one cited sentence — before it's triaged, positioned, or cited.
-honest-scholar#68 filed this gap, motivated by `davorrunje/mononet`'s
+defendable-science#68 filed this gap, motivated by `davorrunje/mononet`'s
 `survey-monotonicity-ml` reading list (~21 method papers a `literature scout`
 run surfaced, which must be genuinely read and understood, not skimmed) and
 that consumer repo's existing hand-curated-digest convention.
@@ -81,4 +81,4 @@ tutoring context), not `defend`'s critical-examiner default. Output:
 escalation note); `skills/literature/SKILL.md` (Composition);
 `skills/progress/SKILL.md` (literature reading roll-up); ADR-0033 (the shared
 evidentiary record mechanism); ADR-0015 (`defend`'s original design);
-honest-scholar#68.
+defendable-science#68.
