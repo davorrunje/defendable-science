@@ -628,6 +628,106 @@ def test_cli_record_points_item_not_an_object_exits_1_cleanly(tmp_path: Path) ->
     assert "defend record failed" in result.stderr
 
 
+def test_point_record_from_mapping_accepts_a_well_typed_object() -> None:
+    point = r.point_record_from_mapping(
+        {
+            "point": "assumptions",
+            "source_quote": "quote",
+            "reader_answer": "answer",
+            "resolved": False,
+            "location": "§3",
+            "gap_note": "missed the i.i.d. assumption",
+        }
+    )
+    assert point == r.PointRecord(
+        point="assumptions",
+        source_quote="quote",
+        reader_answer="answer",
+        resolved=False,
+        location="§3",
+        gap_note="missed the i.i.d. assumption",
+    )
+
+
+@pytest.mark.parametrize("resolved", ["false", "true", 0, 1, None])
+def test_point_record_from_mapping_rejects_non_bool_resolved(resolved: object) -> None:
+    """A truthy/falsy non-bool must not be coerced — it would flip a gap silently."""
+    with pytest.raises(r.RecordError, match="'resolved' must be a boolean"):
+        r.point_record_from_mapping(
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "answer",
+                "resolved": resolved,
+            }
+        )
+
+
+def test_point_record_from_mapping_rejects_non_string_field() -> None:
+    with pytest.raises(r.RecordError, match="'source_quote' must be a string"):
+        r.point_record_from_mapping(
+            {
+                "point": "assumptions",
+                "source_quote": 3,
+                "reader_answer": "answer",
+                "resolved": True,
+            }
+        )
+
+
+def test_point_record_from_mapping_rejects_non_string_optional_field() -> None:
+    with pytest.raises(r.RecordError, match="'location' must be a string or null"):
+        r.point_record_from_mapping(
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "answer",
+                "resolved": True,
+                "location": ["§3"],
+            }
+        )
+
+
+def test_point_record_from_mapping_rejects_bad_shape() -> None:
+    with pytest.raises(r.RecordError, match="point record is malformed"):
+        r.point_record_from_mapping({"point": "x", "unexpected_key": "y"})
+
+
+def test_cli_record_points_non_bool_resolved_exits_1_cleanly(tmp_path: Path) -> None:
+    """An unresolved gap smuggled in as ``"false"`` fails loudly, not silently."""
+    artifact = _artifact(tmp_path)
+    points = _points_file(
+        tmp_path,
+        [
+            {
+                "point": "assumptions",
+                "source_quote": "quote",
+                "reader_answer": "answer",
+                "resolved": "false",
+            }
+        ],
+    )
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "methodology",
+            "--points",
+            str(points),
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "'resolved' must be a boolean" in result.stderr
+    # The artifact is untouched — no half-written understanding block.
+    assert artifact.read_text(encoding="utf-8") == _ARTIFACT
+
+
 def test_cli_record_points_bad_shape_exits_1_cleanly(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     points = _points_file(tmp_path, [{"point": "x", "unexpected_key": "y"}])

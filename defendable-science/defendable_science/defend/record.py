@@ -19,6 +19,10 @@ import re
 from dataclasses import asdict, dataclass, field
 from datetime import date as date_cls
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 TARGETS = frozenset({"claim", "cited-work", "methodology", "paper-comprehension"})
 DEFAULT_LOG_DIR = Path("docs/research/defend-log")
@@ -60,6 +64,43 @@ class PointRecord:
     resolved: bool
     location: str | None = None
     gap_note: str | None = None
+
+
+#: Each `PointRecord` field's admissible decoded-JSON types, with the phrasing
+#: used to report a mismatch.
+_POINT_FIELD_TYPES: dict[str, tuple[tuple[type, ...], str]] = {
+    "point": ((str,), "a string"),
+    "source_quote": ((str,), "a string"),
+    "reader_answer": ((str,), "a string"),
+    "resolved": ((bool,), "a boolean"),
+    "location": ((str, type(None)), "a string or null"),
+    "gap_note": ((str, type(None)), "a string or null"),
+}
+
+
+def point_record_from_mapping(item: Mapping[str, Any]) -> PointRecord:
+    """Build a `PointRecord` from a decoded JSON object, enforcing field types.
+
+    Type-checks the fields present before constructing the record. ``resolved``
+    is the load-bearing one: Python truthiness would read a ``"false"`` string
+    or a ``0``/``1`` as a bool and silently misclassify an unresolved point as
+    resolved, dropping its gap from the artifact's ``unresolved`` list.
+
+    :param item: One decoded JSON object, keyed by `PointRecord` field name.
+    :returns: The validated record.
+    :raises RecordError: If a field's value has the wrong type, or a required
+        field is missing / an unknown key is present.
+    """
+    for name, (admissible, expected) in _POINT_FIELD_TYPES.items():
+        if name in item and not isinstance(item[name], admissible):
+            raise RecordError(
+                f"point record field {name!r} must be {expected}, "
+                f"got {type(item[name]).__name__}"
+            )
+    try:
+        return PointRecord(**item)
+    except TypeError as exc:
+        raise RecordError(f"point record is malformed: {exc}") from exc
 
 
 def _unresolved_gaps(points: list[PointRecord]) -> list[str]:

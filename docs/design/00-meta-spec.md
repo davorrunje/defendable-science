@@ -431,7 +431,7 @@ the experiment-backend implementation. After `init`/`adopt`, a consumer repo
 │   │   └── milestones.yml                 # configurable program gates (candidacy, submission, defense)
 │   ├── dashboard.md                      # GENERATED projection of status frontmatter (never hand-edited)
 │   └── literature/
-│       ├── references.bib                # or CSL-JSON — bibliographic facts
+│       ├── references.json               # CSL-JSON bibliographic facts — source of truth (ADR-0020); .bib is exported on demand
 │       └── triage.yml                    # decision sidecar (keyed by citekey/DOI)
 ├── datasets.yml                          # dataset registry (entries + checksums + tiers)
 ├── .defendable-science/
@@ -452,7 +452,7 @@ One skill, two modes — both drive a repo to the layout of §5; `adopt` is `ini
 plus an inventory-and-map phase.
 
 - **`init` (greenfield)** — scaffold the `docs/research/` layout, the registries
-  (`papers.md`, `datasets.yml`, `references.bib` + `triage.yml`), `.defendable-science/`
+  (`papers.md`, `datasets.yml`, `references.json` + `triage.yml`), `.defendable-science/`
   config (rclone remote name, literature anchors, cache directory,
   experiment-backend + engineering-backend bindings),
   and the staged-doc templates. Delegates per-item registration to the
@@ -461,7 +461,7 @@ plus an inventory-and-map phase.
   materialize with the user confirming judgment calls (licenses, tiers,
   which result maps to which hypothesis). For `mononet` specifically:
   - `docs/references/` PDFs + digests + the CLAUDE.md paper table + the eight
-    methodology digests → literature `references.bib` + `triage.yml`, with
+    methodology digests → literature `references.json` + `triage.yml`, with
     roles pre-tagged (Runje 2023 = anchor; Sartor 2025, DLN, Sill = rival /
     prior-art).
   - benchmark data + download scripts under `benchmarks/` → `datasets.yml`
