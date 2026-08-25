@@ -44,7 +44,7 @@ jobs:
       - name: Build sdist + wheel
         working-directory: defendable-science
         run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: defendable-science/dist/
