@@ -93,3 +93,11 @@ Option 1.
 - **Option 5 (`uv lock --upgrade` workflow)** — hand-rolls what Dependabot's
   `uv` support already does and gives up per-dependency changelogs,
   compatibility scores, and security-update PRs.
+
+## Links
+
+`.github/dependabot.yml` (the grouping, scope, and cooldown policy this ADR
+records); `.github/workflows/pre-commit-autoupdate.yml` (the scheduled hook-rev
+autoupdate); `docs/superpowers/specs/2026-08-25-dependabot-design.md` (the
+design this ADR records); PR #78 (the manual dependency bump that motivated
+automating this).
