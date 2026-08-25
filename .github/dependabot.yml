@@ -1,0 +1,54 @@
+version: 2
+
+# Automated dependency updates (ADR-0036). Scope, grouping and cadence rationale:
+# docs/superpowers/specs/2026-08-25-dependabot-design.md
+updates:
+  # ── Python — the package's dev/lint toolchain ────────────────────────────
+  - package-ecosystem: "uv"
+    directory: "/defendable-science"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Etc/UTC"
+    # [project.dependencies] are deliberately wide floors so consumers can
+    # co-install; only the dev/lint groups' == pins may move.
+    allow:
+      - dependency-type: "development"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies"]
+    groups:
+      # Order matters — a dependency joins the FIRST group it matches.
+      # ruff is 0.x and mypy majors move fast, so their *minor* bumps are the
+      # breaking ones; they get a PR of their own.
+      python-linters:
+        applies-to: version-updates
+        patterns: ["ruff", "mypy"]
+        update-types: ["minor", "patch"]
+      python-tooling:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── GitHub Actions ──────────────────────────────────────────────────────
+  # No cooldown: unsupported for this ecosystem.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    labels: ["dependencies"]
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

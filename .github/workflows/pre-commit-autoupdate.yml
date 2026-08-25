@@ -1,0 +1,103 @@
+name: pre-commit autoupdate
+
+# Bumps the `rev:` pins of the REMOTE hooks in .pre-commit-config.yaml and opens
+# a PR. Dependabot has no `pre-commit` ecosystem, so this is the counterpart to
+# .github/dependabot.yml (ADR-0036). The three local hooks (lint, typecheck,
+# plugin-validate) are tools/*.sh and have no revs.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1" # Mondays 08:00 UTC — an hour after Dependabot's batch
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  autoupdate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.1
+      - name: Sync the lint group (for the pinned pre-commit)
+        run: uv sync --project defendable-science --group lint
+      - name: pre-commit autoupdate
+        id: update
+        run: |
+          uv run --project defendable-science pre-commit autoupdate \
+            2>&1 | tee /tmp/autoupdate.log
+          if git diff --quiet -- .pre-commit-config.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "### \`pre-commit autoupdate\`"
+            echo ""
+            echo '```'
+            cat /tmp/autoupdate.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run the updated hooks
+        id: hooks
+        if: steps.update.outputs.changed == 'true'
+        continue-on-error: true # a hard failure must still produce a reviewable PR
+        run: |
+          uv run --project defendable-science pre-commit run --all-files \
+            2>&1 | tee /tmp/hooks.log
+      - name: Summarize the hook outcome
+        id: outcome
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          if [ "${{ steps.hooks.outcome }}" = "success" ]; then
+            echo "note=All hooks pass with the updated revs." >> "$GITHUB_OUTPUT"
+          else
+            echo "note=:warning: **\`pre-commit run --all-files\` FAILED** with the updated revs. Autofixes (if any) are included here; the remaining failures need a human." >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "tail<<HOOKTAIL"
+            tail -n 40 /tmp/hooks.log
+            echo "HOOKTAIL"
+          } >> "$GITHUB_OUTPUT"
+      - name: Open PR
+        id: cpr
+        if: steps.update.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          # A RELEASE_PAT (if set) lets the commit trigger CI on the PR;
+          # otherwise the default token is used and CI won't auto-run (see body).
+          token: ${{ secrets.RELEASE_PAT || github.token }}
+          branch: build/pre-commit-autoupdate
+          base: main
+          title: "build(deps): pre-commit hook autoupdate"
+          author: Davor Runje <davor@synthpop.ai>
+          committer: Davor Runje <davor@synthpop.ai>
+          labels: dependencies
+          commit-message: |
+            build(deps): pre-commit hook autoupdate
+
+            Bump the remote hooks' `rev:` pins, plus any fixes the updated hooks
+            applied to tracked files.
+          body: |
+            `pre-commit autoupdate` bumped the remote hook `rev:` pins in
+            `.pre-commit-config.yaml`. Dependabot has no `pre-commit` ecosystem,
+            so this workflow is its counterpart (ADR-0036).
+
+            **Hook run:** ${{ steps.outcome.outputs.note }}
+
+            <details><summary><code>pre-commit run --all-files</code> — last 40 lines</summary>
+
+            ```
+            ${{ steps.outcome.outputs.tail }}
+            ```
+
+            </details>
+
+            > If no CI checks appear on this PR, it was created with `GITHUB_TOKEN`
+            > (which can't trigger workflows). Add a `RELEASE_PAT` repo secret, or
+            > re-run CI / admin-merge.
+      - name: Report no-op
+        if: steps.update.outputs.changed != 'true'
+        run: |
+          echo "### No hook rev changes — no PR opened." >> "$GITHUB_STEP_SUMMARY"
