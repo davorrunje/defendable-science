@@ -588,13 +588,14 @@ only the repo and the issue text. It must contain:
 
 - **Context:** `codespell` and `detect-secrets` are each pinned twice — a `rev:`
   in `.pre-commit-config.yaml` and a `==` pin in the `lint` dependency group of
-  `defendable-science/pyproject.toml`. They are already drifted (hook `v2.4.2`
-  vs. pin `2.4.3`). After ADR-0036 two independent automations bump them
-  (Dependabot for the pin, `pre-commit-autoupdate.yml` for the rev), so the
-  drift now recurs on a schedule.
+  `defendable-science/pyproject.toml`. The hook rev had already drifted once
+  from the `lint` pin before PR #78 reconciled the two locations. After
+  ADR-0036 two independent automations bump them (Dependabot for the pin,
+  `pre-commit-autoupdate.yml` for the rev), so the drift recurs on a schedule
+  whenever the two automations bump on different weeks.
 - **Goal:** one source of truth per tool version.
 - **Where (exact locations):** `.pre-commit-config.yaml` — the `codespell-project/codespell`
-  repo block (`rev: v2.4.2`) and the `Yelp/detect-secrets` block (`rev: v1.5.0`);
+  repo block (`rev: v2.4.3`) and the `Yelp/detect-secrets` block (`rev: v1.5.0`);
   `defendable-science/pyproject.toml` — the `lint` group's `codespell==` and
   `detect-secrets==` pins.
 - **Proposed approach:** convert both to `repo: local` hooks driven by the `lint`
@@ -725,8 +726,10 @@ gh run list --workflow="pre-commit autoupdate" --limit 1
 gh pr list --head build/pre-commit-autoupdate
 ```
 
-Expected: a PR bumping the `codespell` rev off `v2.4.2` (and any other stale
-revs), labeled `dependencies`, with the hook outcome quoted in its body.
+Expected: a PR if any of the four remote hook revs is stale, labeled
+`dependencies`, with the hook outcome quoted in its body; or, if all four are
+already current, no PR — satisfied by the run's job summary explicitly
+reporting no rev changes, not by silence.
 
 - [ ] **Step 5: Prove quiet weeks are quiet**
 

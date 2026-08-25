@@ -128,7 +128,7 @@ are branch refs and will never be updated — their absence from PRs is expected
 ## `.github/workflows/pre-commit-autoupdate.yml`
 
 Covers the four remote hook repos — `pre-commit/pre-commit-hooks` (v6.0.0),
-`asottile/pyupgrade` (v3.21.2), `codespell-project/codespell` (v2.4.2),
+`asottile/pyupgrade` (v3.21.2), `codespell-project/codespell` (v2.4.3),
 `Yelp/detect-secrets` (v1.5.0). The three local hooks (`lint`, `typecheck`,
 `plugin-validate`) are `tools/*.sh` and have no revs.
 
@@ -195,7 +195,10 @@ jobs:
 
 `codespell` and `detect-secrets` are each pinned twice — a hook `rev:` and a
 `lint` group `==` — and after this change two independent automations bump them.
-They are already drifted (hook `v2.4.2` vs. pin `2.4.3`).
+The two locations currently agree (`codespell` at `2.4.3`, `detect-secrets` at
+`1.5.0` in both places): they had drifted before PR #78 reconciled them. The
+duplication itself is unchanged, and with two independent weekly automations
+now bumping each tool, drift recurs whenever they bump on different weeks.
 
 Not fixed here: the durable fix is to delete the duplication (convert both to
 local hooks driven by the `lint` pins, as `lint`/`typecheck`/`plugin-validate`
@@ -220,8 +223,10 @@ Config correctness is observed on a forced first run — the Dependabot tab's
 - [ ] PRs carry the `dependencies` label and a `build(deps)`/`ci(deps)` subject,
       and CI runs on them.
 - [ ] No PRs for the two `@release/v1` branch refs.
-- [ ] Autoupdate dispatched once opens a PR bumping the `codespell` rev off
-      `v2.4.2`; dispatched again after that merges, it opens **no** PR.
+- [ ] Autoupdate dispatched once opens a PR if any of the four remote hook
+      revs is stale, and legitimately opens none if all four are already
+      current; in the latter case the criterion is met by the run's job
+      summary explicitly reporting no rev changes, not by silence.
 - [ ] A follow-up issue exists for the twice-pinned tools.
 
 ## Unknowns and fallbacks
