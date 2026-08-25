@@ -47,7 +47,7 @@ jobs:
           echo "Bumped defendable-science $old -> $version"
       - name: Open release PR
         id: cpr
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           # A RELEASE_PAT (if set) lets the bump commit trigger CI on the PR;
           # otherwise the default token is used and CI won't auto-run (see body).
