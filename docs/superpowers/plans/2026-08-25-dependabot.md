@@ -1,5 +1,11 @@
 # Automated Dependency Updates Implementation Plan
 
+> **Superseded note (2026-08-25):** Task 2's `.github/workflows/pre-commit-autoupdate.yml`
+> was replaced by Dependabot's `pre-commit` ecosystem entry in
+> `.github/dependabot.yml` — see ADR-0036 as amended. This plan is left
+> unchanged below as the historical execution record of the merged PR; do not
+> follow its Task 2 or Task 6 steps for future work on hook-rev automation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Automate the dependency maintenance done by hand in PR #78 — weekly Dependabot PRs for the package's dev/lint toolchain and for GitHub Actions, plus a scheduled workflow for the `pre-commit` hook revs Dependabot cannot reach.
