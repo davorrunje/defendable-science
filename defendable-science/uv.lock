@@ -342,6 +342,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
@@ -367,6 +368,7 @@ provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mypy", specifier = "==2.3.1" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
 ]

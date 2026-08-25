@@ -48,7 +48,8 @@ mcp = []
 dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
-    # "mypy==2.3.1", # already in lint group, but also needed for dev group to run `mypy` CLI
+    # Also in `lint`; kept here so `--only-group dev` can still run the `mypy` CLI.
+    "mypy==2.3.1",
 ]
 lint = [
     "pre-commit==4.6.2",
