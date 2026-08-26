@@ -446,6 +446,51 @@ More doc change than code change, and two items are corrections rather than addi
   package version lands. **Do not** touch `.claude-plugin/plugin.json`'s version from the
   package's automation.
 - **`CHANGELOG.md`**.
+- **`docs/guides/literature.md`** — a new, task-oriented user guide for the whole `literature`
+  capability, required as part of this work rather than after it. See §11.1.
+
+### 11.1 The `literature` user guide (a required deliverable)
+
+Today the capability's only user-facing documentation is `docs/USER-GUIDE.md` §4c, about
+twenty-five lines. With this spec's four verbs, the registry spine, the ladder, quarantine, and
+the license three-way added, that is far too little for someone to pick the capability up — so
+the guide ships **with** the code, not later.
+
+**Route and nav.** `docs/guides/literature.md`, registered in `tools/build_docs_site.py`'s
+`plan()` under a new `"Guides"` navigation group placed immediately after `"Get started"`. The
+group is introduced now with one page and is where the deferred user-guide refactor will put the
+rest.
+
+**Running example: a survey paper.** A survey is the right vehicle because it exercises every
+part of the capability at once and at scale — a large screened set, a concept matrix, per-paper
+acquisition, and a license mix — where a methods paper touches only a few references. The example
+is the monotonicity survey from the consumer run that produced #97 (73 works resolved, 40
+proposed for inclusion), because its numbers, its license split (14 of 50 with an explicit
+license), and its failure cases are real and checkable rather than invented.
+
+**Content requirements.**
+
+1. The registry layout — `references.json` and `triage.yml`, what belongs in each, and why the
+   spine lives under `custom` (§8.1).
+2. The survey walkthrough end to end: seed anchors → snowball → triage/PRISMA log → `fetch --all
+   --disposition screened` → work the four report buckets → read → matrix.
+3. What to do with each `fetch --all` bucket: `cached`/`fetched` (nothing), `quarantined`
+   (review, then `confirm --sha256`), `manual` (download by hand, then `confirm --file`),
+   `committable` (copy in-repo yourself if you want to), `errors` (a tooling failure, not a
+   paper problem — retry).
+4. The license three-way in practice, stated plainly: an absent license means
+   **not redistributable**, and most papers have no license field.
+5. Why a refusal is a feature — the Sill-1997-vs-Igel-2023 case as a worked example of the gate
+   doing its job, so a reader who hits a refusal does not go looking for a flag to disable it.
+
+**Must not repeat the §4c defect.** `docs/USER-GUIDE.md` §4c currently prints
+`literature scout --level hypothesis` and `literature position --level hypothesis` in bare code
+blocks that read as shell, but neither is a CLI command — both are *skill modes*. (The following
+block has the same problem with `dataset register` / `dataset init`; the real verbs are
+`validate|ingest|emit|fetch|verify|mirror|audit`.) A reader who copies those into a terminal gets
+"no such command". The new guide must keep **what you say to the agent** and **what runs in a
+shell** visually distinct on every example, and label every shell block with the real
+`defendable-science …` invocation. Correcting §4c itself is a separate follow-up (§13).
 
 ## 12. Implementation shape
 
@@ -459,10 +504,12 @@ independently reviewable, independently landable pieces, in this order:
 2. **Registry layer** (§8) — `literature/registry.py` plus the streaming bytes-fetcher in
    `core/http.py`. Shippable and testable with no CLI surface; this is the piece Gap 2 depends on.
 3. **Acquisition + CLI** (§4–§7, §9) — `literature/acquire.py`, the four verbs, and the doc/ADR
-   changes of §11.
+   changes of §11 **including the user guide of §11.1**.
 
 Piece 1 must not change `dataset` behaviour; that is the review criterion for it. Pieces 2 and 3
-carry the new tests of §10.
+carry the new tests of §10. Piece 3 is not done until §11.1's guide is written — a reviewer should
+treat a missing guide as a missing deliverable, not a follow-up, because the capability is already
+past the point where a reader can infer its use from `--help`.
 
 ## 13. Follow-up issues to file
 
@@ -474,6 +521,15 @@ Self-contained and cold-readable, per the house standard (`create-issue` skill):
    establishes (`registry.patch_asset`, the triage write restriction of §8.2).
 4. **Gap 3 — survey-shaped paper templates**, noting its dependency on #96 for template
    plumbing.
+5. **`docs/USER-GUIDE.md` §4c prints skill modes as shell commands** — a pre-existing defect,
+   independent of #97: `literature scout` / `literature position` and `dataset register` /
+   `dataset init` are not CLI commands, so a reader who copies them gets "no such command". Fix
+   the four blocks and audit the guide for the same pattern elsewhere. Exact locations are
+   `docs/USER-GUIDE.md:202-203` and the `dataset` block immediately following.
+6. **User-guide refactor** — restructure `docs/USER-GUIDE.md` around the `"Guides"` nav group
+   §11.1 introduces, moving per-capability material out of the single monolithic page. Explicitly
+   deferred by the author; §11.1's guide is the first page of the target structure and should be
+   treated as the pattern to follow.
 
 ## 14. Open questions
 
