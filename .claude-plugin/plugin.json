@@ -1,6 +1,6 @@
 {
   "name": "defendable-science",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "The scientist's research-workflow plugin for Claude Code — from hypothesis to thesis. Assistants, not researchers: you drive, and you must be able to defend it.",
   "author": {
     "name": "Davor Runje"
