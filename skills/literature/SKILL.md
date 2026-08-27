@@ -175,9 +175,10 @@ gate below, rather than verifying against one already recorded.
 
 `literature fetch <citekey>` walks a ladder: identity-derived rungs read the
 anchor's own OpenAlex record (`best_oa_location`, every `locations[].pdf_url`,
-then any `locations[].landing_page_url` that actually serves PDF bytes); if
-none yield bytes, search-derived rungs try (a sibling-version title search, an
-arXiv query, and an empty-by-default, config-driven `venue_resolvers` list).
+then its `locations[].landing_page_url`s — `.pdf`-suffixed ones first, then a
+capped few without a suffix, since a publisher can serve a PDF from an
+extension-less path and only the bytes settle it); if none yield bytes,
+search-derived rungs try (a sibling-version title search and an arXiv query).
 Every search-derived candidate passes a **match gate** — title, first-author
 family name, and year, compared against the registry entry — that returns
 `accept`, `quarantine`, or `refuse`. **First-author family name is a hard
@@ -186,6 +187,13 @@ mismatch.** This is what lets the gate accept a genuine preprint/journal
 sibling pair one year apart while refusing a same-topic, different-author
 paper a loose title search would otherwise bind to the wrong citekey. See
 ADR-0037 for the full rationale.
+
+The last rung is the empty-by-default, config-driven `venue_resolvers` list.
+It is **trusted, not gated**: the candidate URL comes from your own template
+and there is nothing in OpenAlex to check it against, so the report records
+`verdict: "trusted"` with no axes — the `%PDF-` check is the only constraint,
+and configuring a resolver means vouching for it. Read `trusted` as "you told
+us this was right," never as "we verified it" (ADR-0038).
 
 A `quarantine` verdict lands bytes + the candidate record on disk without
 touching `references.json`; nothing is ever auto-promoted. Review it, then

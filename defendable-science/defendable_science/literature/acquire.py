@@ -111,13 +111,21 @@ RUNG_MANUAL = "manual"
 
 #: Rungs whose candidates come from a *search* and therefore must pass the gate.
 #: Rungs 1-3 are identity-derived — their URLs come from the OpenAlex work the
-#: citekey already resolves to, so there is nothing to verify.
-GATED_RUNGS = frozenset({RUNG_SIBLING, RUNG_ARXIV_SEARCH, RUNG_VENUE})
+#: citekey already resolves to, so there is nothing to verify. Rung 6 is
+#: *trusted*, not gated: its candidate URL is built from a consumer's own
+#: template, and nothing OpenAlex holds says what that URL serves, so there is
+#: no match to make (ADR-0038 and :data:`TRUSTED`).
+GATED_RUNGS = frozenset({RUNG_SIBLING, RUNG_ARXIV_SEARCH})
 
 # --- verdicts ---------------------------------------------------------------
 
 #: An ungated rung: identity was established by resolution, not by matching.
 IDENTITY = "identity"
+#: A consumer-configured rung: admitted on the operator's word. Distinct from
+#: :data:`ACCEPT`, which means a gate compared the candidate against the entry
+#: and it passed — reporting that here would be a verification never performed
+#: (ADR-0038).
+TRUSTED = "trusted"
 #: Gated and passed — bind the bytes.
 ACCEPT = "accept"
 #: Gated and plausible — land in quarantine, await a human ``confirm``.
@@ -179,8 +187,8 @@ class Candidate:
 class MatchRecord:
     """The gate's verdict, per axis, so a refusal is explainable.
 
-    :param verdict: :data:`IDENTITY` | :data:`ACCEPT` | :data:`QUARANTINE` |
-        :data:`REFUSE`.
+    :param verdict: :data:`IDENTITY` | :data:`TRUSTED` | :data:`ACCEPT` |
+        :data:`QUARANTINE` | :data:`REFUSE`.
     :param title: ``exact`` | ``containment`` | ``mismatch``, or ``None`` when the
         axis was not evaluated.
     :param author: ``exact`` | ``mismatch``, or ``None``.
@@ -588,24 +596,51 @@ def _location_pdf_urls(work: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]
     return _location_urls(work, "pdf_url", lambda url: bool(url.strip()))
 
 
+#: How many *suffix-less* landing pages the ladder will fetch and sniff per work.
+#: A ``.pdf`` suffix is a strong hint but not a requirement — arXiv serves PDFs
+#: from ``/pdf/2409.11078`` with no suffix at all — so a bounded tail of the
+#: remaining landing pages is tried and judged by :func:`looks_like_pdf`. The cap
+#: keeps a work with a long ``locations[]`` array from becoming N round-trips.
+LANDING_SNIFF_LIMIT = 3
+
+
+def _is_pdf_shaped(url: str) -> bool:
+    """Return whether `url` looks like a direct PDF link by suffix."""
+    return url.strip().lower().endswith(".pdf")
+
+
 def _landing_locations(work: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Return PDF-shaped landing URLs with the location records they came from.
+    """Return landing URLs worth trying, with the location records they came from.
+
+    ``.pdf``-shaped URLs come first and are unbounded — they are the cheap, likely
+    wins. Then up to :data:`LANDING_SNIFF_LIMIT` suffix-less landing pages, so a
+    publisher that serves a PDF from an extension-less path is still reachable
+    without fetching every HTML abstract page in the record.
 
     :param work: The OpenAlex work.
-    :returns: ``(url, location)`` pairs, in record order.
+    :returns: ``(url, location)`` pairs, PDF-shaped first, then the sniff tail.
     """
-    return _location_urls(
-        work, "landing_page_url", lambda url: url.strip().lower().endswith(".pdf")
+    shaped = _location_urls(work, "landing_page_url", _is_pdf_shaped)
+    rest = _location_urls(
+        work,
+        "landing_page_url",
+        lambda url: bool(url.strip()) and not _is_pdf_shaped(url),
     )
+    return shaped + rest[:LANDING_SNIFF_LIMIT]
 
 
 def landing_urls(work: dict[str, Any]) -> list[str]:
-    """Return landing-page URLs that are shaped like a direct PDF link.
+    """Return landing-page URLs the ladder will try as direct PDF links.
 
     OpenAlex marks a work ``closed`` when it has no ``pdf_url``, yet the landing
     page can *be* the PDF — Sill 1997's NeurIPS proceedings link is exactly this.
-    Only ``.pdf``-suffixed links are offered, so the ladder does not download
-    every HTML abstract page in the record.
+    A ``.pdf`` suffix is the strong signal and those are offered first, but it is
+    not required: up to :data:`LANDING_SNIFF_LIMIT` suffix-less landing pages
+    follow, judged on their bytes by :func:`looks_like_pdf` rather than dropped
+    unseen. Failing to offer them cost recall, not correctness — a missed PDF
+    lands in :data:`BUCKET_MANUAL` for a human to click — but the bound is what
+    keeps recovering it from turning the ladder into a crawl of every abstract
+    page in the record.
 
     :param work: The OpenAlex work.
     :returns: Candidate landing URLs, in record order.
@@ -767,13 +802,16 @@ def venue_candidates(
     ``{doi}`` and ``{year}``.
 
     .. warning::
-       **The gate provides no protection on this rung.** These candidates are
-       built from the *anchor work* — the one the citekey already resolves to —
-       so :func:`evaluate_match` compares the registry entry against itself and
-       cannot do anything but accept. What the URL actually serves is
-       unconstrained by anything OpenAlex said, and the only real check standing
-       between a consumer's template and a citekey is the ``%PDF-`` magic-byte
-       test. A consumer configuring a resolver is vouching for the template.
+       **This rung is trusted, not verified.** Its candidates are built from the
+       *anchor work* — the one the citekey already resolves to — so there is
+       nothing to match the URL against: what it serves is unconstrained by
+       anything OpenAlex said, and the only real check standing between a
+       consumer's template and a citekey is the ``%PDF-`` magic-byte test. A
+       consumer configuring a resolver is vouching for the template. The ladder
+       therefore records :data:`TRUSTED` rather than running the gate, so the
+       audit trail states that no verification was performed instead of
+       reporting a three-axis ``accept`` against the entry itself
+       (``decisions/0038-venue-resolvers-trusted-not-gated.md``).
 
     :param entry: The registry entry (supplies ``{doi}``).
     :param work: The anchor work (supplies the venue name, ``{openalex}``, ``{year}``).
@@ -1348,16 +1386,30 @@ def _note(tried: list[str], rung: str) -> None:
 def _gate(entry: Entry, candidate: Candidate, state: _Ladder) -> MatchRecord | None:
     """Adjudicate a candidate, or ``None`` to skip it.
 
-    Rungs 1-3 are identity-derived and carry no match to make. Every other rung
-    goes through :func:`evaluate_match` with no exceptions — that gate stands
-    where ``dataset`` has a pre-known hash, so a rung that bypassed it would be
-    binding unverified bytes to a citekey.
+    Rungs 1-3 are identity-derived and carry no match to make. Rungs 4-5 are
+    search-derived and go through :func:`evaluate_match` with no exceptions —
+    that gate stands where ``dataset`` has a pre-known hash, so a rung that
+    bypassed it would be binding unverified bytes to a citekey.
+
+    Rung 6 is reported :data:`TRUSTED`. Its URL comes from a consumer's own
+    template and its metadata from the anchor work, so running the gate would
+    compare the entry against itself and emit an ``accept`` with three exact
+    axes — a verification that never happened. Saying so is the point: an
+    integrity tool must not launder configuration into evidence (ADR-0038).
 
     :param entry: The registry entry.
     :param candidate: The candidate under consideration.
     :param state: The ladder state, which remembers the first refusal.
     :returns: The match record, or ``None`` when the candidate is refused.
     """
+    if candidate.rung == RUNG_VENUE:
+        return MatchRecord(
+            verdict=TRUSTED,
+            reason=(
+                "admitted on a consumer-configured venue resolver; not verified "
+                "against the URL's own record — the %PDF- check is the only gate"
+            ),
+        )
     if candidate.rung not in GATED_RUNGS:
         return MatchRecord(verdict=IDENTITY)
     record = evaluate_match(entry, candidate)
