@@ -276,12 +276,22 @@ def _openalex_id(client: HttpClient, identifier: str) -> str:
 def resolve(identifier: str) -> None:
     """Resolve an identifier (DOI, arXiv id, OpenAlex/S2 id) to a canonical work.
 
+    The exit code follows the result so a caller need not parse JSON to tell
+    the three outcomes apart: ``0`` on a resolution, ``1`` on a genuine miss
+    (no such paper), ``2`` on a transport failure (``transport_error: true``
+    in the JSON) — never reported as a clean "no result".
+
     :param identifier: The identifier to resolve.
     """
     client = _lit_client()
     with _http_guard(client):
-        typer.echo(json.dumps(graph_mod.resolve(identifier, client=client), indent=2))
-        raise typer.Exit(code=0)
+        record = graph_mod.resolve(identifier, client=client)
+        typer.echo(json.dumps(record, indent=2))
+        if record.get("resolved"):
+            raise typer.Exit(code=0)
+        if record.get("transport_error"):
+            raise typer.Exit(code=2)
+        raise typer.Exit(code=1)
 
 
 @literature.command()

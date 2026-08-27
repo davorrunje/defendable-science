@@ -185,8 +185,11 @@ def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
     :param identifier: DOI / arXiv id / OpenAlex ``W…`` / S2 id.
     :param client: The HTTP client.
     :returns: ``{resolved, openalex, doi, s2, arxiv, title, year}``; on a genuine
-        miss (``404`` / empty body / no cross-reference), ``{resolved: False,
-        reason: …}``.
+        miss (``404`` / empty body / no cross-reference / unsupported identifier
+        kind), ``{resolved: False, reason: …}``. On a transport failure (any
+        other ``HttpError`` — a ``502``, an exhausted retry budget, a non-JSON
+        body), the same shape additionally carries ``transport_error: True`` —
+        a consumer must not treat that as "no such paper".
     :raises RateLimitError: If a provider rate-limits — a throttle must propagate,
         never be recorded as a "not found".
     """
@@ -209,7 +212,9 @@ def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
     except RateLimitError:
         raise
     except HttpError as exc:
-        return {"resolved": False, "reason": str(exc)}
+        if exc.status_code == 404:
+            return {"resolved": False, "reason": str(exc)}
+        return {"resolved": False, "reason": str(exc), "transport_error": True}
     if not isinstance(work, dict) or not work.get("id"):
         return {"resolved": False, "reason": "no work found"}
     ids = work.get("ids", {})
