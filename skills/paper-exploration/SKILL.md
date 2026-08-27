@@ -57,6 +57,11 @@ explicit human pick — the exploration/resolution firewall
 > — ensure via [`ensure-tooling`](../../resources/ensure-tooling.md),
 > operating on `portfolio-backlog.md` at the paper level. `add` realizes the
 > `generate` verb's row-append; `list` is a read-only inspection command. The
+> `promote --scaffold --level paper --research-root <docs/research> --backend
+> <name>` scaffolds the paper root and writes the `papers.md` registry row in the
+> same call, reporting the created paths as JSON; `--backend` is required there
+> because the plugin bundles no default. Scaffolding runs before the backlog is
+> written, so a refused scaffold leaves the row `ranked` and retryable. The
 > table's host document is preserved — a heading and prose around the table
 > survive every verb, and columns your repo adds beyond the standard order are
 > kept (left empty on new rows). By hand (if the CLI isn't available): edit the
@@ -126,8 +131,9 @@ paper roots and their experiment-backend binding.
   `../../docs/design/04-substrate-and-contract.md` §3.1). Pipeline skills resolve
   the backend from this binding and contain no backend-specific logic, so
   `backend:` is set here at registration time.
-- **When it is written.** `promote` adds the registry row and scaffolds the paper
-  root (`hypotheses/`, `backlog.md`, `paper/`). The row is spliced into the
+- **When it is written.** `promote --scaffold` adds the registry row and
+  scaffolds the paper root (`hypotheses/`, `backlog.md`, `paper/`); plain
+  `promote` only flips the backlog row's status. The row is spliced into the
   registry table wherever that table sits, so `papers.md` can carry prose around
   it, and columns you add beyond `paper-id | root | backend` are preserved and
   left empty for you to fill. A candidate in

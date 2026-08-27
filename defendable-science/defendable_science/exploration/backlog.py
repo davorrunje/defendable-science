@@ -485,7 +485,7 @@ class Backlog:
 # --- promote scaffolding ----------------------------------------------------
 
 
-def _today() -> str:
+def today_iso() -> str:
     """Return today's date as an ISO string (indirection eases testing)."""
     return date_cls.today().isoformat()
 
@@ -557,7 +557,10 @@ def scaffold_hypothesis(
     folder.mkdir(parents=True, exist_ok=True)
     target.write_text(
         _HYPOTHESIS_TEMPLATE.format(
-            slug=slug, one_line=one_line, provenance=provenance, today=today or _today()
+            slug=slug,
+            one_line=one_line,
+            provenance=provenance,
+            today=today or today_iso(),
         ),
         encoding="utf-8",
     )

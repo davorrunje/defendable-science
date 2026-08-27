@@ -69,7 +69,12 @@ carries provenance so any candidate can be traced to where it came from:
 > (`defendable_science/exploration/backlog.py`) — ensure via
 > [`ensure-tooling`](../../resources/ensure-tooling.md); shared with
 > `paper-exploration`. `add` realizes the `generate` verb's row-append; `list` is a
-> read-only inspection command. The table's host document is preserved — prose
+> read-only inspection command. `promote --scaffold --paper-root <paper>`
+> creates the hypothesis folder and `hypothesis.md` in the same call and reports
+> the created path as JSON (`--slug` overrides the default
+> `<YYYY-MM-DD>-<row-id>` folder name; `--date` backdates it). Scaffolding runs
+> before the backlog is written, so a refused scaffold leaves the row `ranked`
+> and retryable. The table's host document is preserved — prose
 > around the table survives every verb, and columns your repo adds beyond the
 > order above are kept (left empty on new rows). By hand (if the CLI isn't
 > available): edit the `backlog.md` table directly, keeping the column order

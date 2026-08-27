@@ -34,6 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`backlog promote --scaffold` performs the handoff both exploration skills
+  already documented.** The scaffolders existed and were tested, but no CLI
+  command reached them — `backlog --help` listed only
+  `park|add|list|rank|promote|drop`, and `promote`'s own docstring deferred
+  scaffolding to "a follow-up step" that nothing implemented. Since skills reach
+  the package only through the CLI, `promote` was a status flip and the entire
+  handoff (paper root, `paper/pitch.md`, the per-paper `backlog.md`, the
+  `papers.md` registry row, the hypothesis folder and `hypothesis.md`) had to be
+  done by hand. `promote` now takes `--scaffold` plus the level's options
+  (`--paper-root`, or `--research-root` + `--backend`; `--slug`/`--date` for the
+  hypothesis folder name) and reports the created paths as
+  `{"row": …, "artifacts": …}`. Scaffolding runs *before* the backlog is written,
+  so a refused scaffold leaves the row `ranked` and retryable rather than
+  `promoted` with nothing on disk. The flag is opt-in: plain `promote` still
+  flips the status and emits the bare row, so `--backend` does not become
+  mandatory on every paper-level promote (ADR-0013). (#113)
 - **Substrate spine promoted to `custom.defendable-science`.** The PDF
   provenance record (`pid`, `files[]`, `license`, `mirror`, `acquisition`)
   lives under CSL-JSON's own `custom` namespace, not as top-level item
