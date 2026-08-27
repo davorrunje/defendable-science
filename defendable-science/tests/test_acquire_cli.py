@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import typer
@@ -24,6 +23,9 @@ from defendable_science.core.download import DownloadError
 from defendable_science.core.mirror import Mirror
 from defendable_science.literature import acquire as a
 from defendable_science.scaffold.layout import Layout
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 runner = CliRunner()
 
@@ -846,8 +848,9 @@ def test_lit_context_reads_configured_paths_and_acquisition(
 
     ctx = cli._lit_context()
 
-    assert ctx.registry_path == Path("mylit/refs.json")
-    assert ctx.triage_path == Path("mylit/triage.yml")
+    # Configured relative paths are anchored to the repo root, never the cwd.
+    assert ctx.registry_path == tmp_path / "mylit/refs.json"
+    assert ctx.triage_path == tmp_path / "mylit/triage.yml"
     assert ctx.max_bytes == 1234
     assert ctx.resolvers == resolvers
 
@@ -974,3 +977,30 @@ def test_fetch_all_byte_layer_throttle_exits_1_and_buckets_nothing_manual(
     assert report["manual"] == []
     assert "HTTP 429" in report["errors"][0]["error"]
     assert "Traceback" not in (result.stdout + result.stderr)
+
+
+# --- 12: config paths are repo-anchored, not cwd-anchored (#122) --------------
+
+
+def test_verify_from_a_subdirectory_finds_the_configured_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repo-relative ``literature.registry`` resolves against the repo root.
+
+    ``config.yml`` is now read from the repo root, so its relative values must
+    be anchored there too. Resolved against the cwd instead, this looks under
+    ``docs/research/dc/docs/research/literature/`` and exits 1 — the same repo
+    working from the top but not from inside a paper.
+    """
+    sha = _seed_blob(tmp_path)
+    registry = tmp_path / "docs" / "research" / "literature" / "references.json"
+    _write_registry(registry, [_item("k1", spine=_spine(sha))])
+    _write_config(tmp_path, {"registry": "docs/research/literature/references.json"})
+    paper = tmp_path / "docs" / "research" / "dc"
+    paper.mkdir(parents=True)
+    monkeypatch.chdir(paper)
+
+    result = runner.invoke(app, ["literature", "verify", "k1"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["ok"] is True

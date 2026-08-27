@@ -129,7 +129,7 @@ def test_fetch_verify_audit_use_configured_cache_dir(
     # `audit` internally re-runs `verify`, so more than 3 calls may land here —
     # what matters is that every one of them got the *configured* root, never
     # the old hardcoded ``.defendable-science/cache/datasets`` literal.
-    expected = Path(".custom-cache/datasets")
+    expected = tmp_path / ".custom-cache/datasets"
     assert len(seen) >= 3
     assert all(path == expected for path in seen)
 
@@ -289,3 +289,51 @@ datasets:
     result = runner.invoke(app, ["dataset", "mirror", "ds-c"])
     assert result.exit_code == 1
     assert "mirror failed" in result.stderr
+
+
+def test_verify_from_a_subdirectory_uses_the_repo_root_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The content-addressed cache is anchored to the repo root, not the cwd.
+
+    ``research-init`` gitignores exactly one cache directory, at the repo root.
+    Resolving ``cache_dir`` against the cwd instead makes a command run from
+    inside a paper read (and, on ``fetch``, write) a *different*, un-gitignored
+    directory — a silent wrong-location write (#122).
+    """
+    payload = b"tier-b bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    (tmp_path / ".defendable-science").mkdir()
+    manifest = tmp_path / "datasets.yml"
+    manifest.write_text(
+        f"""
+datasets:
+  - id: ds-b
+    version: "1.0.0"
+    tier: B
+    license: CC-BY-4.0
+    redistributable: true
+    access: open
+    files:
+      - path: data/f.bin
+        sha256: {digest}
+    retrieval:
+      kind: http
+      url: https://example.org/f.bin
+    datasheet: datasheets/ds-b.md
+""",
+        encoding="utf-8",
+    )
+    blob = tmp_path / ".defendable-science" / "cache" / "datasets" / "sha256" / digest
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(payload)
+    paper = tmp_path / "docs" / "research" / "dc"
+    paper.mkdir(parents=True)
+    monkeypatch.chdir(paper)
+
+    result = runner.invoke(
+        app, ["dataset", "verify", "ds-b", "--manifest", str(manifest)]
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["ok"] is True

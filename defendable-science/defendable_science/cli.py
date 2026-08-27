@@ -169,6 +169,25 @@ def _layout_or_exit() -> tuple[dict[str, Any], Layout]:
         raise typer.Exit(code=1) from exc
 
 
+def _repo_relative(value: str | Path) -> Path:
+    """Anchor a configured path to the repository root.
+
+    A path written in ``config.yml`` describes a location in the *repository*,
+    not one relative to wherever the author happens to be standing. Resolving it
+    against the cwd would make ``defendable-science`` read and write different
+    files depending on the directory it was invoked from — silently, and in the
+    cache's case into a directory ``research-init`` never gitignored. An
+    absolute value is honoured as given.
+
+    :param value: The configured path.
+    :returns: The absolute path it names.
+    """
+    from defendable_science.core.config import find_repo_root
+
+    path = Path(value)
+    return path if path.is_absolute() else find_repo_root() / path
+
+
 def _cache_root(config: dict[str, Any] | None = None) -> Path:
     """Resolve the cache root from ``config.yml``'s ``cache_dir:`` key.
 
@@ -177,24 +196,26 @@ def _cache_root(config: dict[str, Any] | None = None) -> Path:
     this path (see the SKILL.md scaffold). Sourcing it from config instead of
     hardcoding it in two places is what keeps the scaffolded ``.gitignore``
     and the runtime cache location from drifting apart (defendable-science#65).
+    A relative value is anchored to the repo root (see :func:`_repo_relative`),
+    so the cache does not move when a command is run from a subdirectory.
 
     :param config: A pre-loaded config mapping; loaded fresh when omitted.
-    :returns: The configured cache root, or :data:`_DEFAULT_CACHE_ROOT` when
-        ``cache_dir`` is unset.
+    :returns: The absolute cache root — the configured ``cache_dir``, or
+        :data:`_DEFAULT_CACHE_ROOT` when it is unset.
     :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string.
     """
     if config is None:
         config = _load_config_or_exit()
     cache_dir = config.get("cache_dir")
     if cache_dir is None:
-        return _DEFAULT_CACHE_ROOT
+        return _repo_relative(_DEFAULT_CACHE_ROOT)
     if not isinstance(cache_dir, str):
         typer.echo(
             "invalid .defendable-science/config.yml: 'cache_dir' must be a string",
             err=True,
         )
         raise typer.Exit(code=1)
-    return Path(cache_dir)
+    return _repo_relative(cache_dir)
 
 
 # --- literature (defendable-science#1) ------------------------------------------------
@@ -462,16 +483,19 @@ def _lit_registry_paths(
 
     An explicit key wins; otherwise the paths come from the resolved layout, so
     a repo that moved its ``research_root`` does not also have to restate where
-    its bibliography lives.
+    its bibliography lives. Either way the result is absolute: a configured
+    relative path is anchored to the repo root, never to the cwd, so
+    ``literature verify`` finds the same registry from a paper directory as
+    from the top (see :func:`_repo_relative`).
 
     :param lit: The parsed ``literature:`` config block, or ``None``.
     :param layout: The resolved layout, which supplies the defaults.
-    :returns: ``(registry_path, triage_path)``.
+    :returns: ``(registry_path, triage_path)``, both absolute.
     :raises typer.Exit: Code 1 if either key is present but not a string.
     """
     registry = _lit_str(lit, "registry", str(layout.references))
     triage = _lit_str(lit, "triage", str(layout.triage))
-    return Path(registry), Path(triage)
+    return _repo_relative(registry), _repo_relative(triage)
 
 
 def _lit_cache_dir(config: dict[str, Any]) -> Path:
@@ -1494,19 +1518,24 @@ def _check_scaffold_opts(level: str, backend: str) -> None:
         raise typer.Exit(code=2)
 
 
-def _scaffold_research_root(research: str | None) -> tuple[Path, Layout | None]:
-    """Resolve ``--research-root``, falling back to the layout.
+def _scaffold_layout(research: str | None) -> Layout:
+    """Resolve the layout a paper scaffold writes into.
+
+    An explicit ``--research-root`` overrides ``research_root`` and *only* that
+    field: the repo root the registry row is rendered against still comes from
+    the resolved layout. Deriving it from the directory instead (its
+    grandparent) was correct only for the default ``docs/research`` and
+    silently wrong for anything else — a paper under ``/repo/writing`` was
+    registered as ``repo/writing/dc``.
 
     :param research: The explicit ``--research-root``, which always wins.
-    :returns: The research directory, and the layout it came from — ``None``
-        when the directory was named explicitly, so the registry row stays
-        relative to *that* tree rather than to the configured repo root.
+    :returns: The layout to scaffold under.
     :raises typer.Exit: Code 1 on an invalid ``layout:`` block.
     """
-    if research:
-        return Path(research), None
     _config, layout = _layout_or_exit()
-    return layout.research_root, layout
+    if research:
+        return dataclasses.replace(layout, research_root=Path(research).resolve())
+    return layout
 
 
 def _scaffold_paper_root(paper_root: str | None) -> Path:
@@ -1560,21 +1589,20 @@ def _scaffold_promoted(
             today=today,
         )
         return {"hypothesis": str(target)}
-    research_dir, layout = _scaffold_research_root(research)
+    layout = _scaffold_layout(research)
     root = backlog_mod.scaffold_paper(
-        research_dir,
+        layout,
         row["id"],
         row["one-line"],
         backend=backend,
         provenance=row["provenance"],
         today=today,
-        layout=layout,
     )
     return {
         "paper_root": str(root),
-        "pitch": str(root / "paper" / "pitch.md"),
-        "backlog": str(root / "backlog.md"),
-        "registry": str(research_dir / "papers.md"),
+        "pitch": str(layout.paper_docs_dir(row["id"]) / "pitch.md"),
+        "backlog": str(layout.backlog(row["id"])),
+        "registry": str(layout.papers_registry),
     }
 
 
