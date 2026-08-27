@@ -6,13 +6,39 @@
 
 # User Guide
 
-A hands-on guide for a researcher meeting `defendable-science` for the first time. It walks
-you from install to a signed finding to a submitted paper, using one running
-example throughout. It is practical: every step is a command you type and a file
-you fill in.
+A hands-on guide for a researcher meeting `defendable-science` for the first time.
+It walks you from install to a signed finding to a submitted paper, using one
+running example throughout, and hands off to a **per-capability guide** whenever
+you need the depth.
 
-For the *why* behind the design, read [`README.md`](../README.md) and the specs
-under [`docs/design/`](design/); this guide is the *how*.
+Read this page front to back once. After that, the guides are where the work
+happens:
+
+| Guide | When you need it |
+|---|---|
+| [Literature](guides/literature.md) | mining the citation graph, the registry, getting PDFs with byte-level provenance |
+| [Datasets](guides/dataset.md) | registering data, tiers and licenses, the resolution chain, the mirror |
+| [Experiment backend](guides/experiment-backend.md) | the one part you implement; how a run becomes citable evidence |
+| [`defend`](guides/defend.md) | the examination before every sign-off; targets, personas, what gets recorded |
+| [`progress`](guides/progress.md) | coverage and blockers, the dashboard, and why there is no score |
+| [API keys](guides/keys.md) | what each key buys and where credentials are kept |
+
+**Two kinds of instruction appear throughout, and mixing them up is the fastest
+way to get stuck.** A shell block is a real command you type:
+
+```bash
+defendable-science dataset fetch imagenet-c
+```
+
+A quote block is something you *ask the assistant*, in prose — a skill mode, not a
+command:
+
+> **Ask the assistant.** Scout the citation graph for research leads at hypothesis
+> level (`literature` in `scout` mode).
+
+Most of `defendable-science` is the second kind. For the *why* behind the design,
+read [`README.md`](../README.md) and the specs under [`docs/design/`](design/);
+this guide is the *how*.
 
 ## 1. What Defendable Science is (and the two rules it runs on)
 
@@ -142,11 +168,21 @@ hypothesis from raw idea to a signed verdict, then roll it into a paper.
 idea pipeline into the paper's `backlog.md`. Its verbs form a small state machine:
 `park → generate → rank → promote | drop`.
 
-```
-hypothesis-exploration park "learned aug policy may help OOD but hurt in-distribution"
-hypothesis-exploration generate      # from literature scout, EDA, or the generation moves
-hypothesis-exploration rank          # score by EIG, feasibility × interest; flag framing
-hypothesis-exploration promote <id>  # scaffold a hypothesis folder, hand to testing
+> **Ask the assistant.** Park this idea in the backlog: "learned aug policy may
+> help OOD but hurt in-distribution". Then generate candidates from the literature
+> scout and the EDA, rank them by EIG and feasibility × interest, and flag any
+> framing problems. I will pick what to promote.
+
+The row-level mechanics are a real CLI the skill shells out to, so you can also
+drive the table yourself:
+
+```bash
+defendable-science backlog park "learned aug policy may help OOD but hurt in-distribution" \
+    --provenance "own" --backlog docs/research/<paper>/backlog.md
+defendable-science backlog rank <id> --EIG high --feas med --interest high \
+    --backlog docs/research/<paper>/backlog.md
+defendable-science backlog promote <id> --scaffold --paper-root docs/research/<paper> \
+    --backlog docs/research/<paper>/backlog.md
 ```
 
 Every backlog row carries **mandatory provenance** (where the idea came from —
@@ -204,13 +240,17 @@ claim is false is successful science.
   > against prior work at hypothesis level (`position` mode) — feeds
   > `strategy.md`. There is no `defendable-science literature scout` or
   > `literature position` command; these are skill modes you ask the
-  > assistant for (see [`docs/guides/literature.md`](guides/literature.md)).
+  > assistant for.
 
-- [`dataset`](../skills/dataset/SKILL.md) manages the data your strategy declares:
-  verbs `init / register / fetch / verify / mirror / audit` over `datasets.yml`.
-  Each dataset gets a storage **tier** (A committed / B auto-retrievable / C
-  gated), a **SHA-256 fingerprint** (authoritative; a mismatch is a hard fail),
-  and a Gebru **datasheet**. You confirm tier and license — the skill proposes.
+  **Full guide: [Literature](guides/literature.md)** — a survey end to end, the
+  six buckets of a fetch report, licenses in practice, and why a refusal is a
+  feature.
+
+- [`dataset`](../skills/dataset/SKILL.md) manages the data your strategy declares,
+  over `datasets.yml`. Each dataset gets a storage **tier** (A committed / B
+  auto-retrievable / C gated), a **SHA-256 fingerprint** (authoritative; a
+  mismatch is a hard fail), and a Gebru **datasheet**. You confirm tier and
+  license — the skill proposes.
 
   > **Ask the assistant.** Register `imagenet-c` in the dataset manifest —
   > propose a tier and license for me to confirm. `register` is a `dataset`
@@ -219,6 +259,10 @@ claim is false is successful science.
   ```bash
   defendable-science dataset fetch imagenet-c    # materialize + verify against the registry
   ```
+
+  **Full guide: [Datasets](guides/dataset.md)** — tiers as a license question, the
+  four-step resolution chain, the mirror as link-rot insurance, and what `audit`
+  checks beyond fixity.
 
 ### 4d. How runs become evidence — the experiment-backend contract
 
@@ -238,6 +282,10 @@ reproducible and staleness is honest. You never hand-copy a number: `findings.md
 cites run-refs, and `tables` writes the figures. `is-current` reports staleness;
 **you** decide whether to re-run.
 
+**Full guide: [Experiment backend](guides/experiment-backend.md)** — what a
+minimal implementation looks like, how to bind one, and why the plugin ships
+none.
+
 ## 5. Papers: from candidate to publish decision
 
 The paper level mirrors the hypothesis level one step up.
@@ -249,9 +297,15 @@ The paper level mirrors the hypothesis level one step up.
   `promote` registers the paper in `papers.md` (assigning its `paper-id` and
   experiment-backend binding) and hands it to synthesis.
 
-  ```
-  paper-exploration generate
-  paper-exploration promote aug-policy-robustness
+  > **Ask the assistant.** Generate candidate papers from the resolved
+  > hypotheses (`paper-exploration` in `generate` mode) across all three lenses,
+  > and rank them. I will pick.
+
+  ```bash
+  # The registry/scaffold half is a real CLI:
+  defendable-science backlog promote aug-policy-robustness \
+      --backlog docs/research/portfolio-backlog.md --level paper --scaffold \
+      --research-root docs/research --backend bench
   ```
 
 - [`paper-synthesis`](../skills/paper-synthesis/SKILL.md) develops the committed
@@ -300,80 +354,62 @@ coherent through-line. Never a paper count.
 
 ## 7. Cross-cutting: progress and defend
 
-- [`progress`](../skills/progress/SKILL.md) is **read-only reporting**. `status
-  <level> [id]` rolls up state; `dashboard` regenerates `docs/research/dashboard.md`
-  as a pure projection of each artifact's status frontmatter (never hand-edit it).
+Both are skill modes — there is no `defendable-science progress` command group,
+and the examination half of `defend` is a conversation, not a command.
 
-  ```
-  progress status hypothesis            # where do all hypotheses stand?
-  progress dashboard                    # regenerate the dashboard
-  ```
-
-  Roll-up is **semantic, not arithmetic**: it surfaces coverage and blockers, never
-  a percentage. A single refuted *load-bearing* hypothesis blocks its paper — an
+- [`progress`](../skills/progress/SKILL.md) is **read-only reporting**. Roll-up is
+  **semantic, not arithmetic**: it surfaces coverage and blockers, never a
+  percentage. A single refuted *load-bearing* hypothesis blocks its paper — an
   average would hide that. **A refuted hypothesis reads as done/green.** There are
-  no scores, ever — that is a hard design invariant, not a missing feature.
+  no scores, ever — a hard design invariant, not a missing feature.
+
+  > **Ask the assistant.** Where do all our hypotheses stand (`progress` in
+  > `status hypothesis` mode)? Then regenerate the dashboard.
+
+  **Full guide: [`progress`](guides/progress.md)** — the four roll-ups, the two
+  readings that catch people out, and the Goodhart argument in full.
 
 - [`defend`](../skills/defend/SKILL.md) is the Socratic tutor-examiner. It is
-  **self-invoked** on demand (examine me on this claim / cited work / method) and
-  fires **automatically as a guardrail** before every material sign-off. It probes,
-  teaches on a gap, and re-probes; it targets `claim | cited-work | methodology`.
-  It offers author-selectable **mentor personas** — *sounding board*, *critical
-  examiner* (default), *directive editor*, opt-in *devil's advocate* — chosen by
-  you or suggested by the stage, **never inferred from your personality**. It
-  teaches established knowledge freely but never supplies the answer key to your
-  novel claim.
+  **self-invoked** on demand and fires **automatically as a guardrail** before
+  every material sign-off. It probes, teaches on a gap, and re-probes; it targets
+  `claim | cited-work | methodology`. It offers author-selectable **mentor
+  personas** — *sounding board*, *critical examiner* (default), *directive
+  editor*, opt-in *devil's advocate* — chosen by you or suggested by the stage,
+  **never inferred from your personality**. It teaches established knowledge
+  freely but never supplies the answer key to your novel claim.
 
-  ```
-  defend claim <hypothesis-id>          # rehearse before you sign
-  ```
+  > **Ask the assistant.** Examine me on the claim in `findings.md` before I sign
+  > it — critical examiner, and push on the rival explanations.
+
+  **Full guide: [`defend`](guides/defend.md)** — the three targets and what is
+  off-limits in each, the persona levers, and the evidentiary record
+  `defend record` writes.
 
 ## 8. API keys & credentials
 
-Some services the tooling reaches key-gate their *useful* rate limits. Providing
-a key is optional — everything degrades gracefully without one — but it removes
+Some services the tooling reaches key-gate their *useful* rate limits. Providing a
+key is **optional** — everything degrades gracefully without one — but it removes
 the throttling that otherwise stalls citation-graph work.
 
-| Key | Service | What it buys | How to obtain |
-|---|---|---|---|
-| `S2_API_KEY` | Semantic Scholar | Raises the rate limit far above the shared keyless pool (which throttles hard). | <https://www.semanticscholar.org/product/api#api-key> |
-| `OPENALEX_MAILTO` | OpenAlex | Joins the "polite pool" (a contact email) for faster, more reliable responses. | <https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication> |
-| `RCLONE_CONFIG_<REMOTE>_*` | Private dataset mirror | rclone remote credentials, handed to rclone as scoped env vars (no config file needed). | Per your rclone remote (see `rclone config`). |
+| Key | Service | What it buys |
+|---|---|---|
+| `S2_API_KEY` | Semantic Scholar | raises the rate limit far above the shared keyless pool |
+| `OPENALEX_MAILTO` | OpenAlex | joins the "polite pool" — just a contact email |
+| `RCLONE_CONFIG_<REMOTE>_*` | private mirror | rclone credentials as scoped env vars |
 
-Defendable Science keeps keys in a **CLI-managed JSON store** — never a `.env` — at
-an XDG config path **outside any repo's work tree**:
-`$XDG_CONFIG_HOME/defendable-science/keys.json`, falling back to
-`~/.config/defendable-science/keys.json` (ADR-0032). A stored key can therefore
-never be committed by accident. Keys are read with **`os.environ` > store >
-unset** precedence, so an environment variable always wins (CI / secrets
-injection is unaffected) and an unset key just degrades the service. Manage
-the store with the `keys` command group:
+Keys live in a **CLI-managed JSON store — never a `.env`** — at an XDG config path
+**outside any repo's work tree**, so a stored key cannot be committed by accident
+(ADR-0032). The value is never taken from the command line, only from a hidden
+prompt or stdin.
 
-```
-defendable-science keys set S2_API_KEY        # prompts hidden, or reads piped stdin
-echo "$MY_KEY" | defendable-science keys set S2_API_KEY
-defendable-science keys set < keys.json       # a JSON object sets many at once
-defendable-science keys list                  # metadata + presence + source (never values)
-defendable-science keys check                 # compact presence/source report
-defendable-science keys unset S2_API_KEY
-defendable-science keys path                  # print the resolved store path
+```bash
+defendable-science keys set S2_API_KEY     # hidden prompt, or reads piped stdin
+defendable-science keys check              # presence + source, never values
 ```
 
-The value is **never** taken from the command line — only from stdin or a hidden
-prompt — so a secret never lands in your shell history or the process list.
-`keys list`/`check` and `doctor` report only **presence and source**, never a
-value.
-
-Set `DEFENDABLE_SCIENCE_KEYS_PATH` to opt into a different location, e.g. the
-legacy in-repo `.defendable-science/keys.json` — `research-init` still gitignores
-that path for anyone who does — but the store then warns (never silently) if
-the resolved path sits in a git work tree and is not confirmed gitignored.
-
-> **Honesty caveat — plaintext at rest.** The store is **not encrypted**.
-> Living outside the repo (or being gitignored + `0600` file permissions when
-> opted in) limits exposure, but anyone who can read the file reads the keys.
-> Treat it as convenience storage, not a secret vault. OS-keychain backing
-> behind the same `keys` interface is a planned follow-up (issue #49).
+**Full guide: [API keys](guides/keys.md)** — what each key buys, the
+`os.environ > store > unset` precedence, opting into a different location, and the
+plaintext-at-rest caveat.
 
 ## 9. Everyday tips
 
