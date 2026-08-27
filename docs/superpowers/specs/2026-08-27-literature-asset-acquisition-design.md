@@ -187,9 +187,28 @@ Three axes, candidate-vs-registry-entry:
 - **first-author family name** — casefolded, diacritics folded.
 - **year** — integer.
 
-"Title containment match" means that, after normalization, either string contains the other as a
-substring — the symmetric relation, since a candidate may be either broader or narrower than the
-registry title.
+"Title containment match" means that, after normalization and tokenization into words, the
+shorter title is a **word-prefix** of the longer one — the symmetric relation, since a candidate
+may be either broader or narrower than the registry title.
+
+*Amended 2026-08-27, during implementation.* This clause originally read "either string contains
+the other as a substring", which was wrong twice over. It contradicted this section's own Sill/Igel
+example below — `"monotonic networks"` **is** a trailing substring of
+`"smooth min max monotonic networks"`, so that example could not simultaneously be "a containment
+match" and "refuse on all three axes". And substring matching is not word-aware at all: `"GAN"`
+would score a containment match against `"Improved Training of Wasserstein GANs"`, and `"Net"`
+against `"Monotonic Networks"`. With author and year agreeing, those become **quarantine** — a
+wrong PDF one human keystroke from a citekey, which is precisely the failure §1.3 exists to
+prevent. Word-prefix is the minimal word-aware relation that still admits the subtitle case
+(`"MonoKAN"` ↔ `"MonoKAN: Certified Monotonic Kolmogorov-Arnold Network"`, in both directions)
+while rejecting Igel.
+
+**The cost, stated:** a *front-extension* — where the candidate prepends words rather than
+appending them, e.g. `"Language Models are Few-Shot Learners"` vs
+`"GPT-3: Language Models are Few-Shot Learners"`, or an acronym added on journal publication —
+now refuses where it would arguably have been quarantined. That is friction, not loss: the entry
+lands in `fetch --all`'s `manual[]` worklist with its landing URLs, and `literature confirm
+--file` adopts a hand-downloaded PDF. Refusing over guessing is this gate's stated posture.
 
 | verdict | condition |
 |---|---|
@@ -205,11 +224,14 @@ accepted or quarantined across an author mismatch.** Checked against both real c
   `W4403706439`, 2024. Same first author; "Certified Monotonic Kolmogorov-Arnold Network" and
   "Certified monotonic Kolmogorov-Arnold network" normalize to the same string; Δyear = 1 →
   **accept**. Recovered automatically.
-- **Sill 1997 vs Igel 2023** — Igel ≠ Sill (hard gate); "Smooth Min-Max Monotonic Networks" is a
-  containment match, not an equality; Δyear = 26 → **refuse** on all three axes independently.
+- **Sill 1997 vs Igel 2023** — Igel ≠ Sill (hard gate); `"monotonic networks"` is not a
+  word-prefix of `"smooth min max monotonic networks"` (it is a trailing substring, which the
+  amended rule above deliberately excludes), so the title axis reads `mismatch`; Δyear = 26 →
+  **refuse** on all three axes independently.
 
-**Honest degradation on thin metadata.** If the registry entry lacks an author or a year, the
-gate cannot be evaluated, so search-derived rungs are **refused** with
+**Honest degradation on thin metadata.** If either side lacks a title, an author, or a year — or
+carries one that normalizes to the empty string, such as a title of pure punctuation — the gate
+cannot be evaluated, so search-derived rungs are **refused** with
 `reason: insufficient registry metadata to verify a search-derived candidate` — never accepted
 on a title match alone. Identity-derived rungs 1–3 still work, needing no gate.
 
