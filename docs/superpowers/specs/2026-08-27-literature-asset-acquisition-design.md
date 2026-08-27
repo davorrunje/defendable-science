@@ -167,7 +167,7 @@ caught by the same check as one whose pre-filter is tight.
 **strictly equal** normalized title. That made it stricter than the gate it feeds, which is the
 wrong way round: a genuine sibling whose journal version added a subtitle would be discarded
 before §5.2 ever saw it, even though §5.2's `containment → quarantine` rule exists precisely to
-route that case to a human. A pre-filter must never pre-empt the adjudicator. It now uses the
+route that case to a human. A pre-filter must never preempt the adjudicator. It now uses the
 same relation as §5.2's title axis — normalized-equal **or** word-prefix containment — so rung 4
 proposes and the gate disposes. Nothing unsafe is admitted by the widening, because every
 candidate still passes the gate, and the author hard gate still fires first.
@@ -267,7 +267,7 @@ removes `dataset`'s Tier-A/Tier-B path dichotomy from the literature side entire
 `license` records what was *observed*, not an assertion of rights: `{id, observed, source}` — an
 SPDX id when a rung reported one, the raw string, and which rung said so. `redistributable`
 defaults to `false` and is `true` only for an SPDX id on a shipped permissive allowlist
-(`cc-by`, `cc-by-sa`, `cc0`, and the other clearly-permissive SPDX ids). **Absent or unparseable
+(`cc-by`, `cc-by-sa`, `cc0`, and the other clearly-permissive SPDX ids). **Absent or unparsable
 license → `false`**, per #97's observation that 36 of 50 works in the real run carried no
 license field at all.
 
