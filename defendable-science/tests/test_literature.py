@@ -308,19 +308,33 @@ def test_cli_resolve_miss_exits_1_with_resolved_false(
     assert "transport_error" not in body
 
 
-def test_cli_resolve_transport_error_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_resolve_transport_error_exits_3(monkeypatch: pytest.MonkeyPatch) -> None:
     # A 502 exhausts the retry budget as a plain HttpError (not a rate limit,
-    # not a 404) — this must surface as a distinguishable failure, exit 2, not
-    # a clean "no such paper" (exit 1) nor a false success (exit 0).
+    # not a 404) — this must surface as a distinguishable failure, exit 3, not
+    # a clean "no such paper" (exit 1), a false success (exit 0), or a usage
+    # error (exit 2 — Click/Typer's code, reserved for bad flags/arguments).
     client = _client(
         {"https://api.openalex.org/works/W1": FakeResponse(502, {})}, max_retries=2
     )
     monkeypatch.setattr(cli, "_lit_client", lambda: client)
     result = runner.invoke(app, ["literature", "resolve", "W1"])
-    assert result.exit_code == 2
+    assert result.exit_code == 3
     body = json.loads(result.stdout)
     assert body["resolved"] is False
     assert body["transport_error"] is True
+
+
+def test_cli_resolve_usage_error_still_exits_2_not_3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The negative that matters here: a usage error (missing argument) must
+    # keep Click/Typer's exit code 2 and must never be, or emit, a
+    # transport_error — that collision is exactly what would let someone
+    # later "simplify" the two codes back together without noticing.
+    monkeypatch.setattr(cli, "_lit_client", lambda: _client({}))
+    result = runner.invoke(app, ["literature", "resolve"])  # missing IDENTIFIER
+    assert result.exit_code == 2
+    assert "transport_error" not in result.stdout
 
 
 def test_cli_refs_unresolved_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
