@@ -297,9 +297,18 @@ row is excluded when `--disposition` is given and included when it is not.
 
 - `--sha256` promotes a quarantined candidate after human review — moves the blob out of
   quarantine into the content-addressed store and patches the registry.
-- `--file` **adopts a manually downloaded PDF** — hashes it, moves it into the blob store,
+- `--file` **adopts a manually downloaded PDF** — hashes it, **copies** it into the blob store,
   patches the registry, recording `rung: manual`. This closes #97's "a manual-acquisition list
   the human works through."
+
+*Amended 2026-08-27, during implementation.* The bullet above originally said "moves", carried
+over from the `--sha256` bullet where a move is right (the bytes are already ours, parked in
+quarantine). For `--file` it is wrong: the path a human passes is *their* file, typically still
+in a downloads folder, and it must not disappear because they pointed a tool at it. Adoption
+copies. An adopted file also records an **empty licence**, hence non-redistributable — the tool
+observed nothing about rights on bytes it did not fetch, and an absent licence is not a grant
+(§6). `pid` and `access` are likewise left unset rather than guessed, since filling them would
+mean a network round-trip in an operation that is otherwise entirely offline.
 
 Every command emits JSON on stdout, per the package's convention. `fetch --all`'s report:
 
