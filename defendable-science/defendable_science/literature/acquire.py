@@ -27,6 +27,7 @@ from defendable_science.core.fixity import (
     sha256_file,
     verified,
 )
+from defendable_science.core.mirror import MirrorUnreachableError
 from defendable_science.literature.graph import OPENALEX, resolve
 from defendable_science.literature.registry import (
     Acquisition,
@@ -87,7 +88,13 @@ if TYPE_CHECKING:
         """
 
         def check(self, sha256: str) -> bool:
-            """Return whether the mirror holds the key."""
+            """Return whether the mirror holds the key.
+
+            A stand-in must keep `Mirror`'s contract: ``False`` only when the
+            mirror answered that the key is absent, and a raise (a
+            :class:`~defendable_science.core.mirror.MirrorUnreachableError`, say)
+            when it could not be asked.
+            """
 
         def put(self, local: str | Path, sha256: str) -> None:
             """Copy `local` to the content-addressed mirror key."""
@@ -1156,9 +1163,17 @@ def _resolve_recorded(entry: Entry, ctx: Context, asset: Asset, sha: str) -> Out
     reporting the same sentence for both is the failure-honesty rule's exact
     complaint in miniature.
 
-    :returns: :data:`BUCKET_CACHED` when the bytes are resolvable, otherwise
-        :data:`BUCKET_MANUAL` — the recorded bytes are gone, which is a fact
-        about this paper and belongs on the human worklist.
+    A mirror that could not be *reached* is a third case and the one this
+    function must be most careful with: it is a tooling failure, so it becomes
+    an :data:`BUCKET_ERROR` row. Filing it as ``manual`` would put a paper that
+    is very probably sitting in the mirror, behind an expired credential, on a
+    human's hand-download worklist — and, because ``manual`` is a worklist and
+    not a failure, would do so with ``complete: true`` and exit 0.
+
+    :returns: :data:`BUCKET_CACHED` when the bytes are resolvable,
+        :data:`BUCKET_ERROR` when a configured mirror could not be reached, and
+        otherwise :data:`BUCKET_MANUAL` — the recorded bytes are gone, which is
+        a fact about this paper and belongs on the human worklist.
     """
     blob = blob_path(ctx.cache_dir, sha)
     faults: list[str] = []
@@ -1169,7 +1184,22 @@ def _resolve_recorded(entry: Entry, ctx: Context, asset: Asset, sha: str) -> Out
         faults.append(
             "the cached blob did not match the recorded checksum and was discarded"
         )
-    if ctx.mirror is not None and ctx.mirror.get(sha, blob):
+    try:
+        from_mirror = ctx.mirror is not None and ctx.mirror.get(sha, blob)
+    except MirrorUnreachableError as exc:
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            sha256=sha,
+            reason=(
+                f"recorded checksum sha256:{sha} could not be resolved: "
+                + ("; ".join(faults) + "; " if faults else "")
+                + f"the mirror could not be reached to look for it: {exc}. This "
+                "is a tooling failure, not a missing paper — the mirror may "
+                "well hold these bytes."
+            ),
+        )
+    if from_mirror:
         if verified(blob, sha):
             return _cached_outcome(entry, asset, sha, path=blob)
         blob.unlink(missing_ok=True)
@@ -1762,9 +1792,11 @@ def acquire_one(
     :raises RateLimitError: If a provider throttles a metadata call, or a PDF
         host throttles a byte download.
     :raises HttpError: On a metadata transport failure.
-    :raises RetrievalError: If a configured mirror cannot be reached at all
-        (a missing ``rclone``), which is a configuration fault, not a fact about
-        this paper.
+    :raises RetrievalError: If ``rclone`` is missing altogether, which is a
+        configuration fault affecting every entry, not a fact about this paper.
+        A mirror that is present but *unreachable* (credentials, quota,
+        network) is per-entry and becomes an :data:`BUCKET_ERROR` outcome
+        instead, so a sweep reports it and continues.
     """
     recorded = _recorded(entry)
     if recorded is not None and not refetch:
@@ -2189,19 +2221,14 @@ def mirror_entry(
     Probes the mirror before deciding what to do with each file: a copy
     already there is reported as such rather than re-pushed, and
     `check_only` never calls :meth:`Mirror.put` regardless of what the probe
-    finds. A transport failure that `Mirror` *raises* — most commonly a
-    missing ``rclone`` binary — is not caught here: it propagates as the
-    actionable ``RetrievalError``, because a transport failure and "no copy in
-    the mirror" are different problems with different fixes.
-
-    .. warning::
-       That distinction is only as good as the probe underneath it, and today
-       it is **not** watertight. ``Mirror._run_ok`` reads a non-zero
-       ``rclone`` exit as "absent", so an auth, quota or network failure on
-       the probe is reported here as `missing` rather than raised. Treat a
-       `missing` entry as "not confirmed present", never as "the mirror has
-       been checked and does not have it". Tracked as a follow-up on the
-       promoted ``core/mirror.py`` module, which ``dataset`` shares.
+    finds. A transport failure that `Mirror` *raises* — a missing ``rclone``
+    binary, or a probe that failed for any reason other than the key being
+    absent (an expired credential, a quota, an outage) — is not caught here:
+    it propagates as the actionable ``RetrievalError`` /
+    :class:`~defendable_science.core.mirror.MirrorUnreachableError`, because a
+    transport failure and "no copy in the mirror" are different problems with
+    different fixes. A `missing` entry therefore means the mirror was asked
+    and answered.
 
     **A local blob is re-hashed before it is pushed.** Every other path that
     calls :meth:`Mirror.put` in this codebase does so immediately after
@@ -2232,9 +2259,8 @@ def mirror_entry(
         ``corrupt`` (a local blob whose bytes no longer match the recorded
         checksum — never pushed).
     :raises RetrievalError: If the mirror transport raises — a missing
-        ``rclone`` binary, or a push that fails — surfaced intact rather than
-        folded into `missing`. A *probe* that fails without raising is the
-        gap the warning above describes.
+        ``rclone`` binary, a push that fails, or a probe that could not reach
+        the mirror — surfaced intact rather than folded into `missing`.
     """
     report: dict[str, Any] = {
         "citekey": entry.citekey,

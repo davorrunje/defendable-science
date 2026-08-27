@@ -105,6 +105,13 @@ treated as absent and the chain continues:
 4  GATED / MANUAL   print acquisition instructions → wait for operator drop → verify → populate mirror → return
 ```
 
+Step 2 falls through only when the mirror **answered** that it does not hold the
+key (rclone exit `3`/`4`). A mirror that could not be reached at all — an expired
+credential, a quota, an outage — stops the chain with a
+`MirrorUnreachableError`: "we could not ask" is not "it is not there", and
+letting it fall through would let a transport failure be reported as a missing
+asset (the failure-honesty rule).
+
 Front-ends supply step-3 fetchers; the substrate owns steps 1, 2, 4 and all
 fixity checks. The mirror is populated on first successful acquisition, giving
 link-rot insurance (dataset Tier B) and a re-acquirable home for gated assets

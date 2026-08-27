@@ -40,8 +40,14 @@ def _entry(
 
 
 class FakeProc:
-    def __init__(self, returncode: int) -> None:
+    def __init__(self, returncode: int, stderr: bytes | None = None) -> None:
         self.returncode = returncode
+        self.stderr = stderr
+
+
+#: rclone's "file not found" — the only kind of non-zero exit that means the key
+#: is genuinely absent rather than unaskable (``core.mirror.ABSENT_EXIT_CODES``).
+ABSENT = 4
 
 
 class FakeRclone:
@@ -55,13 +61,24 @@ class FakeRclone:
         self.calls.append(args)
         verb = args[1] if args[1] != "--config" else args[3]
         if verb == "lsf":
-            return FakeProc(0 if self.present else 1)
+            return FakeProc(0 if self.present else ABSENT)
         if verb == "copyto":
             # A "get" (mirror -> local) only succeeds when present.
             src = args[-2]
             is_get = ":" in src
-            return FakeProc(0 if (not is_get or self.present) else 1)
+            return FakeProc(0 if (not is_get or self.present) else ABSENT)
         return FakeProc(0)
+
+
+class UnreachableRclone:
+    """A mirror we cannot ask: rclone exits 7 (fatal) on every call."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args: list[str], **_kw: object) -> FakeProc:
+        self.calls.append(args)
+        return FakeProc(7, b"NoCredentialProviders: no valid providers in chain")
 
 
 # --- sha256 / verify --------------------------------------------------------
@@ -279,3 +296,85 @@ def test_audit_with_mirror_present(tmp_path: Path) -> None:
         m.Manifest(datasets=[entry]), cache_dir=tmp_path / "c", mirror=mirror
     )
     assert report.mirror_present["d1"] is True
+
+
+# --- the negative: an unreachable mirror is not an absent one -----------------
+
+
+def test_audit_reports_an_unreachable_mirror_as_unknown_not_absent(
+    tmp_path: Path,
+) -> None:
+    """``None`` (unknown), never ``False`` — an audit must not invent a verdict."""
+    payload = b"p"
+    digest = hashlib.sha256(payload).hexdigest()
+    blob = tmp_path / "c" / "sha256" / digest
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(payload)
+    entry = _entry("B", digest, retrieval=m.Retrieval(kind="http", url="u"))
+    mirror = r.Mirror(remote="s", run=UnreachableRclone())
+
+    report = r.audit(
+        m.Manifest(datasets=[entry]), cache_dir=tmp_path / "c", mirror=mirror
+    )
+
+    assert report.mirror_present["d1"] is None
+    assert report.mirror_present["d1"] is not False
+
+
+def test_audit_still_reports_a_genuinely_absent_key_as_false(tmp_path: Path) -> None:
+    payload = b"p"
+    digest = hashlib.sha256(payload).hexdigest()
+    blob = tmp_path / "c" / "sha256" / digest
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(payload)
+    entry = _entry("B", digest, retrieval=m.Retrieval(kind="http", url="u"))
+    mirror = r.Mirror(remote="s", run=FakeRclone(present=False))
+
+    report = r.audit(
+        m.Manifest(datasets=[entry]), cache_dir=tmp_path / "c", mirror=mirror
+    )
+
+    assert report.mirror_present["d1"] is False
+
+
+def test_fetch_does_not_fall_through_to_tier_b_when_the_mirror_is_unreachable(
+    tmp_path: Path,
+) -> None:
+    """The chain stops: a mirror that never answered is not a mirror that said no."""
+    payload = b"downloaded bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+    entry = _entry("B", digest, retrieval=m.Retrieval(kind="http", url="https://x"))
+    fetched: list[str] = []
+
+    def _fetcher(url: str, sha256: str, dest: Path) -> Path:
+        fetched.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
+        return dest
+
+    with pytest.raises(r.MirrorUnreachableError, match="could not be reached"):
+        r.fetch(
+            entry,
+            cache_dir=tmp_path / "cache",
+            mirror=r.Mirror(remote="s", run=UnreachableRclone()),
+            tier_b_fetch=_fetcher,
+        )
+
+    assert fetched == []
+
+
+def test_gated_fetch_does_not_blame_the_human_for_an_unreachable_mirror(
+    tmp_path: Path,
+) -> None:
+    """Tier C: "acquire manually" must not stand in for a probe that never ran."""
+    entry = _entry("C", "d" * 64, access="gated", instructions="email the authors")
+
+    with pytest.raises(r.RetrievalError) as caught:
+        r.fetch(
+            entry,
+            cache_dir=tmp_path / "cache",
+            mirror=r.Mirror(remote="s", run=UnreachableRclone()),
+        )
+
+    assert "could not be reached" in str(caught.value)
+    assert "acquire manually" not in str(caught.value)

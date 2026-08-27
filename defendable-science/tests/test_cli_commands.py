@@ -230,6 +230,7 @@ def test_mirror_success_with_fake_rclone(
 
     class _Proc:
         returncode = 0
+        stderr = b""
 
     def _ok(args: list[str], **_kw: object) -> _Proc:
         return _Proc()
