@@ -23,13 +23,16 @@ if TYPE_CHECKING:
     from defendable_science.core.download import FetchedBytes
     from defendable_science.literature.registry import Entry
 
-    class HttpClient(Protocol):
+    class SearchClient(Protocol):
         """The subset of :class:`~defendable_science.core.http.HttpClient` rungs 4-6 need.
 
         A narrow structural type — like :class:`~defendable_science.core.http.Response`
         and :class:`~defendable_science.core.http.Session` in ``core.http`` — rather
         than a hard dependency on the concrete client, so a rung is exercised with any
-        stand-in that shapes up, without touching the network.
+        stand-in that shapes up, without touching the network. Named distinctly from
+        ``core.http.HttpClient`` rather than reusing that name: the two would otherwise
+        collide asymmetrically (that one imports at runtime, this one is
+        TYPE_CHECKING-only), and Task 14's ``cli.py`` will reference this type directly.
         """
 
         def get_json(
@@ -446,14 +449,14 @@ def identity_candidates(work: dict[str, Any]) -> list[Candidate]:
 
 # --- search-derived rungs (4-6) ---------------------------------------------
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_API = "https://export.arxiv.org/api/query"
 
 #: How many search hits each gated rung will consider.
 SEARCH_LIMIT = 10
 
 
 def sibling_candidates(
-    entry: Entry, work: dict[str, Any], *, client: HttpClient
+    entry: Entry, work: dict[str, Any], *, client: SearchClient
 ) -> list[Candidate]:
     """Rung 4 — find other OpenAlex works with a related title and mine their PDFs.
 
@@ -540,7 +543,7 @@ def parse_arxiv_feed(xml: str) -> list[Candidate]:
     return out
 
 
-def arxiv_candidates(entry: Entry, *, client: HttpClient) -> list[Candidate]:
+def arxiv_candidates(entry: Entry, *, client: SearchClient) -> list[Candidate]:
     """Rung 5 — search arXiv by title and first author.
 
     :param entry: The registry entry.
@@ -599,5 +602,12 @@ def venue_candidates(
             continue
         if not matched:
             continue
-        out.append(candidate_from_work(work, template.format(**fields), RUNG_VENUE))
+        try:
+            url = template.format(**fields)
+        except (KeyError, IndexError, ValueError):
+            # A malformed template (unknown field, bad format spec, positional
+            # placeholder, ...) is hand-edited consumer config gone wrong, not
+            # a crash: skip it like any other malformed resolver.
+            continue
+        out.append(candidate_from_work(work, url, RUNG_VENUE))
     return out

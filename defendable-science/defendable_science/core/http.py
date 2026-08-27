@@ -117,6 +117,10 @@ class HttpClient:
         disables the proactive throttle (reactive backoff still applies).
     :param openalex_rps: Proactive cap on OpenAlex requests/second — a polite
         pace under OpenAlex's documented 10 req/s ceiling. ``0`` disables it.
+    :param arxiv_rps: Proactive cap on arXiv requests/second, tracked under its
+        own host key so it never paces against (or is paced by) OpenAlex or S2
+        traffic. Default follows arXiv's documented courtesy guidance of no
+        more than one request every 3 seconds. ``0`` disables it.
     """
 
     cache_dir: Path | None = None
@@ -129,6 +133,7 @@ class HttpClient:
     max_retries: int = 4
     s2_rps: float = 0.9
     openalex_rps: float = 10.0
+    arxiv_rps: float = 1.0 / 3.0
     _last_request: dict[str, float] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -169,7 +174,9 @@ class HttpClient:
         """GET `url` and return decoded JSON, cache-backed with backoff.
 
         :param url: The request URL.
-        :param params: Query parameters (``mailto`` is added for non-S2 calls).
+        :param params: Query parameters (``mailto`` is added for non-S2 calls —
+            this is the *only* method that ever sends it; :meth:`get_text`
+            never does, since it exists for non-OpenAlex hosts like arXiv).
         :param headers: Extra headers (``x-api-key`` is added when `s2` + a key).
         :param s2: Whether this is a Semantic Scholar call (key/header handling).
         :returns: The decoded JSON document (served from cache when present).
@@ -201,44 +208,46 @@ class HttpClient:
     ) -> str:
         """GET `url` and return the raw response body, with backoff (uncached).
 
-        For endpoints that answer in a non-JSON body (e.g. arXiv's Atom feed).
-        Shares :meth:`get_json`'s throttle and retry path, so it is polite and
-        resilient in exactly the same way — it just skips the JSON decode and
-        the on-disk cache, since :class:`JsonValue` cannot hold a raw string.
+        For endpoints that answer in a non-JSON body — currently arXiv's Atom
+        feed. Shares :meth:`get_json`'s retry path, so it is resilient in
+        exactly the same way — it just skips the JSON decode and the on-disk
+        cache, since :class:`JsonValue` cannot hold a raw string. Throttled
+        under its own host key (see :meth:`_throttle`) rather than OpenAlex's,
+        and ``mailto`` is **never** added here: it was configured for
+        OpenAlex's polite pool, and sending a user's contact email to an
+        unrelated host on their behalf would be a privacy leak, not a nicety.
 
         :param url: The request URL.
-        :param params: Query parameters (``mailto`` is added when configured).
+        :param params: Query parameters.
         :param headers: Extra headers.
         :returns: The response body as text.
         :raises HttpError: On a non-retryable status or a non-rate-limit
             exhaustion.
         :raises RateLimitError: When retries are exhausted on a rate-limit signal.
         """
-        query = dict(params or {})
-        if self.mailto:
-            query.setdefault("mailto", self.mailto)
-        request_headers = dict(headers or {})
-        return self._fetch_text(url, query, request_headers)
+        return self._fetch_text(url, dict(params or {}), dict(headers or {}))
 
-    def _throttle(self, *, s2: bool) -> None:
+    def _throttle(self, *, key: str, rps: float) -> None:
         """Proactively pace requests to a host, before the reactive retry loop.
 
         Sleeps just enough that this send lands at least ``1 / rps`` after the
-        last send to the same host (Semantic Scholar vs. OpenAlex are tracked
-        independently, since each has its own ceiling). This is the *proactive*
-        half of rate-limit handling: it runs once per :meth:`get_json` call — on
-        the first attempt only — so a sweep of many calls self-throttles instead
-        of bursting and collecting ``429``s. Retries *within* one call still rely
-        on the existing reactive backoff/``Retry-After`` handling, unchanged.
+        last send to the same `key` (OpenAlex, Semantic Scholar and arXiv are
+        each tracked independently under their own key, since each has its own
+        ceiling — genuinely per-host, as the module docstring advertises). This
+        is the *proactive* half of rate-limit handling: it runs once per
+        :meth:`get_json` / :meth:`get_text` call — on the first attempt only —
+        so a sweep of many calls self-throttles instead of bursting and
+        collecting ``429``s. Retries *within* one call still rely on the
+        existing reactive backoff/``Retry-After`` handling, unchanged.
 
-        :param s2: Whether this call targets Semantic Scholar (selects
-            ``s2_rps`` vs. ``openalex_rps``, and the per-host tracking key).
+        :param key: The per-host tracking key.
+        :param rps: The proactive requests/second cap for this host; ``<= 0``
+            disables the proactive throttle for it (reactive backoff still
+            applies).
         """
-        rps = self.s2_rps if s2 else self.openalex_rps
         if rps <= 0:
             return
         min_interval = 1.0 / rps
-        key = "s2" if s2 else "openalex"
         now: float = self.clock()  # type: ignore[operator]
         last = self._last_request.get(key)
         if last is not None:
@@ -264,14 +273,27 @@ class HttpClient:
                 raise HttpError(f"{url}: non-JSON response") from exc
             return data
 
-        return self._fetch_with_retry(url, query, headers, s2=s2, extract=as_json)
+        key = "s2" if s2 else "openalex"
+        rps = self.s2_rps if s2 else self.openalex_rps
+        return self._fetch_with_retry(
+            url, query, headers, throttle_key=key, throttle_rps=rps, extract=as_json
+        )
 
     def _fetch_text(
         self, url: str, query: dict[str, str], headers: dict[str, str]
     ) -> str:
-        """Issue the request with retries and return the body; network side of :meth:`get_text`."""
+        """Issue the request with retries and return the body; network side of :meth:`get_text`.
+
+        Throttled under the ``"arxiv"`` key — the only current caller of
+        :meth:`get_text` — independently of OpenAlex/S2 traffic.
+        """
         return self._fetch_with_retry(
-            url, query, headers, s2=False, extract=lambda resp: resp.text
+            url,
+            query,
+            headers,
+            throttle_key="arxiv",
+            throttle_rps=self.arxiv_rps,
+            extract=lambda resp: resp.text,
         )
 
     def _fetch_with_retry(
@@ -280,7 +302,8 @@ class HttpClient:
         query: dict[str, str],
         headers: dict[str, str],
         *,
-        s2: bool,
+        throttle_key: str,
+        throttle_rps: float,
         extract: Callable[[Response], _T],
     ) -> _T:
         """Issue the request with retries, then hand a ``200`` response to `extract`.
@@ -292,11 +315,11 @@ class HttpClient:
         is the shared throttle + retry path behind both :meth:`get_json` (JSON
         decode) and :meth:`get_text` (raw body) — the two differ only in `extract`.
 
-        :param s2: Whether this call targets Semantic Scholar (selects the
-            proactive throttle's rps + tracking key; see :meth:`_throttle`).
+        :param throttle_key: The per-host proactive-throttle tracking key.
+        :param throttle_rps: The per-host proactive-throttle requests/second cap.
         :param extract: Turns a ``200`` response into the caller's return value.
         """
-        self._throttle(s2=s2)
+        self._throttle(key=throttle_key, rps=throttle_rps)
         last_error = "no attempt made"
         rate_limited = False
         for attempt in range(self.max_retries):

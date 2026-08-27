@@ -754,15 +754,7 @@ def test_rung_5_arxiv_candidates_returns_nothing_when_entry_has_no_title() -> No
 
 
 def test_rung_6_expands_configured_templates() -> None:
-    # Not from the brief: the sill1997 fixture's primary_location carries no
-    # `source` (venue) name, so the brief's version of this test could never
-    # have matched. Add one inline rather than editing the shared fixture,
-    # which other tests (rungs 1-3, identity metadata) also depend on as-is.
-    work = dict(_work("sill1997"))
-    work["primary_location"] = dict(
-        work["primary_location"],
-        source={"display_name": "Advances in Neural Information Processing Systems"},
-    )
+    work = _work("sill1997")
     resolvers = [
         {
             "match": "Neural Information Processing",
@@ -783,11 +775,27 @@ def test_rung_6_skips_a_non_matching_venue() -> None:
     assert a.venue_candidates(_entry(), _work("sill1997"), resolvers) == []
 
 
+# Not from the brief: fix round 1 restored the real `source.display_name` to
+# the sill1997 fixture (see report), so no remaining test exercised a work
+# with *no* venue at all. monokan_arxiv's primary_location has no `source`.
+def test_rung_6_treats_a_missing_venue_as_no_match() -> None:
+    work = _work("monokan_arxiv")
+    resolvers = [{"match": "arxiv", "url_template": "http://v/x.pdf"}]
+    assert a.venue_candidates(_entry(), work, resolvers) == []
+
+
 def test_rung_6_skips_a_malformed_resolver() -> None:
     resolvers: list[Any] = [
         "junk",
         {"match": "Neural"},
         {"url_template": "http://v/x.pdf"},
         {"match": "(", "url_template": "http://v/x.pdf"},
+        # Not from the brief: a resolver that matches the venue but whose
+        # template can't be formatted must degrade, not crash (failure
+        # honesty -- venue_resolvers is hand-edited consumer config).
+        {"match": "Neural", "url_template": "http://v/{unknown}.pdf"},  # KeyError
+        {"match": "Neural", "url_template": "http://v/{.pdf"},  # ValueError
+        {"match": "Neural", "url_template": "http://v/{0}.pdf"},  # IndexError
+        {"match": "Neural", "url_template": "http://v/{openalex!z}.pdf"},  # ValueError
     ]
     assert a.venue_candidates(_entry(), _work("sill1997"), resolvers) == []

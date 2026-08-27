@@ -142,14 +142,20 @@ def test_http_get_text_ok() -> None:
     assert client.get_text("https://x") == "<feed/>"
 
 
-def test_http_get_text_adds_mailto() -> None:
+def test_http_get_text_never_sends_mailto() -> None:
+    """Fix round 1: `mailto` was configured for OpenAlex's polite pool.
+
+    ``get_text`` exists for other hosts (arXiv); sending a user's contact
+    email to a host they never configured it for is a privacy leak, not a
+    politeness nicety, so it must never be added here regardless of `mailto`.
+    """
     session = FakeSession({"https://x": FakeResponse(200, None, text="ok")})
     client = http.HttpClient(
         session=session, mailto="me@x.org", sleep=lambda _s: None, cache_dir=None
     )
     client.get_text("https://x")
-    assert session.calls[0][1] is not None
-    assert session.calls[0][1]["mailto"] == "me@x.org"
+    params = session.calls[0][1]
+    assert params is None or "mailto" not in params
 
 
 def test_http_get_text_rate_limit_propagates() -> None:
@@ -162,14 +168,17 @@ def test_http_get_text_rate_limit_propagates() -> None:
         client.get_text("https://x")
 
 
-def test_http_get_text_is_not_cached() -> None:
+def test_http_get_text_is_not_cached(tmp_path: Any) -> None:
     """No on-disk cache for text.
 
     Unlike ``get_json``, ``get_text`` has no on-disk cache (``JsonValue`` is
     dict/list only, so a raw string cannot be stored through the same path).
+    A real `cache_dir` is passed so the assertion is load-bearing: with
+    caching enabled but inert for ``get_text``, both calls must still reach
+    the transport.
     """
     session = FakeSession({"https://x": [FakeResponse(200, None, text="a")] * 2})
-    client = http.HttpClient(session=session, sleep=lambda _s: None, cache_dir=None)
+    client = http.HttpClient(session=session, sleep=lambda _s: None, cache_dir=tmp_path)
     assert client.get_text("https://x") == "a"
     assert client.get_text("https://x") == "a"
     assert len(session.calls) == 2
@@ -847,6 +856,51 @@ def test_http_throttle_tracks_s2_and_openalex_independently() -> None:
     client.get_json("https://oa/a", s2=False)
     # Different hosts, same instant: neither has a prior send on *its* key.
     assert clock.sleeps == []
+
+
+def test_http_throttle_tracks_arxiv_independently_of_openalex() -> None:
+    """Fix round 1: arXiv used to be throttled under the "openalex" key.
+
+    ``get_text`` (arXiv's only current caller) must pace against its own
+    "arxiv" key, never against — or in competition with — OpenAlex traffic
+    through ``get_json``.
+    """
+    clock = FakeClock()
+    session = FakeSession(
+        {"https://oa/a": {"n": 1}, "https://arxiv/a": FakeResponse(200, None, text="x")}
+    )
+    client = http.HttpClient(
+        session=session,
+        cache_dir=None,
+        openalex_rps=1.0,
+        arxiv_rps=1.0,
+        clock=clock.now,
+        sleep=clock.sleep,
+    )
+    client.get_json("https://oa/a", s2=False)
+    client.get_text("https://arxiv/a")
+    # Same instant, different hosts: neither has a prior send on its own key.
+    assert clock.sleeps == []
+
+
+def test_http_throttle_spaces_back_to_back_arxiv_calls() -> None:
+    clock = FakeClock()
+    session = FakeSession(
+        {
+            "https://arxiv/a": FakeResponse(200, None, text="a"),
+            "https://arxiv/b": FakeResponse(200, None, text="b"),
+        }
+    )
+    client = http.HttpClient(
+        session=session,
+        cache_dir=None,
+        arxiv_rps=1.0,
+        clock=clock.now,
+        sleep=clock.sleep,
+    )
+    client.get_text("https://arxiv/a")
+    client.get_text("https://arxiv/b")
+    assert clock.sleeps == [1.0]
 
 
 def test_http_throttle_disabled_when_rps_is_zero() -> None:
