@@ -29,7 +29,9 @@ from defendable_science.core.fixity import bare_sha256 as bare_sha256
 from defendable_science.core.fixity import blob_path as blob_path
 from defendable_science.core.fixity import sha256_file as sha256_file
 from defendable_science.core.fixity import verified as verified
-from defendable_science.core.mirror import Mirror as Mirror
+from defendable_science.core.mirror import (
+    Mirror as Mirror,  # noqa: TC001 - runtime re-export, callers reach `r.Mirror`
+)
 from defendable_science.dataset import manifest as manifest_mod
 
 if TYPE_CHECKING:
