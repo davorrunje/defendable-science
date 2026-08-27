@@ -34,6 +34,7 @@ from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
 from defendable_science.literature import registry as registry_mod
+from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -129,15 +130,41 @@ _DEFAULT_CACHE_ROOT = Path(".defendable-science/cache")
 def _load_config_or_exit() -> dict[str, Any]:
     """Load ``.defendable-science/config.yml``, exiting 1 on invalid YAML/mapping.
 
+    The file is looked up from the **repository root** rather than the cwd, so a
+    command run from inside a paper directory reads the same project config as
+    one run from the top — and never silently falls back to "all defaults"
+    because the author happened to be one directory down.
+
     :returns: The parsed configuration mapping (empty if the file is absent).
     :raises typer.Exit: Code 1 if the file exists but is not a valid YAML
         mapping.
     """
-    from defendable_science.core.config import load_config
+    from defendable_science.core.config import (
+        DEFAULT_CONFIG_PATH,
+        find_repo_root,
+        load_config,
+    )
 
     try:
-        return load_config()
+        return load_config(find_repo_root() / DEFAULT_CONFIG_PATH)
     except ValueError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _layout_or_exit() -> tuple[dict[str, Any], Layout]:
+    """Load the config and resolve the layout, exiting 1 on an invalid block.
+
+    :returns: The config mapping and the resolved layout.
+    :raises typer.Exit: Code 1 if ``layout:`` is invalid.
+    """
+    from defendable_science.core.config import find_repo_root
+
+    config = _load_config_or_exit()
+    repo_root = find_repo_root()
+    try:
+        return config, resolve_layout(config, repo_root)
+    except LayoutError as exc:
         typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
@@ -386,8 +413,6 @@ def neighbors(
 # All config is optional (spec §8.3): a missing 'literature' block, or a missing
 # sub-key within it, means the shipped default.
 
-_DEFAULT_REGISTRY_PATH = "docs/research/literature/references.json"
-_DEFAULT_TRIAGE_PATH = "docs/research/literature/triage.yml"
 _DEFAULT_MAX_BYTES = 52_428_800
 
 
@@ -430,15 +455,22 @@ def _lit_str(lit: dict[str, Any] | None, field_name: str, default: str) -> str:
     return raw
 
 
-def _lit_registry_paths(lit: dict[str, Any] | None) -> tuple[Path, Path]:
+def _lit_registry_paths(
+    lit: dict[str, Any] | None, layout: Layout
+) -> tuple[Path, Path]:
     """Resolve ``literature.registry`` / ``literature.triage`` (spec §8.3).
 
+    An explicit key wins; otherwise the paths come from the resolved layout, so
+    a repo that moved its ``research_root`` does not also have to restate where
+    its bibliography lives.
+
     :param lit: The parsed ``literature:`` config block, or ``None``.
+    :param layout: The resolved layout, which supplies the defaults.
     :returns: ``(registry_path, triage_path)``.
     :raises typer.Exit: Code 1 if either key is present but not a string.
     """
-    registry = _lit_str(lit, "registry", _DEFAULT_REGISTRY_PATH)
-    triage = _lit_str(lit, "triage", _DEFAULT_TRIAGE_PATH)
+    registry = _lit_str(lit, "registry", str(layout.references))
+    triage = _lit_str(lit, "triage", str(layout.triage))
     return Path(registry), Path(triage)
 
 
@@ -543,9 +575,9 @@ def _lit_context() -> acquire_mod.Context:
         or a single-entry acquisition call.
     :raises typer.Exit: Code 1 on any malformed ``literature.*`` config key.
     """
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, triage_path = _lit_registry_paths(lit)
+    registry_path, triage_path = _lit_registry_paths(lit, layout)
     max_bytes, resolvers = _lit_acquisition(lit)
     return acquire_mod.Context(
         registry_path=registry_path,
@@ -769,9 +801,9 @@ def lit_verify(
         ``ok``.
     """
     citekeys = _one_of_citekey_or_all(citekey, verify_all)
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, _triage_path = _lit_registry_paths(lit)
+    registry_path, _triage_path = _lit_registry_paths(lit, layout)
     cache_dir = _lit_cache_dir(config)
     registry = _load_registry_or_exit(registry_path)
     if citekeys is not None:
@@ -818,9 +850,9 @@ def lit_mirror(
         ``already_present``.
     """
     citekeys = _one_of_citekey_or_all(citekey, mirror_all)
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, _triage_path = _lit_registry_paths(lit)
+    registry_path, _triage_path = _lit_registry_paths(lit, layout)
     cache_dir = _lit_cache_dir(config)
     mir = _lit_mirror(lit)
     if mir is None:
@@ -1248,19 +1280,79 @@ def record(
 backlog = typer.Typer(help="Exploration backlog management.", no_args_is_help=True)
 app.add_typer(backlog, name="backlog")
 
-_BacklogPath = Annotated[str, typer.Option("--backlog", help="Path to the backlog.")]
+_BacklogPath = Annotated[
+    str | None,
+    typer.Option("--backlog", help="Path to the backlog; from the layout if omitted."),
+]
 _LevelOpt = Annotated[str, typer.Option("--level", help="hypothesis | paper.")]
 
 
-def _open_backlog(path: str, level: str) -> backlog_mod.Backlog:
-    """Validate `level` and load the backlog at `path`.
+def _paper_dir_or_exit(layout: Layout, option: str) -> Path:
+    """Return the paper directory the cwd sits in, exiting 2 if there is none.
 
-    :raises typer.Exit: Code 2 on an invalid level.
+    Walks up from the cwd to the first ancestor that is a direct child of
+    ``research_root`` — the paper a command run anywhere inside a paper tree is
+    about.
+
+    :param layout: The resolved layout.
+    :param option: The option to name in the error (``--backlog`` /
+        ``--paper-root``).
+    :returns: The paper's root directory.
+    :raises typer.Exit: Code 2 when the cwd is outside every paper. Guessing
+        (``./backlog.md``, say) would write the row into the wrong file and
+        report success, which an integrity tool must not do.
+    """
+    here = Path.cwd().resolve()
+    for candidate in (here, *here.parents):
+        if candidate.parent == layout.research_root:
+            return candidate
+    typer.echo(
+        f"cannot resolve {option}: the current directory is not inside a paper "
+        f"under {layout.research_root}; pass {option} explicitly",
+        err=True,
+    )
+    raise typer.Exit(code=2)
+
+
+def _resolve_backlog(level: str) -> str:
+    """Resolve an omitted ``--backlog`` from the layout.
+
+    :param level: The validated backlog level — the portfolio backlog at the
+        paper level, the cwd's paper backlog at the hypothesis level.
+    :returns: The backlog path to read and write.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block; code 2 when the
+        path cannot be located, or its directory does not exist yet.
+    """
+    _config, layout = _layout_or_exit()
+    if level == "paper":
+        target = layout.portfolio_backlog
+    else:
+        target = layout.backlog(_paper_dir_or_exit(layout, "--backlog").name)
+    if not target.parent.is_dir():
+        typer.echo(
+            f"cannot resolve --backlog: {layout.rel(target.parent)} does not "
+            "exist; run the research-init skill, or pass --backlog explicitly",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return str(target)
+
+
+def _open_backlog(path: str | None, level: str) -> tuple[str, backlog_mod.Backlog]:
+    """Validate `level`, resolve the backlog path, and load the table.
+
+    :param path: An explicit ``--backlog``, which always wins; ``None`` resolves
+        the path from the layout.
+    :param level: The requested backlog level.
+    :returns: The resolved path and the loaded backlog.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 on an
+        invalid level or an unresolvable path.
     """
     if level not in ("hypothesis", "paper"):
         typer.echo(f"--level must be 'hypothesis' or 'paper', got {level!r}", err=True)
         raise typer.Exit(code=2)
-    return backlog_mod.Backlog.load(path, level)  # type: ignore[arg-type]
+    resolved = path or _resolve_backlog(level)
+    return resolved, backlog_mod.Backlog.load(resolved, level)  # type: ignore[arg-type]
 
 
 def _emit_row(row: dict[str, str]) -> None:
@@ -1273,7 +1365,7 @@ def _emit_row(row: dict[str, str]) -> None:
 def park(
     one_line: str,
     provenance: Annotated[str, typer.Option("--provenance", help="Origin, verbatim.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     row_id: Annotated[str, typer.Option("--id", help="Explicit row id.")] = "",
 ) -> None:
@@ -1281,18 +1373,19 @@ def park(
 
     :param one_line: The one-line idea.
     :param provenance: Its origin (verbatim); required.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level (``hypothesis`` or ``paper``).
     :param row_id: Optional explicit id.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.park(one_line, provenance, row_id=row_id or None)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
@@ -1300,7 +1393,7 @@ def park(
 def add(
     one_line: str,
     provenance: Annotated[str, typer.Option("--provenance", help="Origin, verbatim.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     row_id: Annotated[str, typer.Option("--id", help="Explicit row id.")] = "",
 ) -> None:
@@ -1308,34 +1401,36 @@ def add(
 
     :param one_line: The one-line idea.
     :param provenance: Its origin (verbatim); required.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level (``hypothesis`` or ``paper``).
     :param row_id: Optional explicit id.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.add(one_line, provenance, row_id=row_id or None)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
 @backlog.command(name="list")
 def list_(
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     status: Annotated[str, typer.Option("--status", help="Filter by status.")] = "",
 ) -> None:
     """List backlog rows as JSON (read-only), optionally filtered by status.
 
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param status: Optional status filter.
     """
-    board = _open_backlog(backlog_path, level)
+    _target, board = _open_backlog(backlog_path, level)
     rows = board.listing(status=status or None)
     typer.echo(json.dumps(rows, indent=2))
     raise typer.Exit(code=0)
@@ -1344,7 +1439,7 @@ def list_(
 @backlog.command()
 def rank(
     row_id: str,
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     eig: Annotated[str, typer.Option("--eig")] = "",
     feas: Annotated[str, typer.Option("--feas")] = "",
@@ -1354,7 +1449,8 @@ def rank(
     """Score a row and set it ``ranked`` (advises; never selects).
 
     :param row_id: The row to rank.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param eig: Expected-information-gain score (hypothesis level).
     :param feas: Feasibility score.
@@ -1362,7 +1458,7 @@ def rank(
     :param frame: gap-spotting / problematization (hypothesis level).
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     scores = {
         k: v
         for k, v in (
@@ -1378,41 +1474,61 @@ def rank(
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
-def _check_scaffold_opts(
-    level: str, paper_root: str, research: str, backend: str
-) -> None:
+def _check_scaffold_opts(level: str, backend: str) -> None:
     """Validate the ``--scaffold`` option combination for `level`.
 
+    Only the backend is demanded: every path now falls back to the layout.
+
     :param level: The validated backlog level.
-    :param paper_root: ``--paper-root`` (hypothesis level).
-    :param research: ``--research-root`` (paper level).
     :param backend: ``--backend`` (paper level).
     :raises typer.Exit: Code 2 if an option this level requires is missing.
     """
-    if level == "hypothesis":
-        needed = {"--paper-root": paper_root}
-    else:
-        # ``backend`` has no default: the plugin ships no experiment backend, so
-        # a registry row with an empty binding is not a usable paper (ADR-0013).
-        needed = {"--research-root": research, "--backend": backend}
-    missing = sorted(name for name, value in needed.items() if not value)
-    if missing:
-        typer.echo(
-            f"--scaffold at the {level} level requires {', '.join(missing)}", err=True
-        )
+    # ``backend`` has no default: the plugin ships no experiment backend, so a
+    # registry row with an empty binding is not a usable paper (ADR-0013).
+    if level == "paper" and not backend:
+        typer.echo("--scaffold at the paper level requires --backend", err=True)
         raise typer.Exit(code=2)
+
+
+def _scaffold_research_root(research: str | None) -> tuple[Path, Layout | None]:
+    """Resolve ``--research-root``, falling back to the layout.
+
+    :param research: The explicit ``--research-root``, which always wins.
+    :returns: The research directory, and the layout it came from — ``None``
+        when the directory was named explicitly, so the registry row stays
+        relative to *that* tree rather than to the configured repo root.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block.
+    """
+    if research:
+        return Path(research), None
+    _config, layout = _layout_or_exit()
+    return layout.research_root, layout
+
+
+def _scaffold_paper_root(paper_root: str | None) -> Path:
+    """Resolve ``--paper-root``, falling back to the cwd's paper directory.
+
+    :param paper_root: The explicit ``--paper-root``, which always wins.
+    :returns: The paper's root directory.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 when the
+        cwd is outside every paper.
+    """
+    if paper_root:
+        return Path(paper_root)
+    _config, layout = _layout_or_exit()
+    return _paper_dir_or_exit(layout, "--paper-root")
 
 
 def _scaffold_promoted(
     level: str,
     row: dict[str, str],
     *,
-    paper_root: str,
-    research: str,
+    paper_root: str | None,
+    research: str | None,
     backend: str,
     slug: str,
     date: str,
@@ -1422,57 +1538,63 @@ def _scaffold_promoted(
     :param level: The validated backlog level.
     :param row: The promoted row, whose ``one-line``/``provenance`` are carried
         into the artifact verbatim.
-    :param paper_root: The paper root (hypothesis level).
-    :param research: The ``docs/research`` directory (paper level).
+    :param paper_root: The paper root (hypothesis level); from the layout when
+        omitted.
+    :param research: The research directory (paper level); from the layout when
+        omitted.
     :param backend: The experiment-backend binding to record (paper level).
     :param slug: Explicit hypothesis folder name; ``<date>-<row-id>`` otherwise.
     :param date: ISO date for the folder name and ``last-updated``.
     :returns: The created paths, keyed for the caller's JSON report.
     :raises backlog_mod.BacklogError: If a target artifact already exists.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 when a
+        path can neither be given nor resolved.
     """
     today = date or backlog_mod.today_iso()
     if level == "hypothesis":
         target = backlog_mod.scaffold_hypothesis(
-            paper_root,
+            _scaffold_paper_root(paper_root),
             slug or f"{today}-{row['id']}",
             row["one-line"],
             row["provenance"],
             today=today,
         )
         return {"hypothesis": str(target)}
+    research_dir, layout = _scaffold_research_root(research)
     root = backlog_mod.scaffold_paper(
-        research,
+        research_dir,
         row["id"],
         row["one-line"],
         backend=backend,
         provenance=row["provenance"],
         today=today,
+        layout=layout,
     )
     return {
         "paper_root": str(root),
         "pitch": str(root / "paper" / "pitch.md"),
         "backlog": str(root / "backlog.md"),
-        "registry": str(Path(research) / "papers.md"),
+        "registry": str(research_dir / "papers.md"),
     }
 
 
 @backlog.command()
 def promote(
     row_id: str,
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     scaffold: Annotated[
         bool,
         typer.Option("--scaffold", help="Also scaffold the next-stage artifact."),
     ] = False,
     paper_root: Annotated[
-        str,
+        str | None,
         typer.Option("--paper-root", help="Paper root (hypothesis level scaffold)."),
-    ] = "",
+    ] = None,
     research_root: Annotated[
-        str,
-        typer.Option("--research-root", help="docs/research dir (paper level)."),
-    ] = "",
+        str | None,
+        typer.Option("--research-root", help="Research dir (paper level)."),
+    ] = None,
     backend: Annotated[
         str,
         typer.Option("--backend", help="Experiment-backend binding (paper level)."),
@@ -1497,22 +1619,24 @@ def promote(
     retryable, never ``promoted`` with nothing on disk.
 
     :param row_id: The row to promote.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param scaffold: Also scaffold the next-stage artifact.
-    :param paper_root: The paper root; required with ``--scaffold`` at the
-        hypothesis level.
-    :param research_root: The ``docs/research`` directory; required with
-        ``--scaffold`` at the paper level.
+    :param paper_root: The paper root (hypothesis level); the paper the cwd sits
+        in when omitted.
+    :param research_root: The research directory (paper level); the layout's
+        ``research_root`` when omitted.
     :param backend: The experiment-backend binding; required with ``--scaffold``
         at the paper level (the plugin bundles no default).
     :param slug: Explicit ``<YYYY-MM-DD-slug>`` hypothesis folder name.
     :param date: ISO date for the folder name and ``last-updated``.
-    :raises typer.Exit: Code 1 on a guard violation, code 2 on a missing option.
+    :raises typer.Exit: Code 1 on a guard violation, code 2 on a missing option
+        or an unresolvable path.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     if scaffold:
-        _check_scaffold_opts(level, paper_root, research_root, backend)
+        _check_scaffold_opts(level, backend)
     try:
         row = board.promote(row_id)
         artifacts = (
@@ -1531,7 +1655,7 @@ def promote(
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     if artifacts is None:
         _emit_row(row)
     typer.echo(json.dumps({"row": row, "artifacts": artifacts}, indent=2))
@@ -1542,24 +1666,25 @@ def promote(
 def drop(
     row_id: str,
     reason: Annotated[str, typer.Option("--reason", help="Why it is dropped.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
 ) -> None:
     """Retire a row as ``dropped`` with a recorded reason (never deletes it).
 
     :param row_id: The row to drop.
     :param reason: Why it is dropped; required (file-drawer discipline).
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.drop(row_id, reason)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 

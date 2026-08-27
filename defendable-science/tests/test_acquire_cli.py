@@ -23,6 +23,7 @@ from defendable_science.core import http
 from defendable_science.core.download import DownloadError
 from defendable_science.core.mirror import Mirror
 from defendable_science.literature import acquire as a
+from defendable_science.scaffold.layout import Layout
 
 runner = CliRunner()
 
@@ -818,8 +819,11 @@ def test_lit_context_defaults_with_no_literature_block(
 
     ctx = cli._lit_context()
 
-    assert ctx.registry_path == Path(cli._DEFAULT_REGISTRY_PATH)
-    assert ctx.triage_path == Path(cli._DEFAULT_TRIAGE_PATH)
+    # The default bibliography paths come from the layout, not a second copy of
+    # "docs/research/literature/..." held in the CLI (#122).
+    layout = Layout.default(tmp_path.resolve())
+    assert ctx.registry_path == layout.references
+    assert ctx.triage_path == layout.triage
     assert ctx.max_bytes == cli._DEFAULT_MAX_BYTES
     assert ctx.resolvers == []
     assert ctx.mirror is None

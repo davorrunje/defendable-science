@@ -13,6 +13,8 @@ from typer.testing import CliRunner
 
 from defendable_science.cli import app
 from defendable_science.exploration import backlog as b
+from defendable_science.scaffold import status as st
+from defendable_science.scaffold.layout import Layout
 
 
 def _split_frontmatter(text: str) -> str:
@@ -267,11 +269,10 @@ def test_today_is_iso() -> None:
     assert len(b.today_iso()) == 10
 
 
-def test_registry_root_fallback(tmp_path: Path) -> None:
-    research = tmp_path / "a" / "b"
-    research.mkdir(parents=True)
+def test_registry_root_outside_the_repo_is_reported_in_full(tmp_path: Path) -> None:
+    # A registry row must never hide where the paper really is.
     outside = tmp_path.parent / "elsewhere-xyz"
-    assert b._registry_root(outside, research) == str(outside)
+    assert b.registry_root(Layout.default(tmp_path), outside) == str(outside)
 
 
 def test_split_cells_without_borders() -> None:
@@ -750,14 +751,20 @@ def test_promote_scaffold_paper_registers_and_reports(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("level", "extra", "wanted"),
     [
+        # No --paper-root, and a cwd outside every paper: the layout cannot say
+        # which paper this hypothesis belongs to, so the option is named.
         ("hypothesis", [], "--paper-root"),
         ("paper", ["--research-root", "x"], "--backend"),
-        ("paper", ["--backend", "bench"], "--research-root"),
     ],
 )
 def test_promote_scaffold_missing_option_exits_2(
-    tmp_path: Path, level: str, extra: list[str], wanted: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    level: str,
+    extra: list[str],
+    wanted: str,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     path = tmp_path / "backlog.md"
     _ranked_backlog(path, level, "r1")
     result = runner.invoke(
@@ -914,3 +921,225 @@ def test_promote_scaffold_pitch_is_tracked_end_to_end(tmp_path: Path) -> None:
     assert status["status"]["id"] == "dc"
     assert status["status"]["last-updated"] == date(2026, 3, 4)
     assert "own reading" in pitch.read_text(encoding="utf-8")
+
+
+# --- every path comes from the resolver (#122) -------------------------------
+
+
+def _flat_layout(repo_root: Path) -> Layout:
+    """Build a layout whose papers sit under ``writing/``, not docs/research."""
+    return Layout(
+        repo_root=repo_root,
+        research_root=repo_root / "writing",
+        literature_dir=repo_root / "writing" / "literature",
+        datasets_manifest=repo_root / "datasets.yml",
+        thesis_dir=repo_root / "writing" / "thesis",
+    )
+
+
+def test_registry_root_is_correct_under_a_non_default_research_root(
+    tmp_path: Path,
+) -> None:
+    """``research.parent.parent`` was wrong for any research_root but docs/research."""
+    layout = Layout.default(tmp_path)
+    flat = _flat_layout(tmp_path)
+
+    assert b.registry_root(layout, layout.paper_dir("dc")) == "docs/research/dc"
+    assert b.registry_root(flat, flat.paper_dir("dc")) == "writing/dc"
+
+
+def test_scaffold_paper_registers_the_root_relative_to_the_layouts_repo_root(
+    tmp_path: Path,
+) -> None:
+    flat = _flat_layout(tmp_path)
+    flat.research_root.mkdir()
+
+    b.scaffold_paper(
+        flat.research_root, "dc", "Depth collapse", backend="bench", layout=flat
+    )
+
+    doc = b._parse_document(flat.papers_registry.read_text(encoding="utf-8"))
+    assert doc.rows == [{"paper-id": "dc", "root": "writing/dc", "backend": "bench"}]
+
+
+def test_scaffolded_hypothesis_and_pitch_status_blocks_come_from_the_renderer(
+    tmp_path: Path,
+) -> None:
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    root = b.scaffold_paper(
+        research,
+        "dc",
+        "Depth collapse",
+        backend="bench",
+        provenance="p",
+        today="2026-03-04",
+    )
+    pitch = (root / "paper" / "pitch.md").read_text(encoding="utf-8")
+    target = b.scaffold_hypothesis(
+        root, "2026-03-04-monotone", "Monotone depth", "p", today="2026-03-04"
+    )
+    hypothesis = target.read_text(encoding="utf-8")
+
+    assert st.render("paper", {"id": "dc", "last-updated": "2026-03-04"}) in pitch
+    assert (
+        st.render(
+            "hypothesis",
+            {"id": "2026-03-04-monotone", "last-updated": "2026-03-04"},
+        )
+        in hypothesis
+    )
+
+
+def _onboard(tmp_path: Path, config: str = "") -> None:
+    """Write a ``.defendable-science/config.yml`` so `tmp_path` is the repo root."""
+    cfg = tmp_path / ".defendable-science"
+    cfg.mkdir()
+    (cfg / "config.yml").write_text(config, encoding="utf-8")
+
+
+def test_park_resolves_the_backlog_from_the_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path, "layout:\n  research_root: writing/\n")
+    paper = tmp_path / "writing" / "dc"
+    (paper / "hypotheses").mkdir(parents=True)
+    (paper / "backlog.md").write_text(
+        b.Backlog(level="hypothesis").dumps(), encoding="utf-8"
+    )
+    monkeypatch.chdir(paper / "hypotheses")  # inside the paper, not at its root
+
+    result = runner.invoke(app, ["backlog", "park", "An idea", "--provenance", "smoke"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "An idea" in (paper / "backlog.md").read_text(encoding="utf-8")
+    assert not (paper / "hypotheses" / "backlog.md").exists()
+
+
+def test_an_explicit_backlog_still_wins_over_the_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path, "layout:\n  research_root: writing/\n")
+    paper = tmp_path / "writing" / "dc"
+    paper.mkdir(parents=True)
+    (paper / "backlog.md").write_text(
+        b.Backlog(level="hypothesis").dumps(), encoding="utf-8"
+    )
+    elsewhere = tmp_path / "elsewhere.md"
+    monkeypatch.chdir(paper)
+
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "park",
+            "An idea",
+            "--provenance",
+            "smoke",
+            "--backlog",
+            str(elsewhere),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "An idea" in elsewhere.read_text(encoding="utf-8")
+    assert "An idea" not in (paper / "backlog.md").read_text(encoding="utf-8")
+
+
+def test_hypothesis_backlog_outside_any_paper_names_the_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Failure honesty: not a traceback, and not a silently-wrong ./backlog.md.
+    _onboard(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["backlog", "park", "An idea", "--provenance", "smoke"])
+
+    assert result.exit_code == 2
+    assert "--backlog" in result.stderr
+    assert "not inside a paper" in result.stderr
+    assert not (tmp_path / "backlog.md").exists()
+
+
+def test_a_portfolio_backlog_with_no_research_dir_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["backlog", "list", "--level", "paper"])
+
+    assert result.exit_code == 2
+    assert "--backlog" in result.stderr
+    assert "docs/research" in result.stderr
+
+
+def test_an_invalid_layout_block_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path, "layout:\n  nope: writing/\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["backlog", "list", "--level", "paper"])
+
+    assert result.exit_code == 1
+    assert "unknown layout key" in result.stderr
+
+
+def test_promote_scaffold_needs_no_path_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path)
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    (research / "portfolio-backlog.md").write_text(
+        b.Backlog(level="paper").dumps(), encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    runner.invoke(
+        app,
+        ["backlog", "park", "Depth collapse", "--provenance", "p", "--level", "paper"],
+    )
+    runner.invoke(
+        app, ["backlog", "rank", "depth-collapse", "--level", "paper", "--feas", "3"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "depth-collapse",
+            "--level",
+            "paper",
+            "--scaffold",
+            "--backend",
+            "bench",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert (research / "depth-collapse" / "paper" / "pitch.md").is_file()
+    registry = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    assert registry.rows[0]["root"] == "docs/research/depth-collapse"
+
+
+def test_promote_scaffold_resolves_the_paper_root_from_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _onboard(tmp_path)
+    paper = tmp_path / "docs" / "research" / "dc"
+    (paper / "hypotheses").mkdir(parents=True)
+    _ranked_backlog(paper / "backlog.md", "hypothesis", "h1")
+    monkeypatch.chdir(paper / "hypotheses")  # deep inside the paper, not at its root
+
+    result = runner.invoke(
+        app, ["backlog", "promote", "h1", "--scaffold", "--date", "2026-03-04"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    target = paper / "hypotheses" / "2026-03-04-h1" / "hypothesis.md"
+    assert json.loads(result.stdout)["artifacts"] == {"hypothesis": str(target)}
+    assert b.Backlog.load(paper / "backlog.md", "hypothesis").get("h1")["status"] == (
+        "promoted"
+    )
