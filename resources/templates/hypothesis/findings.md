@@ -1,17 +1,17 @@
 ---
 status:
   level: hypothesis
-  id: <YYYY-MM-DD-slug>
-  verdict: <confirmed | refuted | inconclusive>   # the material decision; refuted is a valid, done outcome
+  id: null                     # <YYYY-MM-DD-slug> — matches the hypothesis folder name
+  verdict: null                # confirmed | refuted | inconclusive — refuted is a valid, done outcome
   readiness: resolved          # resolved once a signed verdict + evidence exist
   signed-off-by: null          # REQUIRED — named human; verdict is not real until set
   signed-off-date: null        # REQUIRED — date of sign-off
   evidence: []                 # run-refs backing the verdict — never hand-copied numbers
   covers: []
-  load-bearing: <true | false>
+  load-bearing: null           # true | false — does refutation block the parent paper's claim?
   understanding: {status: ok, unresolved: []}     # from the `defend` guardrail before sign-off
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Findings: <slug>

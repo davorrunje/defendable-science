@@ -1,7 +1,7 @@
 ---
 status:
   level: hypothesis
-  id: <YYYY-MM-DD-slug>
+  id: null                     # <YYYY-MM-DD-slug> — matches the hypothesis folder name
   verdict: pending             # still pending — the verdict is decided in findings.md
   readiness: pending
   signed-off-by: null
@@ -11,7 +11,7 @@ status:
   load-bearing: null
   understanding: {status: pending, unresolved: []}   # `defend` fires on `strategy` — record gaps here
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Strategy: <slug>

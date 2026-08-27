@@ -1,9 +1,9 @@
 ---
 status:
   level: thesis
-  id: <thesis-slug>
-  verdict: n/a
-  readiness: <synthesis | defensible>   # defensible only once the gate is cleared + signed
+  id: null                     # <thesis-slug> — fill when the thesis is framed
+  verdict: n/a                 # thesis has no verdict axis; readiness carries it
+  readiness: null              # framing | synthesis | defensible (defensible only once signed)
   signed-off-by: null          # REQUIRED for defensibility — named human; not defensible until set
   signed-off-date: null        # REQUIRED
   evidence: []                 # the kappa introduces NO new findings — papers carry all evidence
@@ -11,7 +11,7 @@ status:
   load-bearing: null
   understanding: {status: ok, unresolved: []}   # from the mock viva before sign-off
   blockers: []                 # e.g. uncovered aims surfaced by progress
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Kappa: <thesis title>

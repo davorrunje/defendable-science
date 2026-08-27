@@ -50,5 +50,6 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0036](0036-automated-dependency-updates.md) | Automated dependency updates — Dependabot for the dev toolchain + Actions, scheduled `pre-commit autoupdate`, no auto-merge | accepted |
 | [0037](0037-literature-asset-acquisition.md) | Literature asset acquisition — substrate spine under CSL `custom`, three-way match gate with an author hard gate | accepted |
 | [0038](0038-venue-resolvers-trusted-not-gated.md) | Rung 6 (`venue_resolvers`) is *trusted*, not gated — the audit trail records that no verification was performed instead of a fabricated three-axis `accept` | accepted |
+| [0039](0039-recorded-consumer-layout.md) | Consumer layout = a bounded `layout:` block of four recordable roots (rejecting one `research_root` override and a full per-file map); inside a paper is derived, thesis-ness is a fact on disk | accepted |
 
 Format: MADR (Markdown Any Decision Records). Deciders: Davor Runje (with Claude).
