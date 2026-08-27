@@ -150,7 +150,7 @@ through the gate.
 | 1 | `openalex-best` | `best_oa_location.pdf_url` | no |
 | 2 | `openalex-locations` | every `locations[].pdf_url` | no |
 | 3 | `openalex-landing` | every `locations[].landing_page_url` that serves PDF bytes | no |
-| 4 | `sibling-version` | title search → same-normalized-title works ≠ anchor → their rungs 1–3 | **yes** |
+| 4 | `sibling-version` | title search → same-*or-word-prefix*-title works ≠ anchor → their rungs 1–3 | **yes** |
 | 5 | `arxiv-search` | arXiv API query by title + author | **yes** |
 | 6 | `venue-resolver` | config `literature.acquisition.venue_resolvers` templates | **yes** |
 | 7 | *manual* | nothing fetched; reported with the landing URLs to click | — |
@@ -158,10 +158,19 @@ through the gate.
 Rungs are attempted in order; the first accepted candidate wins. `--dry-run` walks the ladder
 and reports which rung *would* yield bytes without downloading them.
 
-Rung 4's own same-title pre-filter narrows the search; it does **not** stand in for the gate.
+Rung 4's own title pre-filter narrows the search; it does **not** stand in for the gate.
 Every candidate from rungs 4–6 is evaluated by §5.2 regardless of how it was found, so a rung
 whose pre-filter is loose (rung 5's arXiv title query, which is how the Igel case arose) is
 caught by the same check as one whose pre-filter is tight.
+
+*Amended 2026-08-27, during implementation.* Rung 4's pre-filter originally required a
+**strictly equal** normalized title. That made it stricter than the gate it feeds, which is the
+wrong way round: a genuine sibling whose journal version added a subtitle would be discarded
+before §5.2 ever saw it, even though §5.2's `containment → quarantine` rule exists precisely to
+route that case to a human. A pre-filter must never pre-empt the adjudicator. It now uses the
+same relation as §5.2's title axis — normalized-equal **or** word-prefix containment — so rung 4
+proposes and the gate disposes. Nothing unsafe is admitted by the widening, because every
+candidate still passes the gate, and the author hard gate still fires first.
 
 **Byte acceptance, applied at every rung:** HTTP 200, size ≤ `max_bytes`, and
 `Content-Type: application/pdf` **or** a body beginning `%PDF-`. The magic-byte check is
