@@ -277,9 +277,15 @@ def resolve(identifier: str) -> None:
     """Resolve an identifier (DOI, arXiv id, OpenAlex/S2 id) to a canonical work.
 
     The exit code follows the result so a caller need not parse JSON to tell
-    the three outcomes apart: ``0`` on a resolution, ``1`` on a genuine miss
-    (no such paper), ``2`` on a transport failure (``transport_error: true``
-    in the JSON) — never reported as a clean "no result".
+    the outcomes apart — and never mistake a network failure for a clean
+    "no result":
+
+    :raises typer.Exit: Code ``0`` on a resolution. Code ``1`` on a genuine
+        miss (no such paper). Code ``2`` on a Click/Typer usage error (bad
+        flags, missing argument) — untouched, not raised by this body. Code
+        ``3`` on a transport failure (``transport_error: true`` in the JSON) —
+        deliberately distinct from ``2`` so a caller can never confuse "you
+        typed it wrong" with "the network failed".
 
     :param identifier: The identifier to resolve.
     """
@@ -290,7 +296,7 @@ def resolve(identifier: str) -> None:
         if record.get("resolved"):
             raise typer.Exit(code=0)
         if record.get("transport_error"):
-            raise typer.Exit(code=2)
+            raise typer.Exit(code=3)
         raise typer.Exit(code=1)
 
 
