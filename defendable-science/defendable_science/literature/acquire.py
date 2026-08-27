@@ -74,7 +74,10 @@ class Candidate:
     openalex: str | None = None
 
     def as_json(self) -> dict[str, Any]:
-        """Return the candidate as a JSON-ready object for the audit trail."""
+        """Return the candidate as a JSON-ready object for the audit trail.
+
+        :returns: The JSON-ready object.
+        """
         return {
             "url": self.url,
             "rung": self.rung,
@@ -105,7 +108,10 @@ class MatchRecord:
     reason: str | None = None
 
     def as_json(self) -> dict[str, Any]:
-        """Return the record as a JSON-ready object for the audit trail."""
+        """Return the record as a JSON-ready object for the audit trail.
+
+        :returns: The JSON-ready object.
+        """
         return {
             "verdict": self.verdict,
             "title": self.title,
@@ -181,12 +187,25 @@ def evaluate_match(entry: Entry, candidate: Candidate) -> MatchRecord:
     one year apart.
 
     Thin metadata on either side is a **refusal**, not a title-only guess — an
-    unverifiable candidate is exactly the case this gate exists for.
+    unverifiable candidate is exactly the case this gate exists for. That
+    includes metadata that is present but *blank*: a title that normalizes to
+    the empty string (e.g. all punctuation) or an author name that folds to
+    the empty string carries no information to match on, so two such blanks
+    must not be scored ``"exact"`` against each other. Refusing here does not
+    lean on any other module's discipline about coercing blanks to ``None``
+    — candidates from Task 9's arXiv/OpenAlex parsing carry no such guarantee.
 
     :param entry: The registry entry the bytes would be bound to.
     :param candidate: The candidate under consideration.
     :returns: The per-axis record and the verdict.
     """
+    insufficient = MatchRecord(
+        verdict=REFUSE,
+        reason=(
+            "insufficient metadata to verify a search-derived candidate "
+            "(title, year and first author are all required on both sides)"
+        ),
+    )
     if (
         entry.title is None
         or entry.year is None
@@ -195,13 +214,14 @@ def evaluate_match(entry: Entry, candidate: Candidate) -> MatchRecord:
         or candidate.year is None
         or candidate.first_author_family is None
     ):
-        return MatchRecord(
-            verdict=REFUSE,
-            reason=(
-                "insufficient metadata to verify a search-derived candidate "
-                "(title, year and first author are all required on both sides)"
-            ),
-        )
+        return insufficient
+    if (
+        not normalize_title(entry.title)
+        or not normalize_title(candidate.title)
+        or not fold_name(entry.first_author_family)
+        or not fold_name(candidate.first_author_family)
+    ):
+        return insufficient
 
     title = _title_axis(entry.title, candidate.title)
     author = (

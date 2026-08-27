@@ -227,6 +227,50 @@ def test_thin_candidate_metadata_refuses(kw: dict[str, Any]) -> None:
     assert "insufficient" in record.reason
 
 
+# Not in the brief: fix-round-1 findings. A title or author that is *present*
+# but blank (present as a string, normalizes/folds to "") is metadata, not
+# absence, so the ``is None`` checks above let it through — and two blanks
+# compared to each other score "exact", which can reach ACCEPT. The registry
+# side cannot produce this today (``registry.py``'s ``_opt_str`` coerces blank
+# strings to ``None``), but the gate must not depend on that other module's
+# discipline: Task 9 feeds it arXiv/OpenAlex-parsed candidate metadata with no
+# such guarantee.
+
+
+def test_both_titles_blank_after_normalization_refuses() -> None:
+    record = a.evaluate_match(
+        _entry(title="!!!"),
+        _cand(title="???", year=1997, first_author_family="Sill"),
+    )
+    assert record.verdict == a.REFUSE
+    assert record.reason is not None
+    assert "insufficient" in record.reason
+
+
+def test_both_first_authors_blank_after_folding_refuses() -> None:
+    record = a.evaluate_match(
+        _entry(family=""),
+        _cand(title="Monotonic Networks", year=1997, first_author_family=""),
+    )
+    assert record.verdict == a.REFUSE
+    assert record.reason is not None
+    assert "insufficient" in record.reason
+
+
+def test_title_axis_treats_a_blank_side_as_mismatch_not_containment() -> None:
+    """Direct unit test of the private axis, per its own docstring contract.
+
+    ``evaluate_match`` never reaches ``_title_axis`` with a blank title —
+    that is refused upstream as insufficient metadata (see the two tests
+    above) — but ``_title_axis`` guards its own ``left_words and
+    right_words`` invariant independently, so that guard needs its own
+    oracle rather than relying on an upstream caller to make it unreachable.
+    A blank side must never vacuously "contain" a real title.
+    """
+    assert a._title_axis("", "Monotonic Networks") == "mismatch"
+    assert a._title_axis("Monotonic Networks", "") == "mismatch"
+
+
 # --- shape ------------------------------------------------------------------
 
 
@@ -284,18 +328,23 @@ def test_candidate_as_json_is_serializable() -> None:
     }
 
 
-def test_title_that_normalizes_to_empty_is_a_mismatch_not_a_crash() -> None:
+def test_title_that_normalizes_to_empty_refuses_as_insufficient() -> None:
     """A title of only punctuation normalizes to the empty string.
 
     ``normalize_title`` strips all punctuation, so a title like ``"!!!"``
-    normalizes to ``""``. The gate must not treat that degenerate case as a
-    (vacuous) containment match against a real title — a title axis is only
-    ever "exact", "containment", or "mismatch" per :class:`a.MatchRecord`'s
-    contract, and an empty normalized title contains nothing meaningful.
+    normalizes to ``""``. A blank title carries no information to match on —
+    it is thin metadata, exactly like a missing one — so the gate must refuse
+    it as insufficient before ever reaching the title axis, rather than
+    scoring a (vacuous) "mismatch" or, worse, a vacuous "exact"/"containment"
+    against another blank. (Fix-round-1: this test previously asserted
+    ``title == "mismatch"``, which was itself the gap the reviewer found —
+    two blanks used to compare as "exact".)
     """
     record = a.evaluate_match(
         _entry(title="!!!"),
         _cand(title="Monotonic Networks", year=1997, first_author_family="Sill"),
     )
     assert record.verdict == a.REFUSE
-    assert record.title == "mismatch"
+    assert record.title is None
+    assert record.reason is not None
+    assert "insufficient" in record.reason
