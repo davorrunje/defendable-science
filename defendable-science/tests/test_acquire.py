@@ -1049,13 +1049,14 @@ def test_already_recorded_sha_resolves_from_cache_without_network(
 ) -> None:
     """The load-bearing no-network property of a recorded checksum."""
     path, entry = _registry(tmp_path, spine=_spine())
+    before = path.read_bytes()
     _seed_blob(tmp_path)
     client = FakeClient({})
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
     assert outcome.bucket == a.BUCKET_CACHED
     assert outcome.sha256 == PDF_SHA
     assert client.calls == []
-    assert path.read_bytes() == path.read_bytes()
+    assert path.read_bytes() == before
 
 
 def test_already_recorded_sha_falls_through_to_mirror(tmp_path: Path) -> None:
@@ -1088,6 +1089,11 @@ def test_mirror_bytes_that_do_not_verify_are_treated_as_absent(
         ),
     )
     assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.reason is not None
+    assert "the mirror copy is corrupt too" in outcome.reason
+    # The bad bytes must not be left at the content-addressed path for a later
+    # run to re-read.
+    assert not (tmp_path / "cache" / "sha256" / PDF_SHA).exists()
 
 
 def test_recorded_sha_with_no_bytes_anywhere_is_manual(tmp_path: Path) -> None:
@@ -1096,6 +1102,7 @@ def test_recorded_sha_with_no_bytes_anywhere_is_manual(tmp_path: Path) -> None:
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.reason is not None
     assert PDF_SHA in outcome.reason
+    assert "not in the local cache, and not in the mirror either" in outcome.reason
 
 
 def test_a_corrupt_cache_blob_falls_through_to_the_mirror(tmp_path: Path) -> None:
@@ -1644,3 +1651,95 @@ def test_a_rung_is_listed_once_however_many_candidates_it_offered(
     )
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LOCATIONS]
+
+
+def test_a_corrupt_cache_blob_with_no_mirror_says_so_and_discards_it(
+    tmp_path: Path,
+) -> None:
+    """'The cache is corrupt' and 'nothing has it' are different problems."""
+    _path, entry = _registry(tmp_path, spine=_spine())
+    blob = tmp_path / "cache" / "sha256" / PDF_SHA
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"corrupt")
+    outcome = a.acquire_one(entry, _ctx(tmp_path, FakeClient({}), NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.reason is not None
+    assert "the cached blob did not match" in outcome.reason
+    assert not blob.exists()
+
+
+def test_a_rungs_license_is_the_one_on_its_own_location(tmp_path: Path) -> None:
+    """OpenAlex reports the license per *location*, and rungs 2-3 change location.
+
+    Rung 1's ``best_oa_location`` is ``cc-by`` but does not download; rung 2
+    succeeds on a second copy whose own ``license`` is null. Recording ``cc-by``
+    there would put the entry in ``committable[]`` — a rights assertion a human
+    may act on by copying the bytes into their repository — on the strength of a
+    grant that covers a different copy.
+    """
+    path, entry = _registry(tmp_path)
+    work = _oa(pdf="http://x/licensed.pdf", lic="cc-by")
+    work["locations"].append(
+        {
+            "landing_page_url": None,
+            "pdf_url": "http://x/unlicensed.pdf",
+            "license": None,
+        }
+    )
+    client = FakeClient({"/works/": work})
+    fetcher = FakeFetcher(
+        {"http://x/licensed.pdf": DownloadError("http://x/licensed.pdf: 403")}
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.url == "http://x/unlicensed.pdf"
+    assert outcome.license is None
+    assert outcome.committable is False
+    asset = _asset(path)
+    assert asset.license.observed is None
+    assert asset.redistributable is False
+
+
+def test_a_landing_page_rung_reads_its_own_locations_license(tmp_path: Path) -> None:
+    """The same rule one rung further down: rung 3 is a location too."""
+    path, entry = _registry(tmp_path)
+    work = _oa(pdf=None, landing="http://x/paper.pdf", lic=None)
+    work["best_oa_location"] = {"pdf_url": None, "license": "cc-by"}
+    client = FakeClient({"/works/": work})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.rung == a.RUNG_OA_LANDING
+    assert outcome.committable is False
+    assert _asset(path).license.observed is None
+
+
+def test_a_location_that_does_carry_a_license_records_it(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    work = _oa(pdf=None, landing="http://x/paper.pdf", lic="cc-by-4.0")
+    client = FakeClient({"/works/": work})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.committable is True
+    assert _asset(path).license.id == "cc-by-4.0"
+
+
+def test_a_venue_template_falls_back_to_the_work_level_license(
+    tmp_path: Path,
+) -> None:
+    """Rung 6 names the anchor work, not one of its copies — no location to read."""
+    path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/abstract", lic="cc-by")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    ctx = _ctx(
+        tmp_path,
+        client,
+        FakeFetcher(),
+        resolvers=[{"match": "Neural", "url_template": "http://v/{openalex}.pdf"}],
+    )
+    outcome = a.acquire_one(entry, ctx)
+    assert outcome.rung == a.RUNG_VENUE
+    assert _asset(path).license.id == "cc-by"

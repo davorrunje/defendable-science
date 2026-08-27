@@ -38,7 +38,7 @@ from defendable_science.literature.registry import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     from defendable_science.core.download import BytesFetcher, FetchedBytes
@@ -392,16 +392,32 @@ def _license_from_observed(raw: str | None) -> License:
     return License(id=raw.strip().lower(), observed=raw.strip(), source=LICENSE_SOURCE)
 
 
-def _observed_license(work: dict[str, Any]) -> str | None:
-    """Return the first license string reported anywhere in an OpenAlex work.
+def _observed_license(work: dict[str, Any], location: Any = None) -> str | None:
+    """Return the license reported for the record a candidate's URL came from.
 
-    ``best_oa_location`` and ``primary_location`` are consulted before the full
-    ``locations[]`` array, because those are the records OpenAlex itself
-    considers canonical for the work.
+    When the URL was read out of a specific ``locations[]`` entry, **that
+    entry's own ``license`` is authoritative, including its absence.** OpenAlex
+    reports the license per location, so a work whose ``best_oa_location`` is
+    ``cc-by`` may hold a second, unlicensed copy — and rungs 2 and 3 download
+    exactly those other copies. Falling back to the work-level value there would
+    manufacture a redistribution grant nobody gave, and ``committable[]`` is a
+    rights assertion a human may act on by copying the bytes into a repository.
+    An unlicensed location is therefore an *observation of no license*, never a
+    gap to be filled from a sibling location.
+
+    Only a caller with no originating location falls back to the work-level
+    scan: rung 6's consumer-configured templates name the anchor *work* rather
+    than one of its copies, so the work-level observation is the best there is.
+    There, ``best_oa_location`` and ``primary_location`` come before the full
+    ``locations[]`` array, being the records OpenAlex itself calls canonical.
 
     :param work: The OpenAlex work.
-    :returns: The raw license string, or ``None`` when the record carries none.
+    :param location: The ``locations[]`` record the URL came from, if any.
+    :returns: The raw license string, or ``None`` when none was reported.
     """
+    if isinstance(location, dict):
+        raw = location.get("license")
+        return raw if isinstance(raw, str) and raw.strip() else None
     blocks: list[Any] = [work.get("best_oa_location"), work.get("primary_location")]
     locations = work.get("locations")
     if isinstance(locations, list):
@@ -492,12 +508,17 @@ def _first_family_from_work(work: dict[str, Any]) -> str | None:
     return display.strip().rsplit(" ", 1)[-1]
 
 
-def candidate_from_work(work: dict[str, Any], url: str, rung: str) -> Candidate:
+def candidate_from_work(
+    work: dict[str, Any], url: str, rung: str, location: Any = None
+) -> Candidate:
     """Build a candidate carrying the work's own bibliographic metadata.
 
     :param work: The OpenAlex work the URL came from.
     :param url: The candidate PDF URL.
     :param rung: The rung that produced it.
+    :param location: The ``locations[]`` record the URL was read from, when there
+        was one. OpenAlex reports the license **per location**, and it is the
+        copy we download that governs — see :func:`_observed_license`.
     :returns: The candidate.
     """
     year = work.get("publication_year")
@@ -509,27 +530,56 @@ def candidate_from_work(work: dict[str, Any], url: str, rung: str) -> Candidate:
         year=year if isinstance(year, int) else None,
         first_author_family=_first_family_from_work(work),
         openalex=_short_id(work.get("id")),
-        license=_observed_license(work),
+        license=_observed_license(work, location),
     )
 
 
-def _location_pdf_urls(work: dict[str, Any]) -> list[str]:
-    """Return every ``pdf_url`` across the work's ``locations`` array.
+def _location_urls(
+    work: dict[str, Any], key: str, keep: Callable[[str], bool]
+) -> list[tuple[str, dict[str, Any]]]:
+    """Return each usable `key` URL across ``locations``, with its own record.
+
+    The location record travels with the URL because the license is reported
+    per location, not per work: a work whose ``best_oa_location`` is ``cc-by``
+    may hold a second, unlicensed copy, and the bytes we actually download are
+    governed by *their* location.
 
     :param work: The OpenAlex work.
-    :returns: The direct PDF URLs found across all locations, in record order.
+    :param key: The location field to read (``pdf_url`` / ``landing_page_url``).
+    :param keep: Predicate deciding whether a URL is worth offering.
+    :returns: ``(url, location)`` pairs in record order.
     """
     locations = work.get("locations")
     if not isinstance(locations, list):
         return []
-    out: list[str] = []
+    out: list[tuple[str, dict[str, Any]]] = []
     for location in locations:
         if not isinstance(location, dict):
             continue
-        url = location.get("pdf_url")
-        if isinstance(url, str) and url.strip():
-            out.append(url)
+        url = location.get(key)
+        if isinstance(url, str) and keep(url):
+            out.append((url, location))
     return out
+
+
+def _location_pdf_urls(work: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return every ``pdf_url`` across the work's ``locations`` array.
+
+    :param work: The OpenAlex work.
+    :returns: ``(url, location)`` pairs for the direct PDF URLs, in record order.
+    """
+    return _location_urls(work, "pdf_url", lambda url: bool(url.strip()))
+
+
+def _landing_locations(work: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return PDF-shaped landing URLs with the location records they came from.
+
+    :param work: The OpenAlex work.
+    :returns: ``(url, location)`` pairs, in record order.
+    """
+    return _location_urls(
+        work, "landing_page_url", lambda url: url.strip().lower().endswith(".pdf")
+    )
 
 
 def landing_urls(work: dict[str, Any]) -> list[str]:
@@ -543,17 +593,7 @@ def landing_urls(work: dict[str, Any]) -> list[str]:
     :param work: The OpenAlex work.
     :returns: Candidate landing URLs, in record order.
     """
-    locations = work.get("locations")
-    if not isinstance(locations, list):
-        return []
-    out: list[str] = []
-    for location in locations:
-        if not isinstance(location, dict):
-            continue
-        url = location.get("landing_page_url")
-        if isinstance(url, str) and url.strip().lower().endswith(".pdf"):
-            out.append(url)
-    return out
+    return [url for url, _location in _landing_locations(work)]
 
 
 def identity_candidates(work: dict[str, Any]) -> list[Candidate]:
@@ -566,19 +606,20 @@ def identity_candidates(work: dict[str, Any]) -> list[Candidate]:
     :param work: The OpenAlex work.
     :returns: Candidates in ladder order.
     """
-    best = (work.get("best_oa_location") or {}).get("pdf_url")
-    ordered: list[tuple[str, str]] = []
+    best_location = work.get("best_oa_location")
+    best = (best_location or {}).get("pdf_url")
+    ordered: list[tuple[str, str, Any]] = []
     if isinstance(best, str) and best.strip():
-        ordered.append((best, RUNG_OA_BEST))
-    ordered += [(url, RUNG_OA_LOCATIONS) for url in _location_pdf_urls(work)]
-    ordered += [(url, RUNG_OA_LANDING) for url in landing_urls(work)]
+        ordered.append((best, RUNG_OA_BEST, best_location))
+    ordered += [(url, RUNG_OA_LOCATIONS, loc) for url, loc in _location_pdf_urls(work)]
+    ordered += [(url, RUNG_OA_LANDING, loc) for url, loc in _landing_locations(work)]
     seen: set[str] = set()
     out: list[Candidate] = []
-    for url, rung in ordered:
+    for url, rung, location in ordered:
         if url in seen:
             continue
         seen.add(url)
-        out.append(candidate_from_work(work, url, rung))
+        out.append(candidate_from_work(work, url, rung, location))
     return out
 
 
@@ -707,6 +748,15 @@ def venue_candidates(
     that needs an exotic venue adds a ``{match, url_template}`` pair to its own
     ``.defendable-science/config.yml``. Templates may reference ``{openalex}``,
     ``{doi}`` and ``{year}``.
+
+    .. warning::
+       **The gate provides no protection on this rung.** These candidates are
+       built from the *anchor work* — the one the citekey already resolves to —
+       so :func:`evaluate_match` compares the registry entry against itself and
+       cannot do anything but accept. What the URL actually serves is
+       unconstrained by anything OpenAlex said, and the only real check standing
+       between a consumer's template and a citekey is the ``%PDF-`` magic-byte
+       test. A consumer configuring a resolver is vouching for the template.
 
     :param entry: The registry entry (supplies ``{doi}``).
     :param work: The anchor work (supplies the venue name, ``{openalex}``, ``{year}``).
@@ -1050,24 +1100,48 @@ def _resolve_recorded(entry: Entry, ctx: Context, asset: Asset, sha: str) -> Out
     :param ctx: The acquisition context.
     :param asset: Its recorded spine.
     :param sha: The recorded bare checksum.
+    Bytes that fail verification are treated as absent (spec §9) *and deleted*:
+    leaving a known-bad blob at the content-addressed path would have every
+    later run re-read the same bad bytes. The refusal says which of the two
+    situations occurred, because "the mirror is serving corrupt bytes" and "the
+    mirror does not have it" are different problems with different fixes, and
+    reporting the same sentence for both is the failure-honesty rule's exact
+    complaint in miniature.
+
     :returns: :data:`BUCKET_CACHED` when the bytes are resolvable, otherwise
-        :data:`BUCKET_MANUAL` — the recorded bytes are simply gone, which is a
-        fact about this paper and belongs on the human worklist.
+        :data:`BUCKET_MANUAL` — the recorded bytes are gone, which is a fact
+        about this paper and belongs on the human worklist.
     """
     blob = blob_path(ctx.cache_dir, sha)
-    if verified(blob, sha):
-        return _cached_outcome(entry, asset, sha, path=blob)
-    if ctx.mirror is not None and ctx.mirror.get(sha, blob) and verified(blob, sha):
-        return _cached_outcome(entry, asset, sha, path=blob)
+    faults: list[str] = []
+    if blob.is_file():
+        if verified(blob, sha):
+            return _cached_outcome(entry, asset, sha, path=blob)
+        blob.unlink(missing_ok=True)
+        faults.append(
+            "the cached blob did not match the recorded checksum and was discarded"
+        )
+    if ctx.mirror is not None and ctx.mirror.get(sha, blob):
+        if verified(blob, sha):
+            return _cached_outcome(entry, asset, sha, path=blob)
+        blob.unlink(missing_ok=True)
+        faults.append(
+            "the mirror served bytes that do not match the recorded checksum, so "
+            "the mirror copy is corrupt too"
+        )
+    detail = (
+        "; ".join(faults)
+        if faults
+        else "it is not in the local cache, and not in the mirror either"
+    )
     return Outcome(
         citekey=entry.citekey,
         bucket=BUCKET_MANUAL,
         sha256=sha,
         reason=(
-            f"recorded checksum sha256:{sha} resolves to nothing — not in the "
-            "local cache, and not in the mirror either. Supply the bytes with "
-            "'literature confirm --file', or re-run with --refetch to acquire "
-            "them again."
+            f"recorded checksum sha256:{sha} resolves to nothing — {detail}. "
+            "Supply the bytes with 'literature confirm --file', or re-run with "
+            "--refetch to acquire them again."
         ),
     )
 
