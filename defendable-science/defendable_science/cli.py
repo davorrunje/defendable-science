@@ -912,23 +912,52 @@ dataset = typer.Typer(
 )
 app.add_typer(dataset, name="dataset")
 
+_ManifestOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--manifest", help="Path to the manifest; from the layout if omitted."
+    ),
+]
+
+
+def _manifest_path(manifest: str | None) -> str:
+    """Resolve the manifest path, falling back to ``layout.datasets_manifest``.
+
+    An explicit value always wins, and is honoured exactly as typed: a path the
+    author writes on the command line is relative to the directory they typed
+    it in. A path *recorded* in ``config.yml`` is a different thing — it names a
+    location in the repository — so an omitted option resolves to the layout's
+    absolute path, and a repo that records ``datasets_manifest: data/datasets.yml``
+    is honoured from any directory instead of being silently ignored (#124).
+
+    :param manifest: The explicit ``--manifest``, which always wins.
+    :returns: The path to load; absolute when it came from the layout.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block.
+    """
+    if manifest:
+        return manifest
+    _config, layout = _layout_or_exit()
+    return str(layout.datasets_manifest)
+
 
 @dataset.command()
 def validate(
     manifest: Annotated[
-        str, typer.Argument(help="Path to the manifest to validate.")
-    ] = "datasets.yml",
+        str | None,
+        typer.Argument(help="Path to the manifest; from the layout if omitted."),
+    ] = None,
 ) -> None:
     """Validate a ``datasets.yml`` manifest (the register/audit gate).
 
     Prints a JSON report ``{ok, errors, warnings}`` and exits non-zero on any
     hard error.
 
-    :param manifest: Path to the manifest to validate.
+    :param manifest: Path to the manifest to validate; from the layout when
+        omitted.
     :raises typer.Exit: Code 1 on a malformed manifest or any validation error.
     """
     try:
-        parsed = manifest_mod.load(manifest)
+        parsed = manifest_mod.load(_manifest_path(manifest))
     except manifest_mod.ManifestError as exc:
         typer.echo(json.dumps({"ok": False, "errors": [str(exc)], "warnings": []}))
         raise typer.Exit(code=1) from exc
@@ -976,20 +1005,18 @@ def emit(
     emit_all: Annotated[
         bool, typer.Option("--all", help="Emit every entry as a JSON array.")
     ] = False,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest to read.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Emit a Croissant JSON-LD document for a manifest entry (or all entries).
 
     :param identifier: The dataset id to emit; omit when using ``--all``.
     :param emit_all: Emit every registry entry as a JSON array.
-    :param manifest: Path to the manifest to read.
+    :param manifest: Path to the manifest to read; from the layout when omitted.
     :raises typer.Exit: Code 1 if the manifest is malformed, no id/``--all`` is
         given, or the id is unknown.
     """
     try:
-        parsed = manifest_mod.load(manifest)
+        parsed = manifest_mod.load(_manifest_path(manifest))
     except manifest_mod.ManifestError as exc:
         typer.echo(f"emit failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1016,10 +1043,18 @@ def _dataset_cache_dir() -> Path:
     return _cache_root() / "datasets"
 
 
-def _load_manifest_or_exit(path: str) -> manifest_mod.Manifest:
-    """Load a manifest, exiting 1 on a malformed file."""
+def _load_manifest_or_exit(path: str | None) -> manifest_mod.Manifest:
+    """Resolve the manifest path and load it, exiting 1 on a malformed file.
+
+    :param path: An explicit ``--manifest``, which always wins; ``None``
+        resolves the path from the layout (see :func:`_manifest_path`).
+    :returns: The parsed manifest.
+    :raises typer.Exit: Code 1 if the file is missing or malformed — the
+        message names the path that was actually consulted, so a manifest that
+        is not where it was expected can never read as an empty registry.
+    """
     try:
-        return manifest_mod.load(path)
+        return manifest_mod.load(_manifest_path(path))
     except manifest_mod.ManifestError as exc:
         typer.echo(f"manifest error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1058,14 +1093,12 @@ def _mirror_from(parsed: manifest_mod.Manifest) -> retrieval_mod.Mirror | None:
 @dataset.command()
 def fetch(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Fetch a registered dataset through the resolution chain (pooch/rclone).
 
     :param identifier: The dataset id to fetch.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or the chain is exhausted.
     """
     parsed = _load_manifest_or_exit(manifest)
@@ -1084,14 +1117,12 @@ def fetch(
 @dataset.command()
 def verify(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Verify on-disk bytes against the manifest SHA-256 (offline).
 
     :param identifier: The dataset id to verify.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or a file fails to verify.
     """
     parsed = _load_manifest_or_exit(manifest)
@@ -1104,14 +1135,12 @@ def verify(
 @dataset.command()
 def mirror(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Populate/refresh the private rclone mirror for a dataset.
 
     :param identifier: The dataset id to mirror.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if no mirror is configured or a hop fails.
     """
     parsed = _load_manifest_or_exit(manifest)
@@ -1136,14 +1165,12 @@ def audit(
     identifier: Annotated[
         str, typer.Argument(help="Optional dataset id; whole manifest if omitted.")
     ] = "",
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Audit fixity, mirror presence and manifest completeness.
 
     :param identifier: Optional dataset id; audits the whole manifest if omitted.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if validation or any fixity check fails.
     """
     parsed = _load_manifest_or_exit(manifest)

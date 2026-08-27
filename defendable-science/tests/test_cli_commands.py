@@ -5,15 +5,13 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+import pytest
 from typer.testing import CliRunner
 
 from defendable_science.cli import app
+from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.dataset import retrieval as retrieval_mod
-
-if TYPE_CHECKING:
-    import pytest
 
 runner = CliRunner()
 
@@ -337,3 +335,155 @@ datasets:
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["ok"] is True
+
+
+# --- layout.datasets_manifest routing (#124) ------------------------------------------
+
+#: The recorded, deliberately non-default manifest location used below.
+_RECORDED = Path("data/datasets.yml")
+
+
+def _recorded_manifest_project(tmp_path: Path) -> Path:
+    """Build a repo whose ``config.yml`` records a non-default manifest path.
+
+    The Tier-A manifest is moved to ``data/datasets.yml`` and nothing is left at
+    the default ``datasets.yml``, so any command that still hardcodes the
+    default fails loudly instead of half-passing.
+
+    :param tmp_path: The temporary repository root.
+    :returns: The repository root.
+    """
+    root = _tier_a_project(tmp_path)
+    (root / "datasets.yml").rename(root / _RECORDED)
+    config_dir = root / ".defendable-science"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(
+        f"layout:\n  datasets_manifest: {_RECORDED.as_posix()}\n", encoding="utf-8"
+    )
+    return root
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["dataset", "validate"],
+        ["dataset", "emit", "--all"],
+        ["dataset", "fetch", "ds-a"],
+        ["dataset", "verify", "ds-a"],
+        ["dataset", "mirror", "ds-a"],
+        ["dataset", "audit"],
+    ],
+    ids=lambda argv: argv[1],
+)
+def test_dataset_commands_resolve_the_recorded_manifest(
+    argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every dataset command reads ``layout.datasets_manifest`` (#124).
+
+    ``resolve_layout`` treats an unknown ``layout:`` key as an error precisely
+    so nothing is silently dropped; a *known* key that no command consumes is
+    the same silent ignore by another route.
+    """
+    root = _recorded_manifest_project(tmp_path)
+    monkeypatch.chdir(root)
+    seen: list[Path] = []
+    original_load = manifest_mod.load
+
+    def _load_spy(path: str | Path) -> manifest_mod.Manifest:
+        seen.append(Path(path))
+        return original_load(path)
+
+    monkeypatch.setattr(manifest_mod, "load", _load_spy)
+
+    result = runner.invoke(app, argv)
+
+    assert seen, f"{argv} never loaded a manifest: {result.stdout + result.stderr}"
+    assert all(path == root.resolve() / _RECORDED for path in seen), seen
+
+
+def test_manifest_resolves_from_the_layout_in_a_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An omitted ``--manifest`` is anchored to the repo root, not the cwd.
+
+    A recorded path describes a location in the *repository*. Resolving it
+    against the cwd makes a command run from inside a paper report "no such
+    file" for a manifest that is right there at the top of the repo.
+    """
+    root = _recorded_manifest_project(tmp_path)
+    paper = root / "docs" / "research" / "dc"
+    paper.mkdir(parents=True)
+    monkeypatch.chdir(paper)
+
+    result = runner.invoke(app, ["dataset", "emit", "ds-a"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["name"] == "ds-a"
+
+
+def test_explicit_manifest_wins_and_stays_cwd_relative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit ``--manifest`` overrides the layout and keeps the cwd frame.
+
+    Two frames meet here and they are not the same decision. A path recorded in
+    ``config.yml`` describes a location in the repository, so it anchors to the
+    repo root. A path the author *types* is relative to the directory they
+    typed it in — re-anchoring that would quietly read a different file than
+    the one they named.
+    """
+    root = _recorded_manifest_project(tmp_path)
+    here = root / "elsewhere"
+    here.mkdir()
+    (here / "local.yml").write_text(
+        f"""
+datasets:
+  - id: ds-z
+    version: "1.0.0"
+    tier: A
+    license: CC0-1.0
+    redistributable: true
+    access: open
+    files:
+      - path: data/f.bin
+        sha256: {"e" * 64}
+    datasheet: datasheets/ds-z.md
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(here)
+    # The typed path exists *only* under the cwd, so anchoring it to the repo
+    # root instead would find nothing and the assertions below would not hold.
+    assert not (root / "local.yml").exists()
+
+    result = runner.invoke(app, ["dataset", "emit", "ds-z", "--manifest", "local.yml"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["name"] == "ds-z"
+
+
+def test_missing_recorded_manifest_names_the_path_it_looked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manifest that is not there fails loudly, naming the resolved path.
+
+    Never an empty-but-valid manifest, and never a bare ``datasets.yml`` that
+    hides *which* location was actually consulted.
+    """
+    (tmp_path / ".defendable-science").mkdir()
+    (tmp_path / ".defendable-science" / "config.yml").write_text(
+        f"layout:\n  datasets_manifest: {_RECORDED.as_posix()}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    expected = str(tmp_path.resolve() / _RECORDED)
+
+    fetch = runner.invoke(app, ["dataset", "fetch", "ds-a"])
+    assert fetch.exit_code == 1
+    assert expected in fetch.stderr
+    assert "no such file" in fetch.stderr
+
+    validate = runner.invoke(app, ["dataset", "validate"])
+    assert validate.exit_code == 1
+    report = json.loads(validate.stdout)
+    assert report["ok"] is False
+    assert expected in report["errors"][0]
