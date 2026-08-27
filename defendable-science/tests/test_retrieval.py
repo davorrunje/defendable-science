@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from defendable_science.core import fixity as fx
 from defendable_science.dataset import manifest as m
 from defendable_science.dataset import retrieval as r
 
@@ -119,7 +120,7 @@ def test_verified_unreadable_present_file_treated_as_absent(
     def _boom(_p: object, **_kw: object) -> str:
         raise PermissionError("unreadable")
 
-    monkeypatch.setattr(r, "sha256_file", _boom)
+    monkeypatch.setattr(fx, "sha256_file", _boom)
     # An unreadable Tier-A file is absent to the chain, which then fails cleanly.
     with pytest.raises(r.RetrievalError, match="missing or corrupt"):
         r.fetch(_entry("A", "a" * 64), cache_dir="cache")

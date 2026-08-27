@@ -136,7 +136,7 @@ def test_fetch_populates_then_hits_mirror(
     assert mirror.check(sha) is True
 
     # Clear the cache; the second fetch must come from the MIRROR, not the network.
-    r._blob_path(cache, sha).unlink()
+    r.blob_path(cache, sha).unlink()
 
     def _no_network(url: str, sha256: str, dest: Path) -> Path:
         raise AssertionError("second fetch should hit the mirror, not re-download")

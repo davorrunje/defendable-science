@@ -19,7 +19,6 @@ without the network or the binary. Design:
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess  # nosec B404 - rclone is a trusted, fixed-arg subprocess
 from collections.abc import Callable
@@ -27,6 +26,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from defendable_science.core.fixity import RetrievalError as RetrievalError
+from defendable_science.core.fixity import bare_sha256 as bare_sha256
+from defendable_science.core.fixity import blob_path as blob_path
+from defendable_science.core.fixity import sha256_file as sha256_file
+from defendable_science.core.fixity import verified as verified
 from defendable_science.dataset import manifest as manifest_mod
 
 if TYPE_CHECKING:
@@ -46,29 +50,6 @@ class _Proc(Protocol):
 
 #: A subprocess runner with the ``subprocess.run`` shape (injectable for tests).
 Runner = Callable[..., _Proc]
-
-
-class RetrievalError(RuntimeError):
-    """Raised when the resolution chain is exhausted or a hop fails hard."""
-
-
-def sha256_file(path: str | Path, *, chunk: int = 1 << 20) -> str:
-    """Return the SHA-256 hex digest of a file (streamed).
-
-    :param path: The file to hash.
-    :param chunk: Read-chunk size in bytes.
-    :returns: The 64-char lowercase hex digest.
-    """
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(chunk), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _bare(sha256: str) -> str:
-    """Normalize a manifest checksum to a bare lowercase 64-hex string."""
-    return sha256.split(":", 1)[-1].strip().lower()
 
 
 # --- private mirror (rclone subprocess) -------------------------------------
@@ -101,7 +82,7 @@ class Mirror:
     env: Mapping[str, str] | None = None
 
     def _target(self, sha256: str) -> str:
-        key = f"{self.base_path.rstrip('/')}/sha256/{_bare(sha256)}".lstrip("/")
+        key = f"{self.base_path.rstrip('/')}/sha256/{bare_sha256(sha256)}".lstrip("/")
         return f"{self.remote}:{key}"
 
     def _cmd(self, *args: str) -> list[str]:
@@ -127,7 +108,9 @@ class Mirror:
     def put(self, local: str | Path, sha256: str) -> None:
         """Copy `local` to the content-addressed mirror key."""
         if not self._run_ok("copyto", str(local), self._target(sha256)):
-            raise RetrievalError(f"rclone copyto to mirror failed for {_bare(sha256)}")
+            raise RetrievalError(
+                f"rclone copyto to mirror failed for {bare_sha256(sha256)}"
+            )
 
     def get(self, sha256: str, dst: str | Path) -> bool:
         """Copy from the mirror key to `dst`; return whether it succeeded."""
@@ -152,28 +135,12 @@ def _pooch_fetch(url: str, sha256: str, dest: Path) -> Path:  # pragma: no cover
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     got = pooch.retrieve(
-        url=url, known_hash=f"sha256:{_bare(sha256)}", fname=dest.name, path=dest.parent
+        url=url,
+        known_hash=f"sha256:{bare_sha256(sha256)}",
+        fname=dest.name,
+        path=dest.parent,
     )
     return Path(got)
-
-
-def _blob_path(cache_dir: Path, sha256: str) -> Path:
-    """Return the content-addressed cache path for a checksum."""
-    return cache_dir / "sha256" / _bare(sha256)
-
-
-def _verified(path: Path, sha256: str) -> bool:
-    """Return whether `path` exists and its SHA-256 matches (else it is absent).
-
-    A present-but-unreadable file (``OSError`` while hashing) is treated as
-    absent, so the resolution chain moves on instead of crashing.
-    """
-    if not path.is_file():
-        return False
-    try:
-        return sha256_file(path) == _bare(sha256)
-    except OSError:
-        return False
 
 
 def _resolve_file(
@@ -191,21 +158,21 @@ def _resolve_file(
     # Tier A: the file is committed in-repo at its path; verify in place.
     if entry.tier == "A":
         repo_path = Path(ref.path)
-        if _verified(repo_path, ref.sha256):
+        if verified(repo_path, ref.sha256):
             return repo_path
         raise RetrievalError(f"{entry.id}: Tier-A file {ref.path} missing or corrupt")
 
-    blob = _blob_path(cache_dir, ref.sha256)
+    blob = blob_path(cache_dir, ref.sha256)
 
     # 1. local cache
-    if _verified(blob, ref.sha256):
+    if verified(blob, ref.sha256):
         return blob
 
     # 2. private mirror
     if (
         mirror is not None
         and mirror.get(ref.sha256, blob)
-        and _verified(blob, ref.sha256)
+        and verified(blob, ref.sha256)
     ):
         return blob
 
@@ -215,7 +182,7 @@ def _resolve_file(
         if not url:
             raise RetrievalError(f"{entry.id}: Tier-B entry has no source URL")
         landed = tier_b_fetch(url, ref.sha256, blob)
-        if _verified(landed, ref.sha256):
+        if verified(landed, ref.sha256):
             if mirror is not None:
                 mirror.put(landed, ref.sha256)
             return landed
@@ -289,7 +256,7 @@ def verify(entry: DatasetEntry, *, cache_dir: str | Path) -> VerifyReport:
     cache = Path(cache_dir)
     report = VerifyReport(entry_id=entry.id)
     for ref in entry.files:
-        path = Path(ref.path) if entry.tier == "A" else _blob_path(cache, ref.sha256)
+        path = Path(ref.path) if entry.tier == "A" else blob_path(cache, ref.sha256)
         if not path.is_file():
             report.missing.append(ref.path)
             continue
@@ -298,7 +265,7 @@ def verify(entry: DatasetEntry, *, cache_dir: str | Path) -> VerifyReport:
         except OSError:
             report.corrupt.append(ref.path)
             continue
-        if digest == _bare(ref.sha256):
+        if digest == bare_sha256(ref.sha256):
             report.verified.append(ref.path)
         else:
             report.corrupt.append(ref.path)
