@@ -193,6 +193,11 @@ alternatives for the full comparison.
 
 ## Known duplication (deliberately not fixed here)
 
+> **Since resolved.** Issue #79 converted both tools to `repo: local` hooks, so
+> the duplication this section describes no longer exists. The section is left as
+> written because it records the state at the time of this design; see ADR-0036
+> § Consequences for the resolution.
+
 `codespell` and `detect-secrets` are each pinned twice — a hook `rev:` and a
 `lint` group `==` — and after this change two independent Dependabot
 ecosystems (`uv` and `pre-commit`) bump them. The two locations currently

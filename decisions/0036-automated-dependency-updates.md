@@ -91,7 +91,11 @@ Option 1.
 - `codespell` and `detect-secrets` remain pinned in two places, now bumped by
   two independent Dependabot ecosystems (`uv` for the `==` pin, `pre-commit`
   for the `rev:`); the durable fix (making the `lint` pins the single source)
-  is tracked as issue #79.
+  is tracked as issue #79. **Resolved (#79):** both are now `repo: local` hooks
+  running `tools/codespell.sh` / `tools/detect-secrets.sh`, so the `lint` group's
+  `==` pins are the only place either version is authored and the `pre-commit`
+  ecosystem has nothing to propose for them. `pre-commit-hooks` and `pyupgrade`
+  are the only remote `rev:`s left.
 - Dependabot PRs deviate from the house `<area>/<slug>` branch and
   commit-attribution conventions. Accepted: those govern human PRs.
 
