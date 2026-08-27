@@ -317,6 +317,20 @@ Every command emits JSON on stdout, per the package's convention. `fetch --all`'
 
 `manual[]` *is* the human worklist and carries landing URLs so there is somewhere to click.
 
+*Amended 2026-08-27, during implementation.* **The JSON above is illustrative, not a closed
+schema.** Every bucket row carries the full outcome shape, uniformly, rather than the narrower
+per-bucket projection shown here. That is deliberate: a `fetched` row can legitimately carry a
+`reason` — the bytes landed and verified in the cache but the *mirror* write then failed — and
+projecting the row down to `{citekey, sha256, rung, url}` would make that partial failure
+invisible, which is exactly the silent degradation §9 forbids. Error rows key their message as
+`error` (not `reason`), consistently across both the per-entry outcomes and the sweep's own
+synthesized rows, so a consumer never has to check two spellings.
+
+Note also that naming a citekey explicitly *and* passing `--disposition` is a conflict rather
+than a filter: an explicitly requested entry the filter would exclude produces an `errors[]` row
+naming the conflict, never a silent omission. Dropping it quietly would let the report claim
+completeness while having ignored an instruction.
+
 ## 8. Registry layer
 
 ### 8.1 Storage — the CSL `custom` namespace
