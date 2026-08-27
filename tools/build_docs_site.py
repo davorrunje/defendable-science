@@ -131,6 +131,8 @@ def plan() -> tuple[dict[str, str | None], dict[str, object]]:
     reg("index", "README.md")
     reg("get-started/user-guide", "docs/USER-GUIDE.md")
 
+    guide_pages = [reg("guides/literature", "docs/guides/literature.md")]
+
     skills_dir = REPO_ROOT / "skills"
     skills_pages = [
         reg(f"skills/{d.name}", f"skills/{d.name}/SKILL.md")
@@ -165,6 +167,7 @@ def plan() -> tuple[dict[str, str | None], dict[str, object]]:
         "groups": [
             {"group": "Overview", "pages": ["index"]},
             {"group": "Get started", "pages": ["get-started/user-guide"]},
+            {"group": "Guides", "pages": guide_pages},
             {"group": "Skills & methodology", "pages": skills_pages},
             {"group": "CLI reference", "pages": ["cli-reference"]},
             {
