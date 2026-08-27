@@ -16,6 +16,7 @@ import shutil
 import subprocess  # nosec B404 - used only to read `--version` of trusted tools
 import sys
 from contextlib import contextmanager
+from datetime import date as date_cls
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -23,11 +24,16 @@ import typer
 
 from defendable_science import __version__
 from defendable_science.core import keys as keys_mod
+from defendable_science.core.download import stream_to_file
+from defendable_science.core.fixity import RetrievalError
+from defendable_science.core.mirror import Mirror
 from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.dataset import retrieval as retrieval_mod
 from defendable_science.defend import record as record_mod
 from defendable_science.exploration import backlog as backlog_mod
+from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
+from defendable_science.literature import registry as registry_mod
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -355,6 +361,477 @@ def neighbors(
             raise typer.Exit(code=1) from exc
         typer.echo(json.dumps(result, indent=2))
         raise typer.Exit(code=0)
+
+
+# --- literature acquisition (defendable-science#97) -----------------------------------
+#
+# fetch | confirm | verify | mirror — spec §7:
+# docs/superpowers/specs/2026-08-27-literature-asset-acquisition-design.md.
+# All config is optional (spec §8.3): a missing 'literature' block, or a missing
+# sub-key within it, means the shipped default.
+
+_DEFAULT_REGISTRY_PATH = "docs/research/literature/references.json"
+_DEFAULT_TRIAGE_PATH = "docs/research/literature/triage.yml"
+_DEFAULT_MAX_BYTES = 52_428_800
+
+
+def _lit_block(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the ``literature:`` config block, or exit 1 if it isn't a mapping.
+
+    :param config: The loaded ``.defendable-science/config.yml``.
+    :returns: The block, or ``None`` when unset.
+    :raises typer.Exit: Code 1 if ``literature`` is present but not a mapping.
+    """
+    lit = config.get("literature")
+    if lit is not None and not isinstance(lit, dict):
+        typer.echo(
+            "invalid .defendable-science/config.yml: 'literature' must be a mapping",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return lit
+
+
+def _lit_str(lit: dict[str, Any] | None, field_name: str, default: str) -> str:
+    """Read a string ``literature.<field_name>`` override, or `default`.
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :param field_name: The config key (``registry`` or ``triage``).
+    :param default: The value to use when the key is absent.
+    :returns: The configured value, or `default` when unset.
+    :raises typer.Exit: Code 1 if the key is present but not a string.
+    """
+    raw = lit.get(field_name) if lit is not None else None
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        typer.echo(
+            f"invalid .defendable-science/config.yml: 'literature.{field_name}' "
+            "must be a string",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return raw
+
+
+def _lit_registry_paths(lit: dict[str, Any] | None) -> tuple[Path, Path]:
+    """Resolve ``literature.registry`` / ``literature.triage`` (spec §8.3).
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :returns: ``(registry_path, triage_path)``.
+    :raises typer.Exit: Code 1 if either key is present but not a string.
+    """
+    registry = _lit_str(lit, "registry", _DEFAULT_REGISTRY_PATH)
+    triage = _lit_str(lit, "triage", _DEFAULT_TRIAGE_PATH)
+    return Path(registry), Path(triage)
+
+
+def _lit_cache_dir(config: dict[str, Any]) -> Path:
+    """Return the literature content-addressed cache dir, under the cache root.
+
+    :param config: The loaded configuration mapping.
+    :returns: ``<cache_root>/literature`` (see :func:`_cache_root`).
+    """
+    return _cache_root(config) / "literature"
+
+
+def _lit_acquisition(lit: dict[str, Any] | None) -> tuple[int, list[Any]]:
+    """Read ``literature.acquisition.{max_bytes,venue_resolvers}`` (spec §8.3).
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :returns: ``(max_bytes, venue_resolvers)``.
+    :raises typer.Exit: Code 1 if ``literature.acquisition`` is present but not
+        a mapping, or either sub-key has the wrong shape.
+    """
+    raw = lit.get("acquisition") if lit is not None else None
+    if raw is None:
+        return _DEFAULT_MAX_BYTES, []
+    if not isinstance(raw, dict):
+        typer.echo(
+            "invalid .defendable-science/config.yml: 'literature.acquisition' "
+            "must be a mapping",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    max_bytes = raw.get("max_bytes", _DEFAULT_MAX_BYTES)
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
+        typer.echo(
+            "invalid .defendable-science/config.yml: "
+            "'literature.acquisition.max_bytes' must be an integer",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    resolvers = raw.get("venue_resolvers", [])
+    if not isinstance(resolvers, list):
+        typer.echo(
+            "invalid .defendable-science/config.yml: "
+            "'literature.acquisition.venue_resolvers' must be a list",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return max_bytes, resolvers
+
+
+def _lit_mirror(lit: dict[str, Any] | None) -> Mirror | None:
+    """Build the literature :class:`Mirror` from ``literature.mirror`` config.
+
+    Any ``RCLONE_CONFIG_<REMOTE>_*`` credentials in the key store (or
+    environment) for this remote are handed to rclone as a scoped, in-memory
+    ``env`` (ADR-0029), matching the ``dataset`` mirror's own construction.
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :returns: The configured mirror, or ``None`` when ``literature.mirror`` is
+        unset.
+    :raises typer.Exit: Code 1 if ``literature.mirror`` is present but not a
+        mapping with a ``remote`` string, or ``base_path`` is present but not
+        a string.
+    """
+    raw = lit.get("mirror") if lit is not None else None
+    if raw is None:
+        return None
+    remote = raw.get("remote") if isinstance(raw, dict) else None
+    if not isinstance(remote, str) or not remote:
+        typer.echo(
+            "invalid .defendable-science/config.yml: 'literature.mirror' must "
+            "be a mapping with a 'remote' string",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    base_path = raw.get("base_path")
+    if base_path is not None and not isinstance(base_path, str):
+        typer.echo(
+            "invalid .defendable-science/config.yml: "
+            "'literature.mirror.base_path' must be a string",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    scoped = keys_mod.rclone_scoped_env(remote)
+    return Mirror(
+        remote=remote,
+        base_path=base_path or "",
+        config_path=".defendable-science/rclone.conf",
+        env=scoped or None,
+    )
+
+
+def _lit_context() -> acquire_mod.Context:
+    """Build the acquisition :class:`~defendable_science.literature.acquire.Context`.
+
+    Reads ``literature.registry``, ``literature.triage``, ``literature.mirror``
+    and ``literature.acquisition.{max_bytes,venue_resolvers}`` from
+    ``.defendable-science/config.yml`` (spec §8.3; all keys optional). The
+    HTTP client comes from :func:`_lit_client`, matching every other
+    ``literature`` command (tests monkeypatch it to inject a fake).
+
+    :returns: The context, ready for :func:`~defendable_science.literature.acquire.fetch_all`
+        or a single-entry acquisition call.
+    :raises typer.Exit: Code 1 on any malformed ``literature.*`` config key.
+    """
+    config = _load_config_or_exit()
+    lit = _lit_block(config)
+    registry_path, triage_path = _lit_registry_paths(lit)
+    max_bytes, resolvers = _lit_acquisition(lit)
+    return acquire_mod.Context(
+        registry_path=registry_path,
+        triage_path=triage_path,
+        cache_dir=_lit_cache_dir(config),
+        mirror=_lit_mirror(lit),
+        client=_lit_client(),
+        fetcher=stream_to_file,
+        max_bytes=max_bytes,
+        resolvers=resolvers,
+        today=date_cls.today().isoformat(),
+    )
+
+
+def _load_registry_or_exit(path: Path) -> registry_mod.Registry:
+    """Load the registry, exiting 1 on a :class:`RegistryError`.
+
+    :param path: The registry path (``literature.registry``).
+    :returns: The loaded registry.
+    :raises typer.Exit: Code 1 if the registry is missing or unparsable.
+    """
+    try:
+        return registry_mod.load_registry(path)
+    except registry_mod.RegistryError as exc:
+        typer.echo(f"registry error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _lit_entry_or_exit(
+    registry: registry_mod.Registry, citekey: str
+) -> registry_mod.Entry:
+    """Look up a citekey, exiting 1 if it's unknown.
+
+    :param registry: The loaded registry.
+    :param citekey: The CSL ``id`` to look up.
+    :returns: The entry.
+    :raises typer.Exit: Code 1 if `citekey` is not in the registry.
+    """
+    entry = registry.get(citekey)
+    if entry is None:
+        typer.echo(f"no entry {citekey!r} in the registry", err=True)
+        raise typer.Exit(code=1)
+    return entry
+
+
+def _one_of_citekey_or_all(citekey: str, all_flag: bool) -> list[str] | None:
+    """Enforce 'exactly one of CITEKEY or --all', resolving the sweep's targets.
+
+    :param citekey: The positional citekey, or ``""`` when omitted.
+    :param all_flag: Whether ``--all`` was given.
+    :returns: ``[citekey]`` to attempt a single entry, or ``None`` for the
+        whole registry (``--all``).
+    :raises typer.Exit: Code 2 if neither, or both, were given.
+    """
+    if bool(citekey) == all_flag:
+        typer.echo(
+            "give exactly one of CITEKEY or --all, not neither or both", err=True
+        )
+        raise typer.Exit(code=2)
+    return None if all_flag else [citekey]
+
+
+def _fetch_report_exit_code(report: dict[str, Any]) -> int:
+    """Return the sweep's exit code from its report.
+
+    :param report: The report returned by
+        :func:`~defendable_science.literature.acquire.fetch_all`.
+    :returns: ``1`` when ``errors`` is non-empty or ``complete`` is false — so
+        no agent or CI loop reads a half-swept registry as a finished one;
+        ``0`` otherwise.
+    """
+    if report.get("errors") or not report.get("complete", True):
+        return 1
+    return 0
+
+
+@literature.command(name="fetch")
+def lit_fetch(
+    citekey: Annotated[
+        str, typer.Argument(help="The citekey to fetch (omit with --all).")
+    ] = "",
+    fetch_all: Annotated[
+        bool, typer.Option("--all", help="Sweep every entry in the registry.")
+    ] = False,
+    disposition: Annotated[
+        str | None,
+        typer.Option(
+            "--disposition",
+            help="Restrict --all to entries with this triage.yml disposition.",
+        ),
+    ] = None,
+    refetch: Annotated[
+        bool,
+        typer.Option(
+            "--refetch", help="Re-run the ladder for an already-acquired entry."
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Report the rung that would land; write nothing."
+        ),
+    ] = False,
+) -> None:
+    """Acquire the PDF for one registry entry, or sweep the registry with ``--all``.
+
+    Prints the sweep report (spec §7) as JSON: ``complete``, ``not_attempted``,
+    and the ``fetched`` / ``cached`` / ``quarantined`` / ``manual`` /
+    ``committable`` / ``errors`` buckets.
+
+    :param citekey: The citekey to fetch; give exactly one of this or `fetch_all`.
+    :param fetch_all: Sweep every registry entry (optionally narrowed by
+        `disposition`).
+    :param disposition: Restrict `fetch_all` to entries whose ``triage.yml``
+        row carries this disposition. Naming `citekey` explicitly *and* giving
+        this is a conflict, reported as an ``errors[]`` row, not a silent
+        omission.
+    :param refetch: Re-run the acquisition ladder even for an entry with a
+        recorded checksum; drift refuses rather than rebinding.
+    :param dry_run: Report which rung would yield bytes without downloading or
+        writing anything.
+    :raises typer.Exit: Code 2 if neither, or both, of `citekey`/`fetch_all`
+        are given. Code 1 if the registry or triage sidecar can't be read, the
+        mirror transport fails (e.g. a missing ``rclone``), a metadata lookup
+        is rate-limited or fails, or the sweep's report carries any
+        ``errors[]`` row or is incomplete. Code 0 on a clean, complete sweep.
+    """
+    citekeys = _one_of_citekey_or_all(citekey, fetch_all)
+    ctx = _lit_context()
+    with _http_guard(ctx.client):
+        try:
+            report = acquire_mod.fetch_all(
+                ctx,
+                citekeys=citekeys,
+                disposition=disposition,
+                refetch=refetch,
+                dry_run=dry_run,
+            )
+        except registry_mod.RegistryError as exc:
+            typer.echo(f"fetch failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except RetrievalError as exc:
+            typer.echo(f"fetch failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(report, indent=2))
+    raise typer.Exit(code=_fetch_report_exit_code(report))
+
+
+@literature.command(name="confirm")
+def lit_confirm(
+    citekey: str,
+    sha256: Annotated[
+        str,
+        typer.Option("--sha256", help="Promote this quarantined checksum."),
+    ] = "",
+    file: Annotated[
+        str,
+        typer.Option("--file", help="Adopt this manually downloaded PDF (copied)."),
+    ] = "",
+) -> None:
+    """Promote a quarantined candidate, or adopt a manually downloaded PDF.
+
+    ``--sha256`` moves a quarantined blob into the content-addressed store
+    after human review. ``--file`` copies (never moves) a human-supplied PDF,
+    recording ``rung: manual`` and an empty, non-redistributable license —
+    this closes the ``manual[]`` worklist a fetch sweep leaves behind
+    (spec §7).
+
+    :param citekey: The registry entry to bind the bytes to.
+    :param sha256: The checksum naming a quarantined candidate to promote;
+        give exactly one of this or `file`.
+    :param file: Path to a human-downloaded PDF to adopt.
+    :raises typer.Exit: Code 2 if neither, or both, of `sha256`/`file` are
+        given. Code 1 if `citekey` is unknown, the quarantine lookup fails
+        (an unknown checksum, an unreadable file), or the outcome itself is an
+        error (a tampered quarantine blob, a non-PDF adoption). Code 0 on a
+        successful promotion or adoption.
+    """
+    if bool(sha256) == bool(file):
+        typer.echo(
+            "give exactly one of --sha256 or --file, not neither or both", err=True
+        )
+        raise typer.Exit(code=2)
+    ctx = _lit_context()
+    registry = _load_registry_or_exit(ctx.registry_path)
+    entry = _lit_entry_or_exit(registry, citekey)
+    try:
+        if sha256:
+            outcome = acquire_mod.confirm_quarantined(entry, ctx, sha256)
+        else:
+            outcome = acquire_mod.adopt_file(entry, ctx, Path(file))
+    except RetrievalError as exc:
+        typer.echo(f"confirm failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(outcome.as_json(), indent=2))
+    raise typer.Exit(code=1 if outcome.bucket == acquire_mod.BUCKET_ERROR else 0)
+
+
+@literature.command(name="verify")
+def lit_verify(
+    citekey: Annotated[
+        str, typer.Argument(help="The citekey to verify (omit with --all).")
+    ] = "",
+    verify_all: Annotated[
+        bool, typer.Option("--all", help="Verify every entry in the registry.")
+    ] = False,
+) -> None:
+    """Re-hash on-disk bytes against the registry's recorded checksum(s).
+
+    Offline — this never downloads, matching ``dataset verify``'s contract.
+    An entry with no recorded asset is reported as ``missing`` with an
+    explicit note, never as ``ok``: an unfetched paper must not read as
+    verified.
+
+    :param citekey: The citekey to verify; give exactly one of this or
+        `verify_all`.
+    :param verify_all: Verify every entry in the registry.
+    :raises typer.Exit: Code 2 if neither, or both, of `citekey`/`verify_all`
+        are given. Code 1 if the registry can't be read, `citekey` is
+        unknown, or any report is not ``ok``. Code 0 when every report is
+        ``ok``.
+    """
+    citekeys = _one_of_citekey_or_all(citekey, verify_all)
+    config = _load_config_or_exit()
+    lit = _lit_block(config)
+    registry_path, _triage_path = _lit_registry_paths(lit)
+    cache_dir = _lit_cache_dir(config)
+    registry = _load_registry_or_exit(registry_path)
+    if citekeys is not None:
+        entries = [_lit_entry_or_exit(registry, citekeys[0])]
+    else:
+        entries = list(registry.entries)
+    reports = [acquire_mod.verify_entry(e, cache_dir=cache_dir) for e in entries]
+    output: Any = (
+        reports[0].as_json() if citekeys is not None else [r.as_json() for r in reports]
+    )
+    typer.echo(json.dumps(output, indent=2))
+    raise typer.Exit(code=0 if all(r.ok for r in reports) else 1)
+
+
+@literature.command(name="mirror")
+def lit_mirror(
+    citekey: Annotated[
+        str, typer.Argument(help="The citekey to mirror (omit with --all).")
+    ] = "",
+    mirror_all: Annotated[
+        bool, typer.Option("--all", help="Mirror every entry in the registry.")
+    ] = False,
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Probe mirror presence; never push."),
+    ] = False,
+) -> None:
+    """Push a registry entry's recorded file(s) to the mirror, or probe with ``--check``.
+
+    A local blob is re-hashed before it is pushed; a mismatch is reported as
+    ``corrupt`` rather than ``missing``, since the human's next action differs
+    (investigate the local copy, most likely via ``fetch --refetch``, rather
+    than simply retrying the push).
+
+    :param citekey: The citekey to mirror; give exactly one of this or
+        `mirror_all`.
+    :param mirror_all: Mirror every entry in the registry.
+    :param check: Probe mirror presence without pushing anything.
+    :raises typer.Exit: Code 2 if neither, or both, of `citekey`/`mirror_all`
+        are given. Code 1 if ``literature.mirror`` is not configured, the
+        registry can't be read, `citekey` is unknown, the mirror transport
+        fails (e.g. a missing ``rclone``), or any file ends up ``missing`` or
+        ``corrupt``. Code 0 when every file is ``pushed`` or
+        ``already_present``.
+    """
+    citekeys = _one_of_citekey_or_all(citekey, mirror_all)
+    config = _load_config_or_exit()
+    lit = _lit_block(config)
+    registry_path, _triage_path = _lit_registry_paths(lit)
+    cache_dir = _lit_cache_dir(config)
+    mir = _lit_mirror(lit)
+    if mir is None:
+        typer.echo(
+            "no 'literature.mirror' configured in .defendable-science/config.yml",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    registry = _load_registry_or_exit(registry_path)
+    try:
+        if citekeys is not None:
+            entries = [_lit_entry_or_exit(registry, citekeys[0])]
+        else:
+            entries = list(registry.entries)
+        reports = [
+            acquire_mod.mirror_entry(
+                e, cache_dir=cache_dir, mirror=mir, check_only=check
+            )
+            for e in entries
+        ]
+    except RetrievalError as exc:
+        typer.echo(f"mirror failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    output: Any = reports[0] if citekeys is not None else reports
+    typer.echo(json.dumps(output, indent=2))
+    ok = all(not r["missing"] and not r["corrupt"] for r in reports)
+    raise typer.Exit(code=0 if ok else 1)
 
 
 # --- dataset (defendable-science#2 manifest / #3 retrieval) ---------------------------
