@@ -47,7 +47,7 @@ guide shows the real invocation each time so you can.
 Everything the capability knows lives in two git-tracked files, joined by citekey
 (or DOI). By default:
 
-```
+```text
 docs/research/literature/references.json   # bibliographic facts — the source of truth
 docs/research/literature/triage.yml        # your decisions about each paper
 ```
@@ -211,7 +211,8 @@ downloading anything:
 defendable-science literature fetch sill1997monotonic --dry-run
 ```
 
-Real output from that command, for the survey's oldest anchor:
+Real output from that command, for the survey's oldest anchor — verbatim, all
+thirteen keys of a report row:
 
 ```json
 {
@@ -224,16 +225,37 @@ Real output from that command, for the survey's oldest anchor:
       "sha256": null,
       "rung": "openalex-landing",
       "url": "https://papers.nips.cc/paper/1358-monotonic-networks.pdf",
-      "match": {"verdict": "identity", "title": null, "author": null, "year": null, "reason": null},
+      "candidate": {
+        "url": "https://papers.nips.cc/paper/1358-monotonic-networks.pdf",
+        "rung": "openalex-landing",
+        "title": "Monotonic Networks",
+        "year": 1997,
+        "first_author_family": "Sill",
+        "openalex": "W2293093810",
+        "license": null
+      },
+      "match": {
+        "verdict": "identity",
+        "title": null,
+        "author": null,
+        "year": null,
+        "reason": null
+      },
       "reason": null,
-      "tried": ["openalex-landing"],
+      "tried": [
+        "openalex-landing"
+      ],
       "landing_urls": [],
       "committable": false,
       "path": null,
       "license": null
     }
   ],
-  "cached": [], "quarantined": [], "manual": [], "committable": [], "errors": []
+  "cached": [],
+  "quarantined": [],
+  "manual": [],
+  "committable": [],
+  "errors": []
 }
 ```
 
@@ -270,10 +292,52 @@ recorded bytes say it is.
 
 ### Step 5 — work the report buckets
 
-`fetch --all` prints one report with six buckets. §4 is the table of what each one
-means and what you do about it. The short version: `cached` and `fetched` need
-nothing, `quarantined` and `manual` are your worklists, `committable` is an
-offer, and `errors` is the tool's fault rather than the paper's.
+`fetch --all` prints one report with six buckets, each row carrying its full
+provenance. That is a lot of JSON to read at once, so the fastest way to see where
+a sweep landed is to collapse each bucket to its citekeys:
+
+```bash
+defendable-science literature fetch --all --disposition screened \
+  | jq 'with_entries(if (.value|type)=="array" then .value |= map(.citekey) else . end)'
+```
+
+Real output, over a five-entry slice of the survey's screened set, on a first run
+(run it again and those three come back under `cached[]` instead):
+
+```json
+{
+  "complete": true,
+  "not_attempted": 0,
+  "fetched": [
+    "sill1997monotonic",
+    "polo2025monokan",
+    "kitouni2023expressive"
+  ],
+  "cached": [],
+  "quarantined": [],
+  "manual": [
+    "daniels2010monotone"
+  ],
+  "committable": [
+    "kitouni2023expressive"
+  ],
+  "errors": [
+    "igel2023smooth"
+  ]
+}
+```
+
+Read left to right, that is: three PDFs acquired, one of them permissively
+licensed and so also offered in `committable[]` (the same row, listed twice — the
+buckets are not disjoint), one paywalled paper for your hands, and one entry the
+tool could not even try because its registry row has no identifier. That command
+**exits 1**, because `errors[]` is non-empty — a sweep with an error is not a
+finished sweep, and no CI loop should read it as one.
+
+§4 is the table of what each bucket means and what you do about it. The short
+version: `cached` and `fetched` need nothing, `quarantined` and `manual` are your
+worklists, `committable` is an offer, and `errors` is about the tooling or the
+registry row, never a verdict on the paper.
 
 ### Step 6 — read, with the comprehension check
 
@@ -311,15 +375,37 @@ looking for one.
 | `committable` | the observed license is on the shipped permissive allowlist, so you *may* keep an in-repo copy | copy the blob into the repo yourself, if you want to. Nothing is copied for you |
 | `errors` | a tooling or metadata failure — a rate limit, a transport error, an unresolvable identifier, a conflicting request. **Not** a statement about the paper | fix or retry. Never treat this as "no PDF exists" |
 
-Three properties of the report worth knowing before you script against it:
+Four properties of the report worth knowing before you script against it:
 
 - **The buckets are not disjoint.** A permissively-licensed paper appears in
   `fetched[]` *and* in `committable[]` — the same row object, twice.
-- **Every row carries the full outcome shape**, not a per-bucket projection. A
-  `fetched` row can legitimately carry a `reason`: the bytes landed and verified
-  in the cache but the *mirror* write then failed. Projecting that row down to
-  `{citekey, sha256, rung, url}` would hide a partial failure, which is the one
-  thing this tool must not do.
+- **A row that came from an attempt carries the full outcome shape** — thirteen
+  keys — not a per-bucket projection. A `fetched` row can legitimately carry a
+  `reason`: the bytes landed and verified in the cache but the *mirror* write then
+  failed. Projecting that row down to `{citekey, sha256, rung, url}` would hide a
+  partial failure, which is the one thing this tool must not do.
+- **`errors[]` has two row shapes, and this is the one place the uniformity above
+  does not hold.** An entry the tool actually tried carries the full shape with
+  its message under `error`:
+
+  ```json
+  {"citekey": "igel2023smooth", "bucket": "errors", "sha256": null, "rung": null,
+   "url": null, "candidate": null, "match": null, "tried": [], "landing_urls": [],
+   "committable": false, "path": null, "license": null,
+   "error": "no DOI and no recorded identifier on the entry — nothing to resolve; add a 'DOI' field to the registry entry first"}
+  ```
+
+  But three failures happen *before* any attempt exists to describe — an unknown
+  citekey, a citekey you named explicitly that `--disposition` would have excluded,
+  and the rate-limit abort — and those are synthesized as a bare pair:
+
+  ```json
+  {"citekey": "nosuchkey2020", "error": "no entry 'nosuchkey2020' in the registry"}
+  ```
+
+  Both spell the message `error` rather than `reason`, so you never have to check
+  two keys for the same information. But if you read `.bucket` or `.tried` off an
+  `errors[]` row, guard for their absence.
 - **`complete` and `not_attempted` are the honesty fields.** A provider throttle
   aborts the sweep with `complete: false` and a count of entries never attempted,
   rather than reporting the remaining papers as `manual`. Being rate-limited is
@@ -354,15 +440,26 @@ Click a landing URL, get the PDF through your institutional access, then adopt i
 defendable-science literature confirm daniels2010monotone --file ~/Downloads/daniels-2010-monotone.pdf
 ```
 
+What it prints. Every value below is the real shape of an adoption outcome, with
+one deliberate exception: the checksum is written as a placeholder, because this
+paper's PDF is paywalled and we cannot hand you bytes to reproduce it from. Every
+other hash on this page is the true hash of bytes you can re-fetch yourself, and
+printing some other paper's checksum here would quietly break that.
+
 ```json
 {
   "citekey": "daniels2010monotone",
   "bucket": "fetched",
-  "sha256": "6b071e825203d8abf9a3f2a0102650b53c2346bbf538c7896230f98ae15ed793",
+  "sha256": "<sha256 of the file you supplied>",
   "rung": "manual",
+  "url": null,
+  "candidate": null,
   "match": {"verdict": "identity", "title": null, "author": null, "year": null, "reason": null},
+  "reason": null,
+  "tried": [],
+  "landing_urls": [],
   "committable": false,
-  "path": ".defendable-science/cache/literature/sha256/6b071e82…",
+  "path": ".defendable-science/cache/literature/sha256/<that same sha256>",
   "license": null
 }
 ```
@@ -571,7 +668,7 @@ rather than `missing`, because your next move differs: investigate the local cop
 (probably `fetch --refetch`) rather than simply retrying the push. With no
 `literature.mirror` configured it says so and exits 1:
 
-```
+```text
 no 'literature.mirror' configured in .defendable-science/config.yml
 ```
 
