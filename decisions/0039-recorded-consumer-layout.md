@@ -127,7 +127,15 @@ actionable message, matching the config-error convention ADR-0031 established
   `--paper-root` and `--research-root` become `None`-defaulted overrides
   resolved from the layout (an explicit value still wins), and the literature
   registry/triage defaults now come from the layout rather than from module-level
-  path literals. There is no longer any hard-coded consumer path in the CLI.
+  path literals.
+- **`datasets_manifest` is recordable but not yet routed.** The `dataset`
+  commands still take the manifest as an argument defaulting to the literal
+  `datasets.yml`, so a repo that records `datasets_manifest: data/datasets.yml`
+  is validated and resolved correctly and then ignored by the only commands that
+  read a manifest. Recording a key the tooling does not honour is precisely the
+  failure this ADR exists to end, so it is tracked as
+  [#124](https://github.com/davorrunje/defendable-science/issues/124) rather than
+  left implied by the key's existence.
 - **A known asymmetry, stated rather than hidden:** `layout:` keys are confined
   to the repository, but `cache_dir` is only *anchored*, not confined, so
   `cache_dir: ../../elsewhere` still escapes. ADR-0031 deliberately allows an
@@ -172,7 +180,9 @@ actionable message, matching the config-error convention ADR-0031 established
   decision), [#120](https://github.com/davorrunje/defendable-science/issues/120)
   (`init`), [#121](https://github.com/davorrunje/defendable-science/issues/121)
   (`check`), [#123](https://github.com/davorrunje/defendable-science/issues/123)
-  (the `cache_dir` confinement follow-up)
+  (the `cache_dir` confinement follow-up),
+  [#124](https://github.com/davorrunje/defendable-science/issues/124)
+  (routing `datasets_manifest` into the `dataset` commands)
 - ADR-0031 (`0031-config-driven-cache-dir.md`) — the config-driven-path precedent
   this mirrors; ADR-0017 (`research-init`: one skill, two modes) — why `adopt`
   needs a recordable layout; ADR-0018 (git-native source of truth) — why it is
