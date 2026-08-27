@@ -75,6 +75,23 @@ if TYPE_CHECKING:
         ) -> str:
             """Return the raw response body for `url`."""
 
+    class MirrorClient(Protocol):
+        """The subset of :class:`~defendable_science.core.mirror.Mirror` `mirror_entry` needs.
+
+        A narrow structural type — like `SearchClient` above — rather than a
+        hard dependency on the concrete `Mirror` dataclass, so a probe-and-push
+        maintenance sweep is exercised with any stand-in that shapes up
+        (a fake in tests, `Mirror` itself in production) without a `cast` at
+        every call site. `mirror_entry` only ever probes and pushes; it never
+        resolves bytes, so `get` is deliberately not part of this shape.
+        """
+
+        def check(self, sha256: str) -> bool:
+            """Return whether the mirror holds the key."""
+
+        def put(self, local: str | Path, sha256: str) -> None:
+            """Copy `local` to the content-addressed mirror key."""
+
 # --- rungs ------------------------------------------------------------------
 
 RUNG_OA_BEST = "openalex-best"
@@ -2061,7 +2078,7 @@ def verify_entry(entry: Entry, *, cache_dir: Path) -> VerifyReport:
 
 
 def mirror_entry(
-    entry: Entry, *, cache_dir: Path, mirror: Mirror, check_only: bool = False
+    entry: Entry, *, cache_dir: Path, mirror: MirrorClient, check_only: bool = False
 ) -> dict[str, Any]:
     """Push an entry's recorded file(s) to the mirror, or probe presence only.
 
@@ -2075,17 +2092,34 @@ def mirror_entry(
     and folding the former into the latter is exactly the failure the
     substrate rule (spec §9) exists to prevent.
 
+    **A local blob is re-hashed before it is pushed.** Every other path that
+    calls :meth:`Mirror.put` in this codebase does so immediately after
+    hashing freshly-landed bytes (`_populate_mirror` here;
+    ``dataset.retrieval``'s Tier-B hop is the same shape) — the bytes and the
+    checksum are contemporaneous. A maintenance sweep has no such guarantee:
+    the blob may have bit-rotted since acquisition, and spec §9 already
+    names a corrupt cache blob as something to treat as absent, not as
+    something to propagate. Pushing it anyway would turn the mirror — kept
+    precisely as insurance against link rot and paywalls — into a second
+    copy of the damage. A checksum mismatch is therefore routed to
+    `corrupt`, not `missing`: the human's next action differs (investigate
+    the local copy, most likely via `re-fetch`, rather than simply retry the
+    push).
+
     :param entry: The registry entry to mirror. An entry with no recorded
         asset has nothing to push; it is reported entirely under `missing`.
     :param cache_dir: The content-addressed cache root, to find the local
         blob to push.
-    :param mirror: The configured mirror.
+    :param mirror: The configured mirror (or any stand-in shaped like
+        :class:`MirrorClient`).
     :param check_only: Probe presence without pushing anything.
     :returns: A JSON-ready per-file report: ``citekey``, ``pushed`` (newly
         pushed this call), ``already_present`` (the mirror already had it),
-        and ``missing`` (still not confirmed in the mirror after this call —
+        ``missing`` (still not confirmed in the mirror after this call —
         because `check_only` skipped the push, because there is no local
-        blob to push, or because the entry records no asset at all).
+        blob to push, or because the entry records no asset at all), and
+        ``corrupt`` (a local blob whose bytes no longer match the recorded
+        checksum — never pushed).
     :raises RetrievalError: If the mirror transport itself fails (a missing
         ``rclone`` binary, or a push that fails) — surfaced intact rather
         than folded into `missing`.
@@ -2095,6 +2129,7 @@ def mirror_entry(
         "pushed": [],
         "already_present": [],
         "missing": [],
+        "corrupt": [],
     }
     asset = entry.asset
     if asset is None or not asset.files:
@@ -2111,6 +2146,14 @@ def mirror_entry(
         blob = blob_path(cache_dir, ref.sha256)
         if not blob.is_file():
             report["missing"].append(sha)
+            continue
+        try:
+            digest = sha256_file(blob)
+        except OSError:
+            report["corrupt"].append(sha)
+            continue
+        if digest != sha:
+            report["corrupt"].append(sha)
             continue
         mirror.put(blob, sha)
         report["pushed"].append(sha)

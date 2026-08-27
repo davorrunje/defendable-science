@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pytest
 
@@ -14,9 +14,6 @@ from defendable_science.core.fixity import RetrievalError
 from defendable_science.core.http import HttpError, RateLimitError
 from defendable_science.literature import acquire as a
 from defendable_science.literature import registry as reg
-
-if TYPE_CHECKING:
-    from defendable_science.core.mirror import Mirror
 
 
 def _entry(
@@ -2370,15 +2367,14 @@ def test_mirror_entry_pushes_a_locally_cached_file(tmp_path: Path) -> None:
     _seed_blob(tmp_path)
     mirror = FakeMirror()  # not yet present in the mirror
 
-    report = a.mirror_entry(
-        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-    )
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
     assert report == {
         "citekey": entry.citekey,
         "pushed": [PDF_SHA],
         "already_present": [],
         "missing": [],
+        "corrupt": [],
     }
     assert mirror.puts == [(str(tmp_path / "cache" / "sha256" / PDF_SHA), PDF_SHA)]
 
@@ -2390,9 +2386,7 @@ def test_mirror_entry_reports_an_already_present_file_without_pushing(
     _seed_blob(tmp_path)
     mirror = FakeMirror(present=True)
 
-    report = a.mirror_entry(
-        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-    )
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
     assert report["already_present"] == [PDF_SHA]
     assert report["pushed"] == []
@@ -2407,7 +2401,7 @@ def test_mirror_entry_check_only_never_pushes(tmp_path: Path) -> None:
     report = a.mirror_entry(
         entry,
         cache_dir=tmp_path / "cache",
-        mirror=cast("Mirror", mirror),
+        mirror=mirror,
         check_only=True,
     )
 
@@ -2423,9 +2417,7 @@ def test_mirror_entry_with_no_local_blob_reports_missing_without_pushing(
     # No blob seeded: nothing local to push, even though the mirror lacks it too.
     mirror = FakeMirror(present=False)
 
-    report = a.mirror_entry(
-        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-    )
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
     assert report["missing"] == [PDF_SHA]
     assert report["pushed"] == []
@@ -2439,9 +2431,7 @@ def test_mirror_entry_with_no_asset_reports_missing_without_probing(
     assert entry.asset is None
     mirror = FakeMirror()
 
-    report = a.mirror_entry(
-        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-    )
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
     assert report["pushed"] == []
     assert report["already_present"] == []
@@ -2454,9 +2444,7 @@ def test_mirror_entry_with_asset_but_no_files_reports_missing(tmp_path: Path) ->
     _path, entry = _registry(tmp_path, spine=_spine(files=[]))
     mirror = FakeMirror()
 
-    report = a.mirror_entry(
-        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-    )
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
     assert len(report["missing"]) == 1
     assert mirror.checks == []
@@ -2473,8 +2461,46 @@ def test_mirror_entry_propagates_a_missing_rclone_binary_intact(
     )
 
     with pytest.raises(RetrievalError, match="rclone not found"):
-        a.mirror_entry(
-            entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
-        )
+        a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
 
+    assert mirror.puts == []
+
+
+def test_mirror_entry_refuses_to_push_a_bit_rotted_local_blob(tmp_path: Path) -> None:
+    """A local blob whose bytes no longer match the recorded checksum.
+
+    The mirror exists as insurance against link rot and paywalls; pushing
+    corrupt bytes into it would turn the backup into a second copy of the
+    damage (spec §9 already treats a corrupt cache blob as absent — the
+    same rule literature's own `verify_entry` applies).
+    """
+    _path, entry = _registry(tmp_path, spine=_spine())
+    blob = tmp_path / "cache" / "sha256" / PDF_SHA
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(OTHER_PDF)  # bit-rot: wrong bytes under the recorded hash
+    mirror = FakeMirror(present=False)
+
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
+
+    assert report["corrupt"] == [PDF_SHA]
+    assert report["pushed"] == []
+    assert report["missing"] == []
+    assert mirror.puts == []
+
+
+def test_mirror_entry_unreadable_local_blob_is_corrupt_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)
+    mirror = FakeMirror(present=False)
+
+    def _boom(_p: object, **_kw: object) -> str:
+        raise PermissionError("unreadable")
+
+    monkeypatch.setattr(a, "sha256_file", _boom)
+    report = a.mirror_entry(entry, cache_dir=tmp_path / "cache", mirror=mirror)
+
+    assert report["corrupt"] == [PDF_SHA]
+    assert report["pushed"] == []
     assert mirror.puts == []
