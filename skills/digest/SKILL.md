@@ -40,10 +40,14 @@ The core is the same retrieval-practice loop as `defend`, run per load-bearing
 point until it holds or you elect to stop and record the gap.
 
 1. **Scope.** Resolve the paper against the `literature` registry
-   (`references.json`) — if it isn't there yet, `resolve`/`enrich` it first via
-   the `literature` CLI, so the digest is grounded in a real registry entry +
-   mirrored PDF (cache → mirror → source chain, SHA-256), never a bare URL or
-   an unmirrored link.
+   (`references.json`) — `literature resolve` it if absent, then `literature
+   fetch <citekey>` to acquire and record the PDF (cache → mirror → source
+   chain, SHA-256). `literature verify <citekey>` re-checks the bytes offline
+   on a later run. If `fetch` reports the paper in `manual[]` (the
+   acquisition ladder found nothing), acquire it by hand and record it with
+   `literature confirm <citekey> --file <path>`. This grounds the digest in a
+   real registry entry + mirrored PDF, never a bare URL or an unmirrored
+   link.
 2. **Probe** one load-bearing point at a time, open-ended: the problem it
    addresses, the method, the key result, its assumptions, its limitations,
    and — when you already have a hypothesis or paper this reading relates to —

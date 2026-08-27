@@ -110,6 +110,19 @@ fixity checks. The mirror is populated on first successful acquisition, giving
 link-rot insurance (dataset Tier B) and a re-acquirable home for gated assets
 (dataset Tier C, or paywalled PDFs).
 
+**Step 3 has two variants, because the two front-ends differ in what they
+already know.** `dataset` treats its manifest `sha256` as a pre-known trust
+anchor: step 3 *verifies* bytes against a hash the registry already recorded,
+and a mismatch is discarded as absent. `literature` usually has no hash to
+check against on first acquisition — a paper enters the registry before its
+PDF is ever fetched — so its step 3 *establishes* the hash instead: it runs
+an acquisition ladder (sub-spec 2 §5) and substitutes the ladder's metadata
+match gate for the absent trust anchor, computing and recording the SHA-256
+from the accepted bytes. Once that hash is recorded, `literature` rejoins
+`dataset`'s contract exactly — `--refetch` yielding different bytes is drift,
+refused and reported rather than silently accepted as a new trusted hash (see
+ADR-0037).
+
 ### 2.5 License / redistribution rule (shared, non-negotiable)
 
 Redistribution rights are set by the **license**, recorded on the base record,
