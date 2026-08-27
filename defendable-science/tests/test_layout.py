@@ -129,9 +129,18 @@ def test_a_non_mapping_layout_block_is_an_error() -> None:
         lay.resolve_layout({"layout": ["writing/"]}, Path("/repo"))
 
 
-def test_a_non_string_layout_value_is_an_error() -> None:
-    with pytest.raises(lay.LayoutError, match="must be a string"):
-        lay.resolve_layout({"layout": {"research_root": 7}}, Path("/repo"))
+@pytest.mark.parametrize(
+    ("bad_value", "expected_type"), [(7, "int"), (["writing/"], "list")]
+)
+def test_a_non_string_layout_value_is_an_error(
+    bad_value: Any, expected_type: str
+) -> None:
+    with pytest.raises(lay.LayoutError) as excinfo:
+        lay.resolve_layout({"layout": {"research_root": bad_value}}, Path("/repo"))
+
+    message = str(excinfo.value)
+    assert "must be a string" in message
+    assert expected_type in message
 
 
 @pytest.mark.parametrize("bad", ["/etc/passwd", "../outside", "writing/../../outside"])
@@ -143,3 +152,46 @@ def test_a_path_escaping_the_repo_is_refused(bad: str) -> None:
 def test_a_null_layout_value_falls_back_to_the_default() -> None:
     out = lay.resolve_layout({"layout": {"thesis_dir": None}}, Path("/repo"))
     assert out.thesis_dir == Path("/repo/docs/research/thesis")
+
+
+def test_a_mixed_type_key_set_is_an_error_that_lists_valid_keys() -> None:
+    with pytest.raises(lay.LayoutError) as excinfo:
+        lay.resolve_layout({"layout": {1: "x", "papers_dir": "y"}}, Path("/repo"))
+
+    message = str(excinfo.value)
+    # Both offending keys should be mentioned
+    assert "1" in message
+    assert "papers_dir" in message
+    # Valid keys should be listed
+    for key in lay.LAYOUT_KEYS:
+        assert key in message
+
+
+def test_an_empty_string_layout_value_is_an_error() -> None:
+    with pytest.raises(lay.LayoutError, match="must be a non-empty path"):
+        lay.resolve_layout({"layout": {"research_root": ""}}, Path("/repo"))
+
+
+def test_research_root_as_dot_resolves_to_the_repo_root() -> None:
+    out = lay.resolve_layout({"layout": {"research_root": "."}}, Path("/repo"))
+
+    assert out.research_root == Path("/repo")
+    assert out.literature_dir == Path("/repo/literature")
+    assert out.thesis_dir == Path("/repo/thesis")
+
+
+def test_repo_root_with_dotdot_is_canonicalized() -> None:
+    # repo_root contains ".." which needs canonicalization for rel() to work.
+    out = lay.resolve_layout(
+        {"layout": {"research_root": "writing/"}},
+        Path("/repo/sub/.."),
+    )
+
+    # All paths should be under the canonical /repo
+    assert out.repo_root == Path("/repo")
+    assert out.research_root == Path("/repo/writing")
+    # rel() should work on all fields, returning them as repo-relative
+    assert out.rel(out.research_root) == Path("writing")
+    assert out.rel(out.literature_dir) == Path("writing/literature")
+    assert out.rel(out.datasets_manifest) == Path("datasets.yml")
+    assert out.rel(out.thesis_dir) == Path("writing/thesis")

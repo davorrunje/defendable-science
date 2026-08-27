@@ -183,24 +183,27 @@ def _relative(key: str, raw: object, default: Path, repo_root: Path) -> Path:
     :param key: The layout key, for error messages.
     :param raw: The configured value; ``None`` means "use the default".
     :param default: The absolute default for this key.
-    :param repo_root: The repository root.
+    :param repo_root: The repository root (must be canonical).
     :returns: The absolute resolved path.
-    :raises LayoutError: If `raw` is not a string, or points outside the repo.
-        A key pointing outside the work tree would let ``init`` and ``check``
-        read and write beyond the repository, which an integrity tool must not do.
+    :raises LayoutError: If `raw` is not a non-empty string, or points outside
+        the repo. A key pointing outside the work tree would let ``init`` and
+        ``check`` read and write beyond the repository, which an integrity tool
+        must not do.
     """
     if raw is None:
         return default
     if not isinstance(raw, str):
         msg = f"layout.{key} must be a string, got {type(raw).__name__}"
         raise LayoutError(msg)
+    if not raw:
+        msg = f"layout.{key} must be a non-empty path"
+        raise LayoutError(msg)
     candidate = Path(raw)
     if candidate.is_absolute():
         msg = f"layout.{key} must stay inside the repository: {raw!r} is absolute"
         raise LayoutError(msg)
     resolved = (repo_root / candidate).resolve()
-    root = repo_root.resolve()
-    if resolved != root and root not in resolved.parents:
+    if resolved != repo_root and repo_root not in resolved.parents:
         msg = f"layout.{key} must stay inside the repository: {raw!r} escapes it"
         raise LayoutError(msg)
     return resolved
@@ -220,14 +223,17 @@ def resolve_layout(config: Mapping[str, Any], repo_root: Path) -> Layout:
     :raises LayoutError: On a non-mapping block, an unknown key, a non-string
         value, or a path that escapes the repository.
     """
+    repo_root = repo_root.resolve()
     default = Layout.default(repo_root)
     raw = config.get("layout")
     if raw is None:
         return default
+    # Check for dict only (not Mapping), which is deliberate: config always
+    # arrives from yaml.safe_load(), which produces dict, not a Mapping subclass.
     if not isinstance(raw, dict):
         msg = f"layout: must be a mapping of {list(LAYOUT_KEYS)}"
         raise LayoutError(msg)
-    unknown = sorted(k for k in raw if k not in LAYOUT_KEYS)
+    unknown = sorted(str(k) for k in raw if k not in LAYOUT_KEYS)
     if unknown:
         msg = f"unknown layout key(s) {unknown}; valid keys are {list(LAYOUT_KEYS)}"
         raise LayoutError(msg)
