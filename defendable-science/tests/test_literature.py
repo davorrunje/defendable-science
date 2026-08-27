@@ -19,14 +19,23 @@ runner = CliRunner()
 
 class FakeResponse:
     def __init__(
-        self, status_code: int, payload: Any, headers: dict[str, str] | None = None
+        self,
+        status_code: int,
+        payload: Any,
+        headers: dict[str, str] | None = None,
+        text: str | None = None,
     ) -> None:
         self.status_code = status_code
         self._payload = payload
         self.headers: dict[str, str] = headers or {}
+        self._text = text
 
     def json(self) -> Any:
         return self._payload
+
+    @property
+    def text(self) -> str:
+        return self._text if self._text is not None else json.dumps(self._payload)
 
 
 class FakeSession:
@@ -122,6 +131,48 @@ def test_http_corrupt_cache_is_refetched_not_traceback(tmp_path: Any) -> None:
     assert client.get_json("https://x") == {"n": 1}
     assert len(session.calls) == 1
     assert not (tmp_path / f"{key}.json.tmp").exists()
+
+
+# --- get_text (task 9, feeds arxiv_candidates' non-JSON Atom response) ------
+
+
+def test_http_get_text_ok() -> None:
+    session = FakeSession({"https://x": FakeResponse(200, None, text="<feed/>")})
+    client = http.HttpClient(session=session, sleep=lambda _s: None, cache_dir=None)
+    assert client.get_text("https://x") == "<feed/>"
+
+
+def test_http_get_text_adds_mailto() -> None:
+    session = FakeSession({"https://x": FakeResponse(200, None, text="ok")})
+    client = http.HttpClient(
+        session=session, mailto="me@x.org", sleep=lambda _s: None, cache_dir=None
+    )
+    client.get_text("https://x")
+    assert session.calls[0][1] is not None
+    assert session.calls[0][1]["mailto"] == "me@x.org"
+
+
+def test_http_get_text_rate_limit_propagates() -> None:
+    """A throttle is never a 'no results' — ``get_text`` must raise, same as JSON."""
+    session = FakeSession({"https://x": FakeResponse(429, {})})
+    client = http.HttpClient(
+        session=session, sleep=lambda _s: None, cache_dir=None, max_retries=2
+    )
+    with pytest.raises(http.RateLimitError, match="giving up"):
+        client.get_text("https://x")
+
+
+def test_http_get_text_is_not_cached() -> None:
+    """No on-disk cache for text.
+
+    Unlike ``get_json``, ``get_text`` has no on-disk cache (``JsonValue`` is
+    dict/list only, so a raw string cannot be stored through the same path).
+    """
+    session = FakeSession({"https://x": [FakeResponse(200, None, text="a")] * 2})
+    client = http.HttpClient(session=session, sleep=lambda _s: None, cache_dir=None)
+    assert client.get_text("https://x") == "a"
+    assert client.get_text("https://x") == "a"
+    assert len(session.calls) == 2
 
 
 # --- graph ------------------------------------------------------------------

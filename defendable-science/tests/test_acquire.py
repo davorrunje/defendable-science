@@ -537,3 +537,257 @@ def test_blank_display_name_yields_no_family_name() -> None:
         "best_oa_location": {"pdf_url": "http://x/p.pdf"},
     }
     assert a.identity_candidates(work)[0].first_author_family is None
+
+
+# --- rungs 4-6 (search-derived, task 9) -------------------------------------
+
+
+class FakeClient:
+    """A stand-in for HttpClient that serves canned JSON/text by URL substring.
+
+    Not from the brief: routes below are keyed ``"/works"`` rather than the
+    brief's ``"/works?"`` -- ``sibling_candidates`` calls
+    ``client.get_json(f"{OPENALEX}/works", {...})`` with params passed
+    separately (never embedded into the URL string as a literal ``?``), so the
+    brief's fragment would never match and every rung-4 test would raise
+    "unrouted URL" rather than exercising the code.
+    """
+
+    def __init__(self, routes: dict[str, Any]) -> None:
+        self.routes = routes
+        self.calls: list[tuple[str, dict[str, str] | None]] = []
+        self.s2_key: str | None = None
+        self.max_retries = 4
+
+    def get_json(
+        self, url: str, params: dict[str, str] | None = None, *, s2: bool = False
+    ) -> Any:
+        self.calls.append((url, params))
+        for fragment, payload in self.routes.items():
+            if fragment in url:
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
+        raise AssertionError(f"unrouted URL: {url}")
+
+    # Not from the brief (Correction 1): the brief's FakeClient defines only
+    # get_json, so arxiv_candidates (which calls client.get_text) was never
+    # actually exercised by the brief's rung-5 tests -- only parse_arxiv_feed
+    # was. Routes by the same URL-substring convention as get_json.
+    def get_text(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        self.calls.append((url, params))
+        for fragment, payload in self.routes.items():
+            if fragment in url:
+                if isinstance(payload, Exception):
+                    raise payload
+                return cast("str", payload)
+        raise AssertionError(f"unrouted URL: {url}")
+
+
+def test_rung_4_finds_the_monokan_sibling() -> None:
+    """The registry entry is the closed journal work; the PDF is on the sibling."""
+    journal = _work("monokan_journal")
+    arxiv = _work("monokan_arxiv")
+    client = FakeClient({"/works": {"results": [journal, arxiv]}})
+    entry = _entry(
+        citekey="monokan",
+        title=journal["display_name"],
+        year=journal["publication_year"],
+        family="Polo-Molina",
+    )
+    cands = a.sibling_candidates(entry, journal, client=client)
+    assert cands
+    assert all(c.rung == a.RUNG_SIBLING for c in cands)
+    # Not from the brief: the fixture's arXiv PDF URLs have no literal ".pdf"
+    # suffix (e.g. "https://arxiv.org/pdf/2409.11078"), so the brief's own
+    # ".pdf" in c.url assertion could never pass against this fixture.
+    assert any("arxiv.org/pdf" in c.url for c in cands)
+
+
+def test_rung_4_excludes_the_anchor_itself() -> None:
+    work = _work("monokan_arxiv")
+    client = FakeClient({"/works": {"results": [work]}})
+    entry = _entry(citekey="k", title=work["display_name"], year=2024, family="X")
+    assert a.sibling_candidates(entry, work, client=client) == []
+
+
+def test_rung_4_skips_works_with_a_different_normalized_title() -> None:
+    other = dict(_work("monokan_arxiv"), id="https://openalex.org/W999")
+    other["display_name"] = "Something Else Entirely"
+    client = FakeClient({"/works": {"results": [other]}})
+    entry = _entry(
+        citekey="k", title="MonoKAN: Certified monotonic", year=2025, family="X"
+    )
+    assert a.sibling_candidates(entry, _work("monokan_journal"), client=client) == []
+
+
+def test_rung_4_without_a_registry_title_returns_nothing() -> None:
+    client = FakeClient({})
+    assert a.sibling_candidates(_entry(title=None), {}, client=client) == []
+
+
+def test_rung_4_tolerates_a_non_dict_page() -> None:
+    client = FakeClient({"/works": ["junk"]})
+    assert a.sibling_candidates(_entry(), _work("sill1997"), client=client) == []
+
+
+# Not from the brief: closes a coverage gap the brief's own test suite left --
+# a "results" entry that is not itself a dict (a malformed hit, distinct from
+# a malformed *page*, which test_rung_4_tolerates_a_non_dict_page covers).
+def test_rung_4_skips_a_non_dict_result_entry() -> None:
+    client = FakeClient({"/works": {"results": ["junk"]}})
+    assert a.sibling_candidates(_entry(), _work("sill1997"), client=client) == []
+
+
+# Not from the brief (Correction 2): the brief's rung-4 pre-filter required
+# normalized-title *equality*, which is stricter than the gate it feeds -- a
+# genuine sibling whose journal version added a subtitle would be discarded
+# before evaluate_match ever saw it. Spec amended in d325055; see
+# docs/superpowers/specs/2026-08-27-literature-asset-acquisition-design.md §5.1.
+# This proves the widened pre-filter (same exact-or-word-prefix-containment
+# relation _title_axis implements) now *proposes* such a sibling, and that it
+# is the gate -- not the pre-filter -- that decides the verdict.
+def test_rung_4_proposes_a_subtitle_extended_sibling_and_the_gate_decides() -> None:
+    """A pre-filter must never preempt the adjudicator (spec §5.1, amended)."""
+    journal = _work("monokan_journal")
+    arxiv = _work("monokan_arxiv")
+    client = FakeClient({"/works": {"results": [journal, arxiv]}})
+    # The entry's title is the short form; the arXiv sibling's is the same paper
+    # with a subtitle. Strict equality would have dropped this sibling entirely.
+    entry = _entry(citekey="monokan", title="MonoKAN", year=2024, family="Polo-Molina")
+    cands = a.sibling_candidates(entry, journal, client=client)
+    assert cands  # proposed despite not being normalized-equal to the entry title
+    assert any("arxiv.org/pdf" in c.url for c in cands)
+    for candidate in cands:
+        record = a.evaluate_match(entry, candidate)
+        assert record.title == "containment"
+        assert record.verdict == a.QUARANTINE  # author+year decide, not the filter
+
+
+def test_rung_5_builds_candidates_from_the_arxiv_atom_feed() -> None:
+    feed = (
+        '<?xml version="1.0"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        "<entry>"
+        "<id>http://arxiv.org/abs/2306.01147v1</id>"
+        "<title>Smooth Min-Max Monotonic Networks</title>"
+        "<published>2023-06-01T00:00:00Z</published>"
+        "<author><name>Christian Igel</name></author>"
+        "</entry>"
+        "</feed>"
+    )
+    cands = a.parse_arxiv_feed(feed)
+    assert len(cands) == 1
+    assert cands[0].rung == a.RUNG_ARXIV_SEARCH
+    assert cands[0].url == "https://arxiv.org/pdf/2306.01147"
+    assert cands[0].title == "Smooth Min-Max Monotonic Networks"
+    assert cands[0].year == 2023
+    assert cands[0].first_author_family == "Igel"
+
+
+def test_rung_5_feed_entries_missing_fields_are_skipped() -> None:
+    feed = (
+        '<feed xmlns="http://www.w3.org/2005/Atom">'
+        "<entry><title>No id</title></entry>"
+        "<entry><id>http://arxiv.org/abs/1234.5678</id></entry>"
+        "</feed>"
+    )
+    assert a.parse_arxiv_feed(feed) == []
+
+
+def test_rung_5_malformed_xml_yields_no_candidates_not_an_error() -> None:
+    assert a.parse_arxiv_feed("<not xml") == []
+
+
+# Not from the brief (Correction 1): direct tests for arxiv_candidates itself,
+# since the brief's FakeClient had no get_text and so never called it.
+_ARXIV_FEED = (
+    '<feed xmlns="http://www.w3.org/2005/Atom">'
+    "<entry>"
+    "<id>http://arxiv.org/abs/2306.01147v1</id>"
+    "<title>Smooth Min-Max Monotonic Networks</title>"
+    "<published>2023-06-01T00:00:00Z</published>"
+    "<author><name>Christian Igel</name></author>"
+    "</entry>"
+    "</feed>"
+)
+
+
+def test_rung_5_arxiv_candidates_builds_query_from_title_and_author() -> None:
+    client = FakeClient({"export.arxiv.org": _ARXIV_FEED})
+    entry = _entry(title="Monotonic Networks", family="Sill")
+    a.arxiv_candidates(entry, client=client)
+    url, params = client.calls[0]
+    assert url == a.ARXIV_API
+    assert params is not None
+    assert params["search_query"] == 'ti:"Monotonic Networks" AND au:"Sill"'
+
+
+def test_rung_5_arxiv_candidates_returns_parsed_candidates() -> None:
+    client = FakeClient({"export.arxiv.org": _ARXIV_FEED})
+    entry = _entry(title="Monotonic Networks", family="Sill")
+    cands = a.arxiv_candidates(entry, client=client)
+    assert len(cands) == 1
+    assert cands[0].rung == a.RUNG_ARXIV_SEARCH
+    assert cands[0].first_author_family == "Igel"
+
+
+def test_rung_5_arxiv_candidates_omits_author_clause_when_entry_has_none() -> None:
+    client = FakeClient({"export.arxiv.org": _ARXIV_FEED})
+    entry = _entry(title="Monotonic Networks", family=None)
+    a.arxiv_candidates(entry, client=client)
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["search_query"] == 'ti:"Monotonic Networks"'
+
+
+def test_rung_5_arxiv_candidates_returns_nothing_when_entry_has_no_title() -> None:
+    client = FakeClient({})
+    assert a.arxiv_candidates(_entry(title=None), client=client) == []
+    assert client.calls == []  # no wasted request when there is nothing to search
+
+
+def test_rung_6_expands_configured_templates() -> None:
+    # Not from the brief: the sill1997 fixture's primary_location carries no
+    # `source` (venue) name, so the brief's version of this test could never
+    # have matched. Add one inline rather than editing the shared fixture,
+    # which other tests (rungs 1-3, identity metadata) also depend on as-is.
+    work = dict(_work("sill1997"))
+    work["primary_location"] = dict(
+        work["primary_location"],
+        source={"display_name": "Advances in Neural Information Processing Systems"},
+    )
+    resolvers = [
+        {
+            "match": "Neural Information Processing",
+            "url_template": "http://v/{openalex}.pdf",
+        }
+    ]
+    cands = a.venue_candidates(_entry(), work, resolvers)
+    assert [c.url for c in cands] == ["http://v/W2293093810.pdf"]
+    assert cands[0].rung == a.RUNG_VENUE
+
+
+def test_rung_6_ships_empty_so_nothing_matches_by_default() -> None:
+    assert a.venue_candidates(_entry(), _work("sill1997"), []) == []
+
+
+def test_rung_6_skips_a_non_matching_venue() -> None:
+    resolvers = [{"match": "ICLR", "url_template": "http://v/{openalex}.pdf"}]
+    assert a.venue_candidates(_entry(), _work("sill1997"), resolvers) == []
+
+
+def test_rung_6_skips_a_malformed_resolver() -> None:
+    resolvers: list[Any] = [
+        "junk",
+        {"match": "Neural"},
+        {"url_template": "http://v/x.pdf"},
+        {"match": "(", "url_template": "http://v/x.pdf"},
+    ]
+    assert a.venue_candidates(_entry(), _work("sill1997"), resolvers) == []

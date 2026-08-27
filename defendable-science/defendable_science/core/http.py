@@ -18,16 +18,17 @@ import json
 import random
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import requests
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from pathlib import Path
 
 JsonValue = dict[str, Any] | list[Any]
+_T = TypeVar("_T")
 
 
 class HttpError(RuntimeError):
@@ -51,6 +52,10 @@ class Response(Protocol):
     @property
     def headers(self) -> Mapping[str, str]:
         """Response headers (read for ``Retry-After``)."""
+
+    @property
+    def text(self) -> str:
+        """The raw response body, decoded to text."""
 
     def json(self) -> Any:
         """Decode the response body as JSON."""
@@ -187,6 +192,34 @@ class HttpClient:
         self._store(key, value)
         return value
 
+    def get_text(
+        self,
+        url: str,
+        params: dict[str, str] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> str:
+        """GET `url` and return the raw response body, with backoff (uncached).
+
+        For endpoints that answer in a non-JSON body (e.g. arXiv's Atom feed).
+        Shares :meth:`get_json`'s throttle and retry path, so it is polite and
+        resilient in exactly the same way — it just skips the JSON decode and
+        the on-disk cache, since :class:`JsonValue` cannot hold a raw string.
+
+        :param url: The request URL.
+        :param params: Query parameters (``mailto`` is added when configured).
+        :param headers: Extra headers.
+        :returns: The response body as text.
+        :raises HttpError: On a non-retryable status or a non-rate-limit
+            exhaustion.
+        :raises RateLimitError: When retries are exhausted on a rate-limit signal.
+        """
+        query = dict(params or {})
+        if self.mailto:
+            query.setdefault("mailto", self.mailto)
+        request_headers = dict(headers or {})
+        return self._fetch_text(url, query, request_headers)
+
     def _throttle(self, *, s2: bool) -> None:
         """Proactively pace requests to a host, before the reactive retry loop.
 
@@ -218,15 +251,50 @@ class HttpClient:
     def _fetch(
         self, url: str, query: dict[str, str], headers: dict[str, str], *, s2: bool
     ) -> JsonValue:
-        """Issue the request with retries; the network side of :meth:`get_json`.
+        """Issue the request with retries and decode JSON; network side of :meth:`get_json`.
+
+        :param s2: Whether this call targets Semantic Scholar (selects the
+            proactive throttle's rps + tracking key; see :meth:`_throttle`).
+        """
+
+        def as_json(resp: Response) -> JsonValue:
+            try:
+                data: JsonValue = resp.json()
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise HttpError(f"{url}: non-JSON response") from exc
+            return data
+
+        return self._fetch_with_retry(url, query, headers, s2=s2, extract=as_json)
+
+    def _fetch_text(
+        self, url: str, query: dict[str, str], headers: dict[str, str]
+    ) -> str:
+        """Issue the request with retries and return the body; network side of :meth:`get_text`."""
+        return self._fetch_with_retry(
+            url, query, headers, s2=False, extract=lambda resp: resp.text
+        )
+
+    def _fetch_with_retry(
+        self,
+        url: str,
+        query: dict[str, str],
+        headers: dict[str, str],
+        *,
+        s2: bool,
+        extract: Callable[[Response], _T],
+    ) -> _T:
+        """Issue the request with retries, then hand a ``200`` response to `extract`.
 
         Honors ``Retry-After`` on ``429`` / ``503`` (integer seconds); otherwise
         backs off exponentially with jitter. A rate-limit signal (``429``, or a
         ``503`` carrying ``Retry-After``) that survives every retry surfaces as a
-        :class:`RateLimitError` so it is never mistaken for a permanent miss.
+        :class:`RateLimitError` so it is never mistaken for a permanent miss. This
+        is the shared throttle + retry path behind both :meth:`get_json` (JSON
+        decode) and :meth:`get_text` (raw body) — the two differ only in `extract`.
 
         :param s2: Whether this call targets Semantic Scholar (selects the
             proactive throttle's rps + tracking key; see :meth:`_throttle`).
+        :param extract: Turns a ``200`` response into the caller's return value.
         """
         self._throttle(s2=s2)
         last_error = "no attempt made"
@@ -242,11 +310,7 @@ class HttpClient:
                 rate_limited = False
             else:
                 if resp.status_code == 200:
-                    try:
-                        data: JsonValue = resp.json()
-                    except (ValueError, json.JSONDecodeError) as exc:
-                        raise HttpError(f"{url}: non-JSON response") from exc
-                    return data
+                    return extract(resp)
                 if resp.status_code not in (429, 500, 502, 503, 504):
                     raise HttpError(f"{url}: HTTP {resp.status_code}")
                 last_error = f"HTTP {resp.status_code}"

@@ -15,11 +15,36 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
+
+from defendable_science.literature.graph import OPENALEX
 
 if TYPE_CHECKING:
     from defendable_science.core.download import FetchedBytes
     from defendable_science.literature.registry import Entry
+
+    class HttpClient(Protocol):
+        """The subset of :class:`~defendable_science.core.http.HttpClient` rungs 4-6 need.
+
+        A narrow structural type — like :class:`~defendable_science.core.http.Response`
+        and :class:`~defendable_science.core.http.Session` in ``core.http`` — rather
+        than a hard dependency on the concrete client, so a rung is exercised with any
+        stand-in that shapes up, without touching the network.
+        """
+
+        def get_json(
+            self, url: str, params: dict[str, str] | None = None, *, s2: bool = False
+        ) -> Any:
+            """Return decoded JSON for `url`."""
+
+        def get_text(
+            self,
+            url: str,
+            params: dict[str, str] | None = None,
+            *,
+            headers: dict[str, str] | None = None,
+        ) -> str:
+            """Return the raw response body for `url`."""
 
 # --- rungs ------------------------------------------------------------------
 
@@ -416,4 +441,163 @@ def identity_candidates(work: dict[str, Any]) -> list[Candidate]:
             continue
         seen.add(url)
         out.append(candidate_from_work(work, url, rung))
+    return out
+
+
+# --- search-derived rungs (4-6) ---------------------------------------------
+
+ARXIV_API = "http://export.arxiv.org/api/query"
+
+#: How many search hits each gated rung will consider.
+SEARCH_LIMIT = 10
+
+
+def sibling_candidates(
+    entry: Entry, work: dict[str, Any], *, client: HttpClient
+) -> list[Candidate]:
+    """Rung 4 — find other OpenAlex works with a related title and mine their PDFs.
+
+    OpenAlex often holds a paper twice: once as the published version (which may
+    be ``closed`` with no PDF) and once as the preprint (``green``, with one). The
+    registry entry resolves to whichever the DOI names, so the PDF can be on the
+    sibling. This finds it generically, and the gate decides whether the sibling
+    really is the same paper.
+
+    The pre-filter here deliberately uses the **same title relation as the gate**
+    (:func:`_title_axis`'s exact-or-word-prefix-containment) rather than strict
+    equality. A stricter pre-filter would discard a genuine sibling whose journal
+    version added a subtitle before the gate ever saw it — even though the gate's
+    ``containment`` → ``quarantine`` rule exists precisely to route that case to a
+    human. A pre-filter must never preempt the adjudicator: rung 4 proposes,
+    :func:`evaluate_match` disposes.
+
+    :param entry: The registry entry (its title drives the search).
+    :param work: The anchor work, excluded from the results.
+    :param client: The HTTP client.
+    :returns: Candidates from every title-related sibling, gated downstream.
+    """
+    if entry.title is None:
+        return []
+    anchor = _short_id(work.get("id"))
+    page = client.get_json(
+        f"{OPENALEX}/works",
+        {"filter": f"title.search:{entry.title}", "per-page": str(SEARCH_LIMIT)},
+    )
+    if not isinstance(page, dict):
+        return []
+    out: list[Candidate] = []
+    for sibling in page.get("results", []):
+        if not isinstance(sibling, dict):
+            continue
+        if _short_id(sibling.get("id")) == anchor:
+            continue
+        title = sibling.get("display_name")
+        if not isinstance(title, str) or _title_axis(entry.title, title) == "mismatch":
+            continue
+        for candidate in identity_candidates(sibling):
+            candidate.rung = RUNG_SIBLING
+            out.append(candidate)
+    return out
+
+
+def parse_arxiv_feed(xml: str) -> list[Candidate]:
+    """Parse an arXiv Atom feed into candidates.
+
+    An entry missing an id, a title, an author, or a date is skipped: the gate
+    needs all three axes, so an unverifiable hit is worse than no hit. Malformed
+    XML yields no candidates — arXiv served something unusable, and the caller
+    reports an exhausted rung rather than crashing.
+
+    :param xml: The Atom feed body.
+    :returns: One candidate per usable entry.
+    """
+    from xml.etree import ElementTree  # nosec B405 - parsing a trusted API feed
+
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+    try:
+        root = ElementTree.fromstring(xml)  # nosec B314 - see above
+    except ElementTree.ParseError:
+        return []
+    out: list[Candidate] = []
+    for node in root.findall("atom:entry", ns):
+        raw_id = node.findtext("atom:id", default="", namespaces=ns)
+        title = node.findtext("atom:title", default="", namespaces=ns).strip()
+        published = node.findtext("atom:published", default="", namespaces=ns)
+        author = node.find("atom:author/atom:name", ns)
+        name = (author.text or "").strip() if author is not None else ""
+        arxiv_id = re.sub(r"v\d+$", "", raw_id.rstrip("/").rsplit("/", 1)[-1])
+        if not (arxiv_id and title and name and published[:4].isdigit()):
+            continue
+        out.append(
+            Candidate(
+                url=f"https://arxiv.org/pdf/{arxiv_id}",
+                rung=RUNG_ARXIV_SEARCH,
+                title=title,
+                year=int(published[:4]),
+                first_author_family=name.rsplit(" ", 1)[-1],
+            )
+        )
+    return out
+
+
+def arxiv_candidates(entry: Entry, *, client: HttpClient) -> list[Candidate]:
+    """Rung 5 — search arXiv by title and first author.
+
+    :param entry: The registry entry.
+    :param client: The HTTP client (used for its transport and politeness only;
+        arXiv returns Atom XML, not JSON).
+    :returns: Candidates, gated downstream.
+    """
+    if entry.title is None:
+        return []
+    query = f'ti:"{entry.title}"'
+    if entry.first_author_family is not None:
+        query += f' AND au:"{entry.first_author_family}"'
+    body = client.get_text(
+        ARXIV_API, {"search_query": query, "max_results": str(SEARCH_LIMIT)}
+    )
+    return parse_arxiv_feed(body)
+
+
+def venue_candidates(
+    entry: Entry, work: dict[str, Any], resolvers: list[Any]
+) -> list[Candidate]:
+    """Rung 6 — expand consumer-configured venue URL templates.
+
+    **Ships empty.** The generic rungs recover the cases that motivated this
+    feature, so no venue-specific logic is shipped in the plugin; a consumer repo
+    that needs an exotic venue adds a ``{match, url_template}`` pair to its own
+    ``.defendable-science/config.yml``. Templates may reference ``{openalex}``,
+    ``{doi}`` and ``{year}``.
+
+    :param entry: The registry entry (supplies ``{doi}``).
+    :param work: The anchor work (supplies the venue name, ``{openalex}``, ``{year}``).
+    :param resolvers: The configured resolver list; malformed entries are skipped.
+    :returns: Candidates, gated downstream.
+    """
+    venue = ((work.get("primary_location") or {}).get("source") or {}).get(
+        "display_name"
+    )
+    if not isinstance(venue, str):
+        venue = ""
+    fields = {
+        "openalex": _short_id(work.get("id")) or "",
+        "doi": entry.doi or "",
+        "year": str(entry.year or ""),
+    }
+    out: list[Candidate] = []
+    for resolver in resolvers:
+        if not isinstance(resolver, dict):
+            continue
+        pattern = resolver.get("match")
+        template = resolver.get("url_template")
+        if not isinstance(pattern, str) or not isinstance(template, str):
+            continue
+        try:
+            matched = re.search(pattern, venue) is not None
+        except re.error:
+            continue
+        if not matched:
+            continue
+        out.append(candidate_from_work(work, template.format(**fields), RUNG_VENUE))
     return out
