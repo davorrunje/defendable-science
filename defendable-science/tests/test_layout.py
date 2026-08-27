@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -70,3 +71,75 @@ def test_staged_documents_maps_each_known_filename_to_its_level() -> None:
         "aims.md": "thesis",
         "kappa.md": "thesis",
     }
+
+
+def test_an_empty_config_resolves_to_the_default_layout() -> None:
+    assert lay.resolve_layout({}, Path("/repo")) == lay.Layout.default(Path("/repo"))
+
+
+def test_a_missing_layout_block_resolves_to_the_default_layout() -> None:
+    config: dict[str, Any] = {"cache_dir": ".defendable-science/cache/"}
+    assert lay.resolve_layout(config, Path("/repo")) == lay.Layout.default(
+        Path("/repo")
+    )
+
+
+def test_research_root_override_carries_literature_and_thesis_with_it() -> None:
+    out = lay.resolve_layout({"layout": {"research_root": "writing/"}}, Path("/repo"))
+
+    assert out.research_root == Path("/repo/writing")
+    assert out.literature_dir == Path("/repo/writing/literature")
+    assert out.thesis_dir == Path("/repo/writing/thesis")
+    assert out.papers_registry == Path("/repo/writing/papers.md")
+    # anchored at the repo root, not under research_root
+    assert out.datasets_manifest == Path("/repo/datasets.yml")
+
+
+def test_each_key_can_be_overridden_independently() -> None:
+    out = lay.resolve_layout(
+        {
+            "layout": {
+                "research_root": "writing/",
+                "literature_dir": "bib/",
+                "datasets_manifest": "data/datasets.yml",
+                "thesis_dir": "phd/",
+            }
+        },
+        Path("/repo"),
+    )
+
+    assert out.research_root == Path("/repo/writing")
+    assert out.literature_dir == Path("/repo/bib")
+    assert out.datasets_manifest == Path("/repo/data/datasets.yml")
+    assert out.thesis_dir == Path("/repo/phd")
+
+
+def test_an_unknown_layout_key_is_an_error_that_lists_the_valid_keys() -> None:
+    with pytest.raises(lay.LayoutError) as excinfo:
+        lay.resolve_layout({"layout": {"papers_dir": "x/"}}, Path("/repo"))
+
+    message = str(excinfo.value)
+    assert "papers_dir" in message
+    for key in lay.LAYOUT_KEYS:
+        assert key in message
+
+
+def test_a_non_mapping_layout_block_is_an_error() -> None:
+    with pytest.raises(lay.LayoutError, match="must be a mapping"):
+        lay.resolve_layout({"layout": ["writing/"]}, Path("/repo"))
+
+
+def test_a_non_string_layout_value_is_an_error() -> None:
+    with pytest.raises(lay.LayoutError, match="must be a string"):
+        lay.resolve_layout({"layout": {"research_root": 7}}, Path("/repo"))
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../outside", "writing/../../outside"])
+def test_a_path_escaping_the_repo_is_refused(bad: str) -> None:
+    with pytest.raises(lay.LayoutError, match="must stay inside the repository"):
+        lay.resolve_layout({"layout": {"research_root": bad}}, Path("/repo"))
+
+
+def test_a_null_layout_value_falls_back_to_the_default() -> None:
+    out = lay.resolve_layout({"layout": {"thesis_dir": None}}, Path("/repo"))
+    assert out.thesis_dir == Path("/repo/docs/research/thesis")

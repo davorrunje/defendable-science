@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 #: The four keys ``config.yml``'s ``layout:`` block accepts.
 LAYOUT_KEYS: tuple[str, ...] = (
@@ -171,3 +175,82 @@ class Layout:
             return path.relative_to(self.repo_root)
         except ValueError:
             return path
+
+
+def _relative(key: str, raw: object, default: Path, repo_root: Path) -> Path:
+    """Resolve one ``layout:`` value into an absolute path under `repo_root`.
+
+    :param key: The layout key, for error messages.
+    :param raw: The configured value; ``None`` means "use the default".
+    :param default: The absolute default for this key.
+    :param repo_root: The repository root.
+    :returns: The absolute resolved path.
+    :raises LayoutError: If `raw` is not a string, or points outside the repo.
+        A key pointing outside the work tree would let ``init`` and ``check``
+        read and write beyond the repository, which an integrity tool must not do.
+    """
+    if raw is None:
+        return default
+    if not isinstance(raw, str):
+        msg = f"layout.{key} must be a string, got {type(raw).__name__}"
+        raise LayoutError(msg)
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        msg = f"layout.{key} must stay inside the repository: {raw!r} is absolute"
+        raise LayoutError(msg)
+    resolved = (repo_root / candidate).resolve()
+    root = repo_root.resolve()
+    if resolved != root and root not in resolved.parents:
+        msg = f"layout.{key} must stay inside the repository: {raw!r} escapes it"
+        raise LayoutError(msg)
+    return resolved
+
+
+def resolve_layout(config: Mapping[str, Any], repo_root: Path) -> Layout:
+    """Resolve the layout from a ``config.yml`` mapping.
+
+    Resolution order is the ``layout:`` block, then the packaged default. A repo
+    matching the default records nothing. Unknown keys are an error rather than a
+    silent ignore: a typo that quietly did nothing would leave the author
+    believing a divergent layout was recorded.
+
+    :param config: The parsed ``config.yml`` mapping.
+    :param repo_root: The repository root.
+    :returns: The resolved layout.
+    :raises LayoutError: On a non-mapping block, an unknown key, a non-string
+        value, or a path that escapes the repository.
+    """
+    default = Layout.default(repo_root)
+    raw = config.get("layout")
+    if raw is None:
+        return default
+    if not isinstance(raw, dict):
+        msg = f"layout: must be a mapping of {list(LAYOUT_KEYS)}"
+        raise LayoutError(msg)
+    unknown = sorted(k for k in raw if k not in LAYOUT_KEYS)
+    if unknown:
+        msg = f"unknown layout key(s) {unknown}; valid keys are {list(LAYOUT_KEYS)}"
+        raise LayoutError(msg)
+
+    research = _relative(
+        "research_root", raw.get("research_root"), default.research_root, repo_root
+    )
+    return Layout(
+        repo_root=repo_root,
+        research_root=research,
+        literature_dir=_relative(
+            "literature_dir",
+            raw.get("literature_dir"),
+            research / "literature",
+            repo_root,
+        ),
+        datasets_manifest=_relative(
+            "datasets_manifest",
+            raw.get("datasets_manifest"),
+            default.datasets_manifest,
+            repo_root,
+        ),
+        thesis_dir=_relative(
+            "thesis_dir", raw.get("thesis_dir"), research / "thesis", repo_root
+        ),
+    )
