@@ -212,7 +212,7 @@ defendable-science literature fetch sill1997monotonic --dry-run
 ```
 
 Real output from that command, for the survey's oldest anchor — verbatim, all
-thirteen keys of a report row:
+fourteen keys of a report row:
 
 ```json
 {
@@ -245,6 +245,7 @@ thirteen keys of a report row:
       "tried": [
         "openalex-landing"
       ],
+      "failures": [],
       "landing_urls": [],
       "committable": false,
       "path": null,
