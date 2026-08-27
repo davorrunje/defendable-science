@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from defendable_science.core.download import FetchedBytes
 from defendable_science.literature import acquire as a
 from defendable_science.literature import registry as reg
 
@@ -348,3 +351,189 @@ def test_title_that_normalizes_to_empty_refuses_as_insufficient() -> None:
     assert record.title is None
     assert record.reason is not None
     assert "insufficient" in record.reason
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "openalex"
+
+
+def _work(name: str) -> dict[str, Any]:
+    return cast(
+        "dict[str, Any]",
+        json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8")),
+    )
+
+
+def _fetched(tmp_path: Path, body: bytes, media_type: str | None) -> FetchedBytes:
+    target = tmp_path / "b"
+    target.write_bytes(body)
+    return FetchedBytes(path=target, media_type=media_type, size=len(body))
+
+
+# --- PDF acceptance ---------------------------------------------------------
+
+
+def test_pdf_content_type_is_accepted(tmp_path: Path) -> None:
+    assert a.looks_like_pdf(_fetched(tmp_path, b"anything", "application/pdf"))
+
+
+def test_lying_content_type_is_accepted_on_magic_bytes(tmp_path: Path) -> None:
+    """Sill 1997's papers.nips.cc landing URL — served as text/html, actually a PDF.
+
+    Rung 3's entire reason to exist: content-type lies, magic bytes do not.
+    """
+    assert a.looks_like_pdf(_fetched(tmp_path, b"%PDF-1.4\nstuff", "text/html"))
+
+
+def test_html_body_with_html_content_type_is_rejected(tmp_path: Path) -> None:
+    assert not a.looks_like_pdf(_fetched(tmp_path, b"<!doctype html>", "text/html"))
+
+
+def test_missing_content_type_falls_back_to_magic_bytes(tmp_path: Path) -> None:
+    assert a.looks_like_pdf(_fetched(tmp_path, b"%PDF-1.7", None))
+    assert not a.looks_like_pdf(_fetched(tmp_path, b"nope", None))
+
+
+def test_unreadable_body_is_rejected_not_an_error(tmp_path: Path) -> None:
+    missing = FetchedBytes(path=tmp_path / "gone", media_type=None, size=0)
+    assert a.looks_like_pdf(missing) is False
+
+
+# --- rungs 1-3 --------------------------------------------------------------
+
+
+def test_rung_1_takes_best_oa_location() -> None:
+    work = _work("monokan_arxiv")
+    cands = a.identity_candidates(work)
+    assert cands[0].rung == a.RUNG_OA_BEST
+    assert cands[0].url == work["best_oa_location"]["pdf_url"]
+
+
+def test_rung_3_recovers_sill_from_a_pdf_serving_landing_page() -> None:
+    """The case #97 wanted venue scrapers for. No venue knowledge needed."""
+    work = _work("sill1997")
+    assert (work.get("best_oa_location") or {}).get("pdf_url") is None
+    assert work["open_access"]["oa_status"] == "closed"
+    cands = a.identity_candidates(work)
+    assert [c.rung for c in cands] == [a.RUNG_OA_LANDING]
+    assert "papers.nips.cc" in cands[0].url
+
+
+def test_identity_candidates_carry_the_works_own_metadata() -> None:
+    cand = a.identity_candidates(_work("sill1997"))[0]
+    assert cand.title == "Monotonic Networks"
+    assert cand.year == 1997
+    assert cand.first_author_family == "Sill"
+    assert cand.openalex == "W2293093810"
+
+
+def test_no_candidates_when_nothing_is_available() -> None:
+    assert a.identity_candidates(_work("monokan_journal")) == []
+
+
+def test_candidates_are_deduplicated_by_url() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "authorships": [{"author": {"display_name": "Ada Lovelace"}}],
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+        "locations": [
+            {"pdf_url": "http://x/p.pdf"},
+            {"pdf_url": "http://x/p.pdf"},
+        ],
+    }
+    assert [c.url for c in a.identity_candidates(work)] == ["http://x/p.pdf"]
+
+
+def test_landing_urls_only_returns_pdf_shaped_links() -> None:
+    work = {
+        "locations": [
+            {"landing_page_url": "http://x/abs/1"},
+            {"landing_page_url": "http://x/paper.pdf"},
+            {"landing_page_url": None},
+            {},
+            "junk",
+        ]
+    }
+    assert a.landing_urls(work) == ["http://x/paper.pdf"]
+
+
+def test_family_name_is_the_last_token_of_a_display_name() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "authorships": [{"author": {"display_name": "Alberto Polo-Molina"}}],
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].first_author_family == "Polo-Molina"
+
+
+def test_missing_authorships_yields_no_family_name() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].first_author_family is None
+
+
+def test_malformed_locations_are_skipped_not_fatal() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "locations": ["junk", {"pdf_url": 5}, {"pdf_url": "http://x/ok.pdf"}],
+    }
+    assert [c.url for c in a.identity_candidates(work)] == ["http://x/ok.pdf"]
+
+
+# --- coverage: not in the brief ----------------------------------------------
+#
+# Task 8 brief's test list left four branches of _short_id / _first_family_
+# from_work unexercised (a work with no "id", and three malformed-authorship
+# shapes). These close that gap with real oracles tied to the design ("degrade
+# to None rather than raise"), not to the current implementation's behavior.
+
+
+def test_work_with_no_id_yields_no_openalex_id() -> None:
+    work = {
+        "display_name": "T",
+        "publication_year": 2020,
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].openalex is None
+
+
+def test_non_dict_first_authorship_yields_no_family_name() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "authorships": ["not-a-dict"],
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].first_author_family is None
+
+
+def test_non_dict_author_yields_no_family_name() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "authorships": [{"author": "not-a-dict"}],
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].first_author_family is None
+
+
+def test_blank_display_name_yields_no_family_name() -> None:
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "T",
+        "publication_year": 2020,
+        "authorships": [{"author": {"display_name": "   "}}],
+        "best_oa_location": {"pdf_url": "http://x/p.pdf"},
+    }
+    assert a.identity_candidates(work)[0].first_author_family is None

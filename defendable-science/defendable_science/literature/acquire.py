@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from defendable_science.core.download import FetchedBytes
     from defendable_science.literature.registry import Entry
 
 # --- rungs ------------------------------------------------------------------
@@ -260,3 +261,159 @@ def evaluate_match(entry: Entry, candidate: Candidate) -> MatchRecord:
         f"title {title} and year {year} against the registry entry — not the same work"
     )
     return record
+
+
+# --- identity-derived rungs (1-3) and PDF acceptance -------------------------
+
+#: The PDF magic-byte prefix. Authoritative over ``Content-Type``, which lies.
+PDF_MAGIC = b"%PDF-"
+
+
+def looks_like_pdf(fetched: FetchedBytes) -> bool:
+    """Return whether the landed bytes are a PDF.
+
+    ``Content-Type: application/pdf`` is trusted, but its absence is not
+    disqualifying: Sill 1997's ``papers.nips.cc`` landing URL serves a real PDF
+    under ``text/html``, and that case is precisely what the landing-page rung
+    exists to recover. So the magic-byte prefix is the fallback and the
+    tie-breaker. An unreadable file is *not* a PDF rather than an exception — the
+    ladder moves on.
+
+    :param fetched: The landed bytes.
+    :returns: Whether they should be treated as a PDF.
+    """
+    if fetched.media_type == "application/pdf":
+        return True
+    try:
+        with fetched.path.open("rb") as handle:
+            return handle.read(len(PDF_MAGIC)) == PDF_MAGIC
+    except OSError:
+        return False
+
+
+def _short_id(url: str | None) -> str | None:
+    """Reduce an OpenAlex entity URL to its bare id (``…/W123`` → ``W123``).
+
+    :param url: The full OpenAlex entity URL, or ``None``.
+    :returns: The bare id, or ``None`` when there was nothing to reduce.
+    """
+    if not url:
+        return None
+    return url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def _first_family_from_work(work: dict[str, Any]) -> str | None:
+    """Return the first author's family name from an OpenAlex work.
+
+    OpenAlex gives a single ``display_name`` per author, so the family name is
+    taken as the last whitespace-separated token — correct for the overwhelming
+    majority of Western-ordered names, and the gate compares it only against the
+    registry's own ``family`` field, so a systematic parse quirk affects both
+    sides of a real match equally.
+
+    :param work: The OpenAlex work.
+    :returns: The first author's family name, or ``None`` when it cannot be
+        determined.
+    """
+    authorships = work.get("authorships")
+    if not isinstance(authorships, list) or not authorships:
+        return None
+    first = authorships[0]
+    if not isinstance(first, dict):
+        return None
+    author = first.get("author")
+    if not isinstance(author, dict):
+        return None
+    display = author.get("display_name")
+    if not isinstance(display, str) or not display.strip():
+        return None
+    return display.strip().rsplit(" ", 1)[-1]
+
+
+def candidate_from_work(work: dict[str, Any], url: str, rung: str) -> Candidate:
+    """Build a candidate carrying the work's own bibliographic metadata.
+
+    :param work: The OpenAlex work the URL came from.
+    :param url: The candidate PDF URL.
+    :param rung: The rung that produced it.
+    :returns: The candidate.
+    """
+    year = work.get("publication_year")
+    title = work.get("display_name") or work.get("title")
+    return Candidate(
+        url=url,
+        rung=rung,
+        title=title if isinstance(title, str) else None,
+        year=year if isinstance(year, int) else None,
+        first_author_family=_first_family_from_work(work),
+        openalex=_short_id(work.get("id")),
+    )
+
+
+def _location_pdf_urls(work: dict[str, Any]) -> list[str]:
+    """Return every ``pdf_url`` across the work's ``locations`` array.
+
+    :param work: The OpenAlex work.
+    :returns: The direct PDF URLs found across all locations, in record order.
+    """
+    locations = work.get("locations")
+    if not isinstance(locations, list):
+        return []
+    out: list[str] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        url = location.get("pdf_url")
+        if isinstance(url, str) and url.strip():
+            out.append(url)
+    return out
+
+
+def landing_urls(work: dict[str, Any]) -> list[str]:
+    """Return landing-page URLs that are shaped like a direct PDF link.
+
+    OpenAlex marks a work ``closed`` when it has no ``pdf_url``, yet the landing
+    page can *be* the PDF — Sill 1997's NeurIPS proceedings link is exactly this.
+    Only ``.pdf``-suffixed links are offered, so the ladder does not download
+    every HTML abstract page in the record.
+
+    :param work: The OpenAlex work.
+    :returns: Candidate landing URLs, in record order.
+    """
+    locations = work.get("locations")
+    if not isinstance(locations, list):
+        return []
+    out: list[str] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        url = location.get("landing_page_url")
+        if isinstance(url, str) and url.strip().lower().endswith(".pdf"):
+            out.append(url)
+    return out
+
+
+def identity_candidates(work: dict[str, Any]) -> list[Candidate]:
+    """Build rungs 1-3 for a work: best OA location, all locations, landing pages.
+
+    These are *identity-derived* — the URLs come from the work the citekey already
+    resolves to, so they carry the work's own metadata and bypass the gate.
+    Deduplicated by URL, preserving first-seen rung order.
+
+    :param work: The OpenAlex work.
+    :returns: Candidates in ladder order.
+    """
+    best = (work.get("best_oa_location") or {}).get("pdf_url")
+    ordered: list[tuple[str, str]] = []
+    if isinstance(best, str) and best.strip():
+        ordered.append((best, RUNG_OA_BEST))
+    ordered += [(url, RUNG_OA_LOCATIONS) for url in _location_pdf_urls(work)]
+    ordered += [(url, RUNG_OA_LANDING) for url in landing_urls(work)]
+    seen: set[str] = set()
+    out: list[Candidate] = []
+    for url, rung in ordered:
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append(candidate_from_work(work, url, rung))
+    return out

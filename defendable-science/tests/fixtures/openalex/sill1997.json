@@ -1,0 +1,33 @@
+{
+  "id": "https://openalex.org/W2293093810",
+  "display_name": "Monotonic Networks",
+  "publication_year": 1997,
+  "authorships": [
+    {
+      "author": {
+        "display_name": "Joseph Sill"
+      }
+    }
+  ],
+  "open_access": {
+    "oa_status": "closed"
+  },
+  "best_oa_location": null,
+  "locations": [
+    {
+      "landing_page_url": "https://papers.nips.cc/paper/1358-monotonic-networks.pdf",
+      "pdf_url": null,
+      "license": null
+    }
+  ],
+  "primary_location": {
+    "landing_page_url": "https://papers.nips.cc/paper/1358-monotonic-networks.pdf",
+    "pdf_url": null,
+    "license": null
+  },
+  "ids": {
+    "openalex": "https://openalex.org/W2293093810",
+    "mag": "2293093810"
+  },
+  "doi": null
+}
