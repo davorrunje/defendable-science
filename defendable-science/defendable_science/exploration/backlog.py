@@ -528,6 +528,59 @@ status:
 """
 
 
+#: Mirrors ``resources/templates/paper/pitch.md``. The **status block must stay
+#: byte-identical** to that template's (inline comments aside): ``progress``
+#: projects it, so a drift makes a promoted paper misread or vanish from the
+#: dashboard. The plugin's ``resources/`` is not importable from here — the two
+#: artifacts ship on separate cadences (ADR-0026) and the wheel contains only
+#: ``defendable_science`` — so the constant is duplicated deliberately and
+#: ``tests/test_backlog.py`` fails on divergence. Prose is condensed; the shipped
+#: template stays the fuller authoring skeleton.
+_PAPER_TEMPLATE = """\
+---
+status:
+  level: paper
+  id: {paper_id}
+  verdict: null
+  readiness: drafting
+  signed-off-by: null
+  signed-off-date: null
+  evidence: []
+  covers: []
+  load-bearing: null
+  understanding: {{status: pending, unresolved: []}}
+  blockers: []
+  last-updated: {today}
+---
+
+# Pitch: {one_line}
+
+## Central claim
+
+*{one_line}*
+
+## Contribution
+
+<!-- What is new here — the delta this paper adds to the record. Defended in
+     detail in positioning.md against prior work. -->
+
+## Target venue + bar
+
+<!-- Intended venue and the standard it holds contributions to (rigor, novelty,
+     baselines expected). Shapes scope and positioning. -->
+
+## Load-bearing hypotheses
+
+<!-- Which hypotheses under hypotheses/* must resolve for this claim to hold. A
+     refuted load-bearing hypothesis blocks the paper (progress surfaces it) —
+     that is honest, not failure. -->
+
+## Provenance
+
+{provenance}
+"""
+
+
 def scaffold_hypothesis(
     paper_root: str | Path,
     slug: str,
@@ -625,17 +678,31 @@ def scaffold_paper(
     one_line: str,
     *,
     backend: str = "",
+    provenance: str = "",
+    today: str | None = None,
 ) -> Path:
     """Scaffold a promoted paper root and register it in ``papers.md``.
 
     Creates ``<research_root>/<paper_id>/{hypotheses,paper}/`` with an empty
-    ``backlog.md`` and a ``paper/pitch.md`` seeded from the row, then appends the
-    ``papers.md`` registry row.
+    ``backlog.md`` and a ``paper/pitch.md`` seeded from :data:`_PAPER_TEMPLATE`,
+    then appends the ``papers.md`` registry row.
+
+    The pitch carries the **status frontmatter** ``progress`` projects, exactly as
+    :func:`scaffold_hypothesis` does one level down. Without it a promoted paper
+    is registered, has a root, and contributes nothing to the dashboard until
+    someone hand-writes the block — registered but untracked.
+
+    Only the frontmatter and the two fields carried from the backlog row are
+    filled. The prose stays the template's comment prompts: the goal is a
+    *tracked stub*, not a drafted pitch, and seeding prose the author did not
+    write would cut against the agency principle (meta-spec §2.1).
 
     :param research_root: The ``docs/research`` directory.
     :param paper_id: The stable paper id.
     :param one_line: The pitch line carried from the portfolio-backlog row.
     :param backend: The experiment-backend binding to record.
+    :param provenance: The verbatim provenance carried from the backlog row.
+    :param today: ISO date for ``last-updated`` (defaults to today).
     :returns: The paper root directory.
     :raises BacklogError: If the paper root already exists.
     """
@@ -649,7 +716,13 @@ def scaffold_paper(
         Backlog(level="hypothesis").dumps(), encoding="utf-8"
     )
     (root / "paper" / "pitch.md").write_text(
-        f"# Pitch: {paper_id}\n\n{one_line}\n", encoding="utf-8"
+        _PAPER_TEMPLATE.format(
+            paper_id=paper_id,
+            one_line=one_line,
+            provenance=provenance,
+            today=today or today_iso(),
+        ),
+        encoding="utf-8",
     )
     append_papers_registry(
         research / "papers.md", paper_id, _registry_root(root, research), backend

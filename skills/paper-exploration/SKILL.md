@@ -58,7 +58,9 @@ explicit human pick — the exploration/resolution firewall
 > operating on `portfolio-backlog.md` at the paper level. `add` realizes the
 > `generate` verb's row-append; `list` is a read-only inspection command. The
 > `promote --scaffold --level paper --research-root <docs/research> --backend
-> <name>` scaffolds the paper root and writes the `papers.md` registry row in the
+> <name>` scaffolds the paper root, seeds `paper/pitch.md` with its status
+> frontmatter (so the paper is visible to `progress` immediately, not after
+> someone hand-writes the block) and writes the `papers.md` registry row in the
 > same call, reporting the created paths as JSON; `--backend` is required there
 > because the plugin bundles no default. Scaffolding runs before the backlog is
 > written, so a refused scaffold leaves the row `ranked` and retryable. The
