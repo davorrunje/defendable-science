@@ -178,6 +178,12 @@ ignore = [
                 # renderer just over the threshold; splitting it further would hurt readability
     "PERF401",  # flake8-perf list.extend suggestions — pre-existing, purely stylistic
 ]
+"defendable_science/dataset/retrieval.py" = [
+    "TC001",    # `Mirror` is re-exported from `core.mirror` for backward-compatible
+                # `dataset.retrieval.Mirror` access (tests, callers); it appears only
+                # in annotations *within this file*, but must stay a real runtime
+                # import, not a `TYPE_CHECKING`-only one.
+]
 
 [tool.ruff.lint.isort]
 case-sensitive = true
