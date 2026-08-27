@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -14,6 +14,9 @@ from defendable_science.core.fixity import RetrievalError
 from defendable_science.core.http import HttpError, RateLimitError
 from defendable_science.literature import acquire as a
 from defendable_science.literature import registry as reg
+
+if TYPE_CHECKING:
+    from defendable_science.core.mirror import Mirror
 
 
 def _entry(
@@ -874,11 +877,18 @@ class FakeMirror:
     """A stand-in for ``Mirror`` that never shells out to rclone."""
 
     def __init__(
-        self, body: bytes | None = None, put_error: Exception | None = None
+        self,
+        body: bytes | None = None,
+        put_error: Exception | None = None,
+        check_error: Exception | None = None,
+        present: bool | None = None,
     ) -> None:
         self.body = body
         self.put_error = put_error
+        self.check_error = check_error
+        self.present = present
         self.puts: list[tuple[str, str]] = []
+        self.checks: list[str] = []
         self.remote = "papers"
         self.base_path = "literature"
 
@@ -896,7 +906,10 @@ class FakeMirror:
         return True
 
     def check(self, sha256: str) -> bool:
-        return self.body is not None
+        self.checks.append(sha256)
+        if self.check_error is not None:
+            raise self.check_error
+        return self.present if self.present is not None else self.body is not None
 
 
 def _oa(
@@ -2252,3 +2265,216 @@ def test_adopt_file_copies_rather_than_moves_the_humans_file(tmp_path: Path) -> 
     assert outcome.bucket == a.BUCKET_FETCHED
     assert src.is_file()
     assert src.read_bytes() == PDF
+
+
+# --- task 13: verify (offline fixity) + mirror (push/probe) -----------------
+
+
+def test_verify_entry_all_files_verify(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    cache = tmp_path / "cache"
+    _seed_blob(tmp_path)
+
+    report = a.verify_entry(entry, cache_dir=cache)
+
+    assert report.ok
+    assert report.verified == [f"sha256/{PDF_SHA}"]
+    assert report.missing == []
+    assert report.corrupt == []
+    assert report.note is None
+    assert report.as_json() == {
+        "citekey": entry.citekey,
+        "ok": True,
+        "verified": [f"sha256/{PDF_SHA}"],
+        "missing": [],
+        "corrupt": [],
+    }
+
+
+def test_verify_entry_flags_a_missing_blob(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    cache = tmp_path / "cache"  # nothing seeded here
+
+    report = a.verify_entry(entry, cache_dir=cache)
+
+    assert not report.ok
+    assert report.missing == [f"sha256/{PDF_SHA}"]
+    assert report.verified == []
+    assert report.corrupt == []
+
+
+def test_verify_entry_flags_a_corrupt_blob(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    cache = tmp_path / "cache"
+    blob = cache / "sha256" / PDF_SHA
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(OTHER_PDF)  # bit-rot: wrong bytes under the recorded hash
+
+    report = a.verify_entry(entry, cache_dir=cache)
+
+    assert not report.ok
+    assert report.corrupt == [f"sha256/{PDF_SHA}"]
+    assert report.verified == []
+    assert report.missing == []
+
+
+def test_verify_entry_unreadable_file_is_corrupt_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    cache = tmp_path / "cache"
+    _seed_blob(tmp_path)
+
+    def _boom(_p: object, **_kw: object) -> str:
+        raise PermissionError("unreadable")
+
+    monkeypatch.setattr(a, "sha256_file", _boom)
+    report = a.verify_entry(entry, cache_dir=cache)
+
+    assert report.corrupt == [f"sha256/{PDF_SHA}"]
+    assert not report.ok
+
+
+def test_verify_entry_with_no_asset_reports_missing_never_ok(tmp_path: Path) -> None:
+    """The case that matters: an unfetched paper must never read as verified."""
+    entry = _entry()
+    assert entry.asset is None
+
+    report = a.verify_entry(entry, cache_dir=tmp_path / "cache")
+
+    assert report.ok is False
+    assert report.verified == []
+    assert report.note is not None
+    assert report.missing == [report.note]
+    assert "no asset recorded" in report.note
+    payload = report.as_json()
+    assert payload["ok"] is False
+    assert payload["note"] == report.note
+
+
+def test_verify_entry_with_asset_but_no_files_also_reports_missing(
+    tmp_path: Path,
+) -> None:
+    """A recorded-but-empty spine is the same "nothing to verify" case."""
+    _path, entry = _registry(tmp_path, spine=_spine(files=[]))
+
+    report = a.verify_entry(entry, cache_dir=tmp_path / "cache")
+
+    assert report.ok is False
+    assert report.note is not None
+    assert report.missing == [report.note]
+
+
+def test_mirror_entry_pushes_a_locally_cached_file(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)
+    mirror = FakeMirror()  # not yet present in the mirror
+
+    report = a.mirror_entry(
+        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+    )
+
+    assert report == {
+        "citekey": entry.citekey,
+        "pushed": [PDF_SHA],
+        "already_present": [],
+        "missing": [],
+    }
+    assert mirror.puts == [(str(tmp_path / "cache" / "sha256" / PDF_SHA), PDF_SHA)]
+
+
+def test_mirror_entry_reports_an_already_present_file_without_pushing(
+    tmp_path: Path,
+) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)
+    mirror = FakeMirror(present=True)
+
+    report = a.mirror_entry(
+        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+    )
+
+    assert report["already_present"] == [PDF_SHA]
+    assert report["pushed"] == []
+    assert mirror.puts == []
+
+
+def test_mirror_entry_check_only_never_pushes(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)  # bytes are available locally, but --check must not push
+    mirror = FakeMirror(present=False)
+
+    report = a.mirror_entry(
+        entry,
+        cache_dir=tmp_path / "cache",
+        mirror=cast("Mirror", mirror),
+        check_only=True,
+    )
+
+    assert report["missing"] == [PDF_SHA]
+    assert report["pushed"] == []
+    assert mirror.puts == []
+
+
+def test_mirror_entry_with_no_local_blob_reports_missing_without_pushing(
+    tmp_path: Path,
+) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    # No blob seeded: nothing local to push, even though the mirror lacks it too.
+    mirror = FakeMirror(present=False)
+
+    report = a.mirror_entry(
+        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+    )
+
+    assert report["missing"] == [PDF_SHA]
+    assert report["pushed"] == []
+    assert mirror.puts == []
+
+
+def test_mirror_entry_with_no_asset_reports_missing_without_probing(
+    tmp_path: Path,
+) -> None:
+    entry = _entry()
+    assert entry.asset is None
+    mirror = FakeMirror()
+
+    report = a.mirror_entry(
+        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+    )
+
+    assert report["pushed"] == []
+    assert report["already_present"] == []
+    assert len(report["missing"]) == 1
+    assert "no asset recorded" in report["missing"][0]
+    assert mirror.checks == []  # nothing to probe for
+
+
+def test_mirror_entry_with_asset_but_no_files_reports_missing(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine(files=[]))
+    mirror = FakeMirror()
+
+    report = a.mirror_entry(
+        entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+    )
+
+    assert len(report["missing"]) == 1
+    assert mirror.checks == []
+
+
+def test_mirror_entry_propagates_a_missing_rclone_binary_intact(
+    tmp_path: Path,
+) -> None:
+    """A transport failure is not "not present" — it must not be swallowed."""
+    _path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)
+    mirror = FakeMirror(
+        check_error=RetrievalError("rclone not found on PATH — install it")
+    )
+
+    with pytest.raises(RetrievalError, match="rclone not found"):
+        a.mirror_entry(
+            entry, cache_dir=tmp_path / "cache", mirror=cast("Mirror", mirror)
+        )
+
+    assert mirror.puts == []

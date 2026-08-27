@@ -1947,3 +1947,171 @@ def fetch_all(
         if outcome.committable:
             report["committable"].append(outcome.as_json())
     return report
+
+
+# --- verify: offline fixity ---------------------------------------------------
+
+
+@dataclass
+class VerifyReport:
+    """The outcome of :func:`verify_entry` for one registry entry.
+
+    Mirrors ``dataset.retrieval.VerifyReport``'s shape exactly (spec §4: once
+    a checksum is recorded, this front-end's fixity story is identical to
+    ``dataset``'s — offline, re-hash, report). It adds one thing ``dataset``
+    has no need for: a dataset manifest always declares the files an entry
+    has, so "nothing is declared" cannot arise there. Literature instead
+    *establishes* a checksum from the first acquisition (spec §4), so a
+    bibliography entry nothing has been fetched for is a first-class,
+    common report — not an empty one. That case is reported as `missing`
+    with `note` naming it explicitly, and is never `ok`: an unfetched paper
+    must not read as verified.
+
+    :param citekey: The registry entry this report is about.
+    :param verified: Files whose on-disk bytes matched the recorded checksum.
+    :param missing: Files recorded but absent from the cache — including one
+        sentinel string when the entry records no asset at all.
+    :param corrupt: Files present but with a mismatched checksum, or present
+        and unreadable (an ``OSError`` while hashing is folded in here rather
+        than raised).
+    :param note: ``None`` when the entry has a recorded asset; otherwise an
+        explicit statement that no bytes have been recorded for this entry,
+        so a reader cannot mistake "no asset at all" for "one oddly-named
+        missing file" from `missing` alone.
+    """
+
+    citekey: str
+    verified: list[str] = field(default_factory=list)
+    missing: list[str] = field(default_factory=list)
+    corrupt: list[str] = field(default_factory=list)
+    note: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Return whether every recorded file verified.
+
+        An entry with nothing recorded is never ``ok``: ``verified`` empty
+        with `missing` and `corrupt` also empty would otherwise read as
+        vacuously clean — exactly the false assurance this report exists to
+        refuse (``verify --all`` on a fresh registry must say "nothing is
+        verified", not "everything checks out").
+
+        :returns: Whether at least one file verified and none is missing or
+            corrupt.
+        """
+        return bool(self.verified) and not self.missing and not self.corrupt
+
+    def as_json(self) -> dict[str, Any]:
+        """Return the report as a JSON-ready object for the audit trail.
+
+        :returns: The JSON-ready object. ``note`` is present only when set.
+        """
+        payload: dict[str, Any] = {
+            "citekey": self.citekey,
+            "ok": self.ok,
+            "verified": self.verified,
+            "missing": self.missing,
+            "corrupt": self.corrupt,
+        }
+        if self.note is not None:
+            payload["note"] = self.note
+        return payload
+
+
+def verify_entry(entry: Entry, *, cache_dir: Path) -> VerifyReport:
+    """Re-hash an entry's on-disk file(s) against the recorded checksum.
+
+    **Offline. Never downloads.** This only re-hashes bytes already on disk
+    and reports; it takes no client and no fetcher, matching
+    ``dataset.retrieval.verify``'s contract exactly (spec §4).
+
+    :param entry: The registry entry to verify.
+    :param cache_dir: The content-addressed cache root.
+    :returns: The per-file verification report. An entry with no recorded
+        asset is reported as :attr:`VerifyReport.missing` with an explicit
+        :attr:`VerifyReport.note` — never as :attr:`VerifyReport.ok` — because
+        an unfetched paper must not read as verified. A present-but-unreadable
+        file (``OSError`` while hashing) is folded into `corrupt` rather than
+        raising, matching `dataset`'s own offline report.
+    """
+    report = VerifyReport(citekey=entry.citekey)
+    asset = entry.asset
+    if asset is None or not asset.files:
+        report.note = "no asset recorded for this entry — nothing has been fetched yet"
+        report.missing.append(report.note)
+        return report
+    for ref in asset.files:
+        path = blob_path(cache_dir, ref.sha256)
+        if not path.is_file():
+            report.missing.append(ref.path)
+            continue
+        try:
+            digest = sha256_file(path)
+        except OSError:
+            report.corrupt.append(ref.path)
+            continue
+        if digest == bare_sha256(ref.sha256):
+            report.verified.append(ref.path)
+        else:
+            report.corrupt.append(ref.path)
+    return report
+
+
+# --- mirror: push to, or probe, the private mirror -----------------------------
+
+
+def mirror_entry(
+    entry: Entry, *, cache_dir: Path, mirror: Mirror, check_only: bool = False
+) -> dict[str, Any]:
+    """Push an entry's recorded file(s) to the mirror, or probe presence only.
+
+    Probes the mirror before deciding what to do with each file: a copy
+    already there is reported as such rather than re-pushed, and
+    `check_only` never calls :meth:`Mirror.put` regardless of what the probe
+    finds. A transport failure — most commonly a missing ``rclone`` binary —
+    is not caught here: it propagates as the actionable ``RetrievalError``
+    `Mirror` already raises (`core/mirror.py`), because a transport failure
+    and "no copy in the mirror" are different problems with different fixes,
+    and folding the former into the latter is exactly the failure the
+    substrate rule (spec §9) exists to prevent.
+
+    :param entry: The registry entry to mirror. An entry with no recorded
+        asset has nothing to push; it is reported entirely under `missing`.
+    :param cache_dir: The content-addressed cache root, to find the local
+        blob to push.
+    :param mirror: The configured mirror.
+    :param check_only: Probe presence without pushing anything.
+    :returns: A JSON-ready per-file report: ``citekey``, ``pushed`` (newly
+        pushed this call), ``already_present`` (the mirror already had it),
+        and ``missing`` (still not confirmed in the mirror after this call —
+        because `check_only` skipped the push, because there is no local
+        blob to push, or because the entry records no asset at all).
+    :raises RetrievalError: If the mirror transport itself fails (a missing
+        ``rclone`` binary, or a push that fails) — surfaced intact rather
+        than folded into `missing`.
+    """
+    report: dict[str, Any] = {
+        "citekey": entry.citekey,
+        "pushed": [],
+        "already_present": [],
+        "missing": [],
+    }
+    asset = entry.asset
+    if asset is None or not asset.files:
+        report["missing"].append("no asset recorded for this entry — nothing to mirror")
+        return report
+    for ref in asset.files:
+        sha = bare_sha256(ref.sha256)
+        if mirror.check(sha):
+            report["already_present"].append(sha)
+            continue
+        if check_only:
+            report["missing"].append(sha)
+            continue
+        blob = blob_path(cache_dir, ref.sha256)
+        if not blob.is_file():
+            report["missing"].append(sha)
+            continue
+        mirror.put(blob, sha)
+        report["pushed"].append(sha)
+    return report
