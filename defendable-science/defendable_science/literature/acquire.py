@@ -12,15 +12,38 @@ Design: ``docs/superpowers/specs/2026-08-27-literature-asset-acquisition-design.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from defendable_science.literature.graph import OPENALEX
+from defendable_science.core.download import DownloadError
+from defendable_science.core.fixity import (
+    RetrievalError,
+    bare_sha256,
+    blob_path,
+    sha256_file,
+    verified,
+)
+from defendable_science.literature.graph import OPENALEX, resolve
+from defendable_science.literature.registry import (
+    Acquisition,
+    Asset,
+    AssetFile,
+    License,
+    MirrorRef,
+    RegistryError,
+    patch_asset,
+)
 
 if TYPE_CHECKING:
-    from defendable_science.core.download import FetchedBytes
+    from collections.abc import Iterator
+    from pathlib import Path
+
+    from defendable_science.core.download import BytesFetcher, FetchedBytes
+    from defendable_science.core.http import HttpClient
+    from defendable_science.core.mirror import Mirror
     from defendable_science.literature.registry import Entry
 
     class SearchClient(Protocol):
@@ -93,6 +116,12 @@ class Candidate:
     :param year: The candidate's publication year, when reported.
     :param first_author_family: The candidate's first-author family name.
     :param openalex: The candidate's OpenAlex id, when it has one.
+    :param license: The raw license string observed on the record the URL came
+        from, when it reported one. Carried per-candidate rather than read off
+        the anchor work at the end, because rung 4 serves bytes from a *sibling*
+        work: recording the anchor's license for a sibling's bytes would be a
+        provenance lie, and licenses genuinely differ between a preprint and its
+        published version.
     """
 
     url: str
@@ -101,6 +130,7 @@ class Candidate:
     year: int | None = None
     first_author_family: str | None = None
     openalex: str | None = None
+    license: str | None = None
 
     def as_json(self) -> dict[str, Any]:
         """Return the candidate as a JSON-ready object for the audit trail.
@@ -114,6 +144,7 @@ class Candidate:
             "year": self.year,
             "first_author_family": self.first_author_family,
             "openalex": self.openalex,
+            "license": self.license,
         }
 
 
@@ -291,6 +322,109 @@ def evaluate_match(entry: Entry, candidate: Candidate) -> MatchRecord:
     return record
 
 
+# --- observed license --------------------------------------------------------
+
+#: What reported the license. Every observation here comes from the OpenAlex work
+#: record (``best_oa_location`` / ``primary_location`` / ``locations[]``), so the
+#: provenance recorded is the source, not the ladder rung: a rung only chooses
+#: *which work's* record was read, which the candidate's own ``openalex`` id
+#: already records.
+LICENSE_SOURCE = "openalex"
+
+#: SPDX ids whose licenses permit redistributing the bytes. Deliberately short and
+#: **not configurable**: whether a license grants redistribution is a compliance
+#: judgement, and a consumer overriding it in config would be the plugin quietly
+#: sanctioning a republication it cannot vouch for (spec §6).
+#:
+#: Non-commercial variants are deliberately absent. "NC" is not a redistribution
+#: grant for an in-repo copy of a paper, and an ``-nd`` (no-derivatives) or
+#: ``-nc-nd`` id is not one either. Anything not listed — including an absent or
+#: unparsable license, which is the *majority* case (36 of 50 works in the run
+#: that motivated this feature carried no license field at all) — is
+#: ``redistributable: false``.
+PERMISSIVE_SPDX = frozenset(
+    {
+        "cc0-1.0",
+        "cc-by",
+        "cc-by-3.0",
+        "cc-by-4.0",
+        "cc-by-sa",
+        "cc-by-sa-3.0",
+        "cc-by-sa-4.0",
+        "mit",
+        "apache-2.0",
+        "bsd-2-clause",
+        "bsd-3-clause",
+    }
+)
+
+
+def is_permissive(spdx: str | None) -> bool:
+    """Return whether an SPDX id is on the shipped redistribution allowlist.
+
+    Absent, blank, or unrecognized means ``False`` — the safe direction, and by
+    far the common one. A license we do not recognize is not a license we may
+    redistribute under.
+
+    :param spdx: The reported SPDX id, in any case, or ``None``.
+    :returns: Whether the bytes may be republished (e.g. copied into a repo).
+    """
+    if spdx is None:
+        return False
+    return spdx.strip().lower() in PERMISSIVE_SPDX
+
+
+def _license_from_observed(raw: str | None) -> License:
+    """Build the recorded license from a raw reported identifier.
+
+    ``id`` is the reported identifier normalized (stripped, casefolded) — what
+    the source *called* it. Recording it is not an assertion that it is a valid
+    SPDX id, and it is never what drives redistribution: only
+    :data:`PERMISSIVE_SPDX` does that, so an unrecognized id such as
+    ``all-rights-reserved`` is preserved verbatim in ``observed`` while staying
+    non-redistributable.
+
+    :param raw: The license string as reported, or ``None`` when none was.
+    :returns: The observed license (all-``None`` when nothing was reported).
+    """
+    if raw is None or not raw.strip():
+        return License()
+    return License(id=raw.strip().lower(), observed=raw.strip(), source=LICENSE_SOURCE)
+
+
+def _observed_license(work: dict[str, Any]) -> str | None:
+    """Return the first license string reported anywhere in an OpenAlex work.
+
+    ``best_oa_location`` and ``primary_location`` are consulted before the full
+    ``locations[]`` array, because those are the records OpenAlex itself
+    considers canonical for the work.
+
+    :param work: The OpenAlex work.
+    :returns: The raw license string, or ``None`` when the record carries none.
+    """
+    blocks: list[Any] = [work.get("best_oa_location"), work.get("primary_location")]
+    locations = work.get("locations")
+    if isinstance(locations, list):
+        blocks += locations
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        raw = block.get("license")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    return None
+
+
+def license_from_work(work: dict[str, Any]) -> License:
+    """Return the license *observed* on an OpenAlex work — not an assertion of rights.
+
+    :param work: The OpenAlex work.
+    :returns: The observed license; all-``None`` when the record reports none,
+        which is the majority case and means "not redistributable".
+    """
+    return _license_from_observed(_observed_license(work))
+
+
 # --- identity-derived rungs (1-3) and PDF acceptance -------------------------
 
 #: The PDF magic-byte prefix. Authoritative over ``Content-Type``, which lies.
@@ -375,6 +509,7 @@ def candidate_from_work(work: dict[str, Any], url: str, rung: str) -> Candidate:
         year=year if isinstance(year, int) else None,
         first_author_family=_first_family_from_work(work),
         openalex=_short_id(work.get("id")),
+        license=_observed_license(work),
     )
 
 
@@ -611,3 +746,784 @@ def venue_candidates(
             continue
         out.append(candidate_from_work(work, url, RUNG_VENUE))
     return out
+
+
+# --- outcome buckets ---------------------------------------------------------
+
+#: Bytes already recorded and resolvable from the cache or the mirror.
+BUCKET_CACHED = "cached"
+#: Bytes newly acquired, hashed, stored and recorded on the entry.
+BUCKET_FETCHED = "fetched"
+#: Plausible bytes held for a human ``confirm``; nothing written to the registry.
+BUCKET_QUARANTINED = "quarantined"
+#: The ladder was exhausted — this is the human worklist, never a failure report.
+BUCKET_MANUAL = "manual"
+#: A tooling failure: something went wrong, not "this paper has no PDF".
+#: Plural, unlike the others, because it names the report key the sweep
+#: dispatches into (``report[outcome.bucket]``, spec §7).
+BUCKET_ERROR = "errors"
+
+
+@dataclass
+class Outcome:
+    """What happened to one entry, in the shape the sweep's report buckets take.
+
+    One flat record for every bucket rather than a variant per bucket: the sweep
+    dispatches with ``report[outcome.bucket]`` and serializes with
+    :meth:`as_json`, so a uniform shape is what keeps that dispatch total.
+
+    :param citekey: The entry this is about.
+    :param bucket: One of the ``BUCKET_*`` constants.
+    :param sha256: The bare checksum of the bound or quarantined bytes;
+        ``None`` when nothing landed (including under ``--dry-run``).
+    :param rung: The ladder rung that produced the bytes, when one did.
+    :param url: Where the bytes came from, when they did.
+    :param candidate: The candidate record, for the audit trail.
+    :param match: The gate's per-axis record. On a ``manual`` outcome this is the
+        *refusal* that came closest, so a human can see which axis failed.
+    :param reason: Why, on any outcome that is not a plain success. Also carries
+        a partial-success note (a mirror write that failed after the bytes were
+        safely cached and recorded).
+    :param tried: Rungs attempted, in order, each once.
+    :param landing_urls: Somewhere for a human to click, on a ``manual`` outcome.
+    :param committable: Whether the observed license permits an in-repo copy.
+        ``fetch`` never makes that copy (spec §6) — it only reports.
+    :param path: Where the bytes are on disk: the blob for an acquisition, the
+        quarantine PDF for a quarantine.
+    :param license: The observed license identifier, when one was reported.
+    """
+
+    citekey: str
+    bucket: str
+    sha256: str | None = None
+    rung: str | None = None
+    url: str | None = None
+    candidate: dict[str, Any] | None = None
+    match: dict[str, Any] | None = None
+    reason: str | None = None
+    tried: list[str] = field(default_factory=list)
+    landing_urls: list[str] = field(default_factory=list)
+    committable: bool = False
+    path: str | None = None
+    license: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        """Return the outcome as a JSON-ready report row.
+
+        :returns: The JSON-ready object.
+        """
+        return {
+            "citekey": self.citekey,
+            "bucket": self.bucket,
+            "sha256": self.sha256,
+            "rung": self.rung,
+            "url": self.url,
+            "candidate": self.candidate,
+            "match": self.match,
+            "reason": self.reason,
+            "tried": list(self.tried),
+            "landing_urls": list(self.landing_urls),
+            "committable": self.committable,
+            "path": self.path,
+            "license": self.license,
+        }
+
+
+@dataclass
+class Context:
+    """Everything one acquisition needs, injected rather than constructed.
+
+    :param registry_path: The ``references.json`` to patch.
+    :param triage_path: The ``triage.yml`` sidecar (read by the sweep).
+    :param cache_dir: The content-addressed cache root.
+    :param mirror: The configured mirror, or ``None``.
+    :param client: The JSON HTTP client for metadata rungs.
+    :param fetcher: The byte fetcher, injected so the ladder runs offline.
+    :param max_bytes: Hard size ceiling per download.
+    :param resolvers: Consumer-configured venue resolvers (rung 6; ships empty).
+    :param today: ISO date recorded as the acquisition date.
+    """
+
+    registry_path: Path
+    triage_path: Path
+    cache_dir: Path
+    mirror: Mirror | None
+    client: HttpClient
+    fetcher: BytesFetcher
+    max_bytes: int
+    resolvers: list[Any]
+    today: str
+
+
+@dataclass
+class _Ladder:
+    """Mutable state carried across one entry's ladder walk.
+
+    :param tried: Rungs attempted, in order, each recorded once.
+    :param refusal: The first gated candidate the gate refused, kept so an
+        exhausted ladder can explain *which axis* failed rather than only that
+        nothing was found. The first is kept rather than the last because rungs
+        are walked best-first, so it is the closest thing to a match seen.
+    """
+
+    tried: list[str] = field(default_factory=list)
+    refusal: tuple[Candidate, MatchRecord] | None = None
+
+
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _safe_name(citekey: str) -> str:
+    """Reduce a citekey to a filename-safe token.
+
+    Citekeys come from a human-authored ``references.json``; a realistic one is
+    already safe and passes through unchanged. One containing a path separator
+    would otherwise write outside the cache, which is not a risk worth carrying
+    for a field nobody validates.
+
+    :param citekey: The CSL ``id``.
+    :returns: The same string with anything outside ``[A-Za-z0-9._-]`` replaced.
+    """
+    return _UNSAFE_NAME.sub("_", citekey)
+
+
+def _quarantine_dir(cache_dir: Path, citekey: str) -> Path:
+    """Return the quarantine directory for one entry.
+
+    :param cache_dir: The content-addressed cache root.
+    :param citekey: The entry the candidate was proposed for.
+    :returns: ``<cache_dir>/quarantine/<citekey>``.
+    """
+    return cache_dir / "quarantine" / _safe_name(citekey)
+
+
+def _write_quarantine(
+    ctx: Context,
+    entry: Entry,
+    src: Path,
+    sha: str,
+    candidate: Candidate,
+    match: MatchRecord,
+) -> Path:
+    """Park plausible-but-unproven bytes with the evidence a human needs.
+
+    **Nothing is written to the registry** (spec §5.3): promotion is an explicit
+    ``literature confirm --sha256``, and there is deliberately no "promote
+    whatever is in quarantine" convenience.
+
+    :param ctx: The acquisition context.
+    :param entry: The entry the candidate was proposed for.
+    :param src: The landed bytes, moved into quarantine.
+    :param sha: Their bare checksum.
+    :param candidate: The candidate record.
+    :param match: The gate's per-axis record.
+    :returns: Where the PDF was parked.
+    """
+    directory = _quarantine_dir(ctx.cache_dir, entry.citekey)
+    directory.mkdir(parents=True, exist_ok=True)
+    pdf = directory / f"{sha}.pdf"
+    src.replace(pdf)
+    (directory / f"{sha}.json").write_text(
+        json.dumps(
+            {
+                "candidate": candidate.as_json(),
+                "match": match.as_json(),
+                "url": candidate.url,
+                "rung": candidate.rung,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return pdf
+
+
+def _store_blob(ctx: Context, src: Path, sha: str) -> Path:
+    """Move landed bytes into the content-addressed store.
+
+    Overwriting is safe and unconditional: the destination is derived from the
+    bytes, so anything already there is the same bytes.
+
+    :param ctx: The acquisition context.
+    :param src: The landed bytes.
+    :param sha: Their bare checksum.
+    :returns: The blob path.
+    """
+    dest = blob_path(ctx.cache_dir, sha)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src.replace(dest)
+    return dest
+
+
+def _mirror_key(mirror: Mirror, sha: str) -> str:
+    """Return the mirror key for a checksum (mirrors ``Mirror``'s own layout).
+
+    :param mirror: The configured mirror.
+    :param sha: The bare checksum.
+    :returns: ``<base_path>/sha256/<hash>``, without a leading slash.
+    """
+    return f"{mirror.base_path.rstrip('/')}/sha256/{sha}".lstrip("/")
+
+
+def _populate_mirror(
+    ctx: Context, blob: Path, sha: str
+) -> tuple[MirrorRef | None, str | None]:
+    """Push newly acquired bytes to the mirror, if one is configured.
+
+    A mirror failure does **not** discard the acquisition: the bytes are already
+    hashed and in the local store, so calling this an error would misreport an
+    acquired paper. Nor is it swallowed — no ``mirror`` reference is recorded (the
+    spine must not claim a copy that is not there) and the failure is returned as
+    a note that travels with the outcome.
+
+    :param ctx: The acquisition context.
+    :param blob: The stored blob.
+    :param sha: Its bare checksum.
+    :returns: ``(mirror reference or None, failure note or None)``.
+    """
+    if ctx.mirror is None:
+        return None, None
+    try:
+        ctx.mirror.put(blob, sha)
+    except RetrievalError as exc:
+        return None, (
+            f"the bytes are cached and recorded, but the mirror write failed: {exc}"
+        )
+    return MirrorRef(remote=ctx.mirror.remote, key=_mirror_key(ctx.mirror, sha)), None
+
+
+def _recorded(entry: Entry) -> tuple[Asset, str] | None:
+    """Return the entry's already-recorded asset and checksum, if it has one.
+
+    :param entry: The registry entry.
+    :returns: ``(asset, bare checksum)``, or ``None`` when no bytes are recorded.
+    """
+    asset = entry.asset
+    if asset is None or not asset.files:
+        return None
+    return asset, bare_sha256(asset.files[0].sha256)
+
+
+def _cached_outcome(
+    entry: Entry,
+    asset: Asset,
+    sha: str,
+    *,
+    rung: str | None = None,
+    url: str | None = None,
+    path: Path | None = None,
+) -> Outcome:
+    """Build the outcome for bytes that were already ours.
+
+    :param entry: The registry entry.
+    :param asset: Its recorded spine.
+    :param sha: The bare checksum.
+    :param rung: The rung that re-served the bytes, under ``--refetch``.
+    :param url: Where they were re-served from, under ``--refetch``.
+    :param path: The blob path, when known.
+    :returns: A :data:`BUCKET_CACHED` outcome.
+    """
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=BUCKET_CACHED,
+        sha256=sha,
+        rung=rung,
+        url=url,
+        committable=asset.redistributable,
+        license=asset.license.id,
+        path=None if path is None else str(path),
+    )
+
+
+def _resolve_recorded(entry: Entry, ctx: Context, asset: Asset, sha: str) -> Outcome:
+    """Resolve an already-recorded checksum from the cache, then the mirror.
+
+    **No network.** This is the substrate half of the fixity model (spec §4). An
+    entry whose bytes are already identified by a checksum has nothing to
+    acquire, so no acquisition rung runs and no metadata call is made —
+    re-walking the ladder would risk rebinding a citekey to whatever the source
+    happens to serve today.
+
+    :param entry: The registry entry.
+    :param ctx: The acquisition context.
+    :param asset: Its recorded spine.
+    :param sha: The recorded bare checksum.
+    :returns: :data:`BUCKET_CACHED` when the bytes are resolvable, otherwise
+        :data:`BUCKET_MANUAL` — the recorded bytes are simply gone, which is a
+        fact about this paper and belongs on the human worklist.
+    """
+    blob = blob_path(ctx.cache_dir, sha)
+    if verified(blob, sha):
+        return _cached_outcome(entry, asset, sha, path=blob)
+    if ctx.mirror is not None and ctx.mirror.get(sha, blob) and verified(blob, sha):
+        return _cached_outcome(entry, asset, sha, path=blob)
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=BUCKET_MANUAL,
+        sha256=sha,
+        reason=(
+            f"recorded checksum sha256:{sha} resolves to nothing — not in the "
+            "local cache, and not in the mirror either. Supply the bytes with "
+            "'literature confirm --file', or re-run with --refetch to acquire "
+            "them again."
+        ),
+    )
+
+
+def _identifier(entry: Entry) -> str | None:
+    """Return the identifier to resolve this entry by.
+
+    The recorded ``pid`` wins over the DOI: it is what a previous resolution
+    settled on, so re-resolving through it cannot drift to a different work.
+
+    :param entry: The registry entry.
+    :returns: A DOI / OpenAlex id, or ``None`` when the entry carries neither.
+    """
+    pid = entry.asset.pid if entry.asset is not None else None
+    if pid is None:
+        return entry.doi
+    return pid[len("openalex:") :] if pid.lower().startswith("openalex:") else pid
+
+
+def _resolve_work(
+    entry: Entry, ctx: Context
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve an entry to the full OpenAlex work the ladder is built from.
+
+    Two calls rather than one: :func:`~defendable_science.literature.graph.resolve`
+    owns identifier classification and the honest miss/throttle distinction but
+    returns a summary, and the ladder needs ``locations[]``. The client caches
+    JSON responses, so the second call is free whenever the first was an OpenAlex
+    id lookup.
+
+    A miss is an **error**, not a ``manual`` row: we never looked for a PDF, so
+    saying "download this by hand" would be a claim we did not earn.
+    ``RateLimitError`` and ``HttpError`` are deliberately *not* caught — the sweep
+    decides between aborting and an error row (spec §9).
+
+    :param entry: The registry entry.
+    :param ctx: The acquisition context.
+    :returns: ``(work, None)`` on success, ``(None, reason)`` on a miss.
+    :raises RateLimitError: If a provider throttles — never a "no PDF".
+    :raises HttpError: On a transport failure the sweep must see.
+    """
+    identifier = _identifier(entry)
+    if identifier is None:
+        return None, (
+            "no DOI and no recorded identifier on the entry — nothing to resolve; "
+            "add a 'DOI' field to the registry entry first"
+        )
+    info = resolve(identifier, client=ctx.client)
+    if not info.get("resolved"):
+        return None, f"could not resolve {identifier!r}: {info.get('reason')}"
+    work = ctx.client.get_json(f"{OPENALEX}/works/{info['openalex']}")
+    if not isinstance(work, dict) or not work.get("id"):
+        return None, (
+            f"resolved {identifier!r} to {info['openalex']} but OpenAlex returned "
+            "no usable work record for it"
+        )
+    return work, None
+
+
+def _all_landing_urls(work: dict[str, Any]) -> list[str]:
+    """Return every landing page on the work — the human's click targets.
+
+    Wider than :func:`landing_urls`, deliberately: that one keeps only links
+    shaped like a direct PDF, because rung 3 downloads them. This one feeds the
+    ``manual`` worklist, where an ordinary HTML abstract page is exactly what a
+    human wants.
+
+    :param work: The OpenAlex work.
+    :returns: Landing URLs in record order, deduplicated.
+    """
+    locations = work.get("locations")
+    if not isinstance(locations, list):
+        return []
+    out: list[str] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        url = location.get("landing_page_url")
+        if isinstance(url, str) and url.strip() and url not in out:
+            out.append(url)
+    return out
+
+
+def _access_from_work(work: dict[str, Any]) -> str | None:
+    """Return ``open`` / ``gated`` from the work's OA flag, or ``None`` if unstated.
+
+    :param work: The OpenAlex work.
+    :returns: The access class, or ``None`` when the record does not say.
+    """
+    is_oa = (work.get("open_access") or {}).get("is_oa")
+    if is_oa is True:
+        return "open"
+    if is_oa is False:
+        return "gated"
+    return None
+
+
+def _ladder(entry: Entry, work: dict[str, Any], ctx: Context) -> Iterator[Candidate]:
+    """Yield every candidate in ladder order, lazily.
+
+    A generator, not a list: rungs 4-6 each cost a network round trip, and the
+    first accepted candidate wins, so an entry whose ``best_oa_location`` serves
+    a PDF must not pay for a sibling search it will never look at.
+
+    :param entry: The registry entry.
+    :param work: The resolved anchor work.
+    :param ctx: The acquisition context.
+    :returns: Candidates, rungs 1-3 (identity-derived) before 4-6 (gated).
+    """
+    yield from identity_candidates(work)
+    yield from sibling_candidates(entry, work, client=ctx.client)
+    yield from arxiv_candidates(entry, client=ctx.client)
+    yield from venue_candidates(entry, work, ctx.resolvers)
+
+
+def _note(tried: list[str], rung: str) -> None:
+    """Record that a rung was attempted, once.
+
+    :param tried: The accumulator.
+    :param rung: The rung attempted.
+    """
+    if rung not in tried:
+        tried.append(rung)
+
+
+def _gate(entry: Entry, candidate: Candidate, state: _Ladder) -> MatchRecord | None:
+    """Adjudicate a candidate, or ``None`` to skip it.
+
+    Rungs 1-3 are identity-derived and carry no match to make. Every other rung
+    goes through :func:`evaluate_match` with no exceptions — that gate stands
+    where ``dataset`` has a pre-known hash, so a rung that bypassed it would be
+    binding unverified bytes to a citekey.
+
+    :param entry: The registry entry.
+    :param candidate: The candidate under consideration.
+    :param state: The ladder state, which remembers the first refusal.
+    :returns: The match record, or ``None`` when the candidate is refused.
+    """
+    if candidate.rung not in GATED_RUNGS:
+        return MatchRecord(verdict=IDENTITY)
+    record = evaluate_match(entry, candidate)
+    if record.verdict == REFUSE:
+        if state.refusal is None:
+            state.refusal = (candidate, record)
+        return None
+    return record
+
+
+def _land_bytes(
+    ctx: Context, entry: Entry, candidate: Candidate
+) -> FetchedBytes | None:
+    """Download one candidate and check it really is a PDF.
+
+    A :class:`~defendable_science.core.download.DownloadError` here is about *this
+    URL* — a dead proceedings link, a 403, an oversized body — so it ends the
+    candidate and nothing more. Ending the ladder on it would report "no PDF
+    exists" on the strength of one broken link.
+
+    :param ctx: The acquisition context.
+    :param entry: The registry entry (names the scratch file).
+    :param candidate: The candidate to download.
+    :returns: The landed PDF bytes, or ``None`` to move to the next candidate.
+    """
+    dest = ctx.cache_dir / "incoming" / f"{_safe_name(entry.citekey)}.part"
+    try:
+        fetched = ctx.fetcher(candidate.url, dest, ctx.max_bytes)
+    except DownloadError:
+        return None
+    if looks_like_pdf(fetched):
+        return fetched
+    fetched.path.unlink(missing_ok=True)
+    return None
+
+
+def _dry_run_outcome(
+    entry: Entry, candidate: Candidate, match: MatchRecord, state: _Ladder
+) -> Outcome:
+    """Report the rung that would yield bytes, without fetching or writing.
+
+    :param entry: The registry entry.
+    :param candidate: The first candidate that passed the gate.
+    :param match: Its match record.
+    :param state: The ladder state.
+    :returns: The would-be outcome, with ``sha256`` unset — no bytes were hashed,
+        so claiming a checksum would be inventing one.
+    """
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=(BUCKET_QUARANTINED if match.verdict == QUARANTINE else BUCKET_FETCHED),
+        sha256=None,
+        rung=candidate.rung,
+        url=candidate.url,
+        candidate=candidate.as_json(),
+        match=match.as_json(),
+        tried=state.tried,
+        committable=is_permissive(candidate.license),
+        license=_license_from_observed(candidate.license).id,
+    )
+
+
+def _refetch_outcome(
+    entry: Entry,
+    ctx: Context,
+    asset: Asset,
+    candidate: Candidate,
+    fetched: FetchedBytes,
+    sha: str,
+    recorded: str,
+) -> Outcome:
+    """Compare re-acquired bytes against the recorded checksum.
+
+    Drift **refuses**. A citekey's identity is what the recorded bytes say it is,
+    so a source now serving different bytes — a new arXiv version, a corrected
+    proof, a replaced file — is a decision for a human, not a side effect of
+    re-running a command. The registry is left untouched.
+
+    :param entry: The registry entry.
+    :param ctx: The acquisition context.
+    :param asset: The recorded spine.
+    :param candidate: The candidate that served the bytes.
+    :param fetched: The landed bytes.
+    :param sha: Their bare checksum.
+    :param recorded: The checksum already on the entry.
+    :returns: :data:`BUCKET_CACHED` when the bytes are the recorded ones,
+        :data:`BUCKET_ERROR` describing the drift when they are not.
+    """
+    if sha != recorded:
+        fetched.path.unlink(missing_ok=True)
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            sha256=sha,
+            rung=candidate.rung,
+            url=candidate.url,
+            candidate=candidate.as_json(),
+            reason=(
+                f"refetch drift: recorded {recorded} but source now serves {sha} "
+                "— a citekey is not rebound silently; confirm --file if the new "
+                "version is intended"
+            ),
+        )
+    blob = _store_blob(ctx, fetched.path, sha)
+    return _cached_outcome(
+        entry, asset, sha, rung=candidate.rung, url=candidate.url, path=blob
+    )
+
+
+def _accept(
+    entry: Entry,
+    ctx: Context,
+    work: dict[str, Any],
+    candidate: Candidate,
+    match: MatchRecord,
+    fetched: FetchedBytes,
+    sha: str,
+) -> Outcome:
+    """Bind accepted bytes: store, mirror, record — trust established on first use.
+
+    The checksum is *computed here and written back*, which is the one place this
+    front-end differs from ``dataset``'s known-hash contract (spec §4). ``files``
+    records a content-addressed blob path and never a repository path: ``fetch``
+    does not add bytes to someone's git history on the strength of a scraped
+    license field (spec §6).
+
+    :param entry: The registry entry.
+    :param ctx: The acquisition context.
+    :param work: The resolved anchor work.
+    :param candidate: The candidate that served the bytes.
+    :param match: The gate's record (``identity`` for rungs 1-3).
+    :param fetched: The landed bytes.
+    :param sha: Their bare checksum.
+    :returns: :data:`BUCKET_FETCHED`, or :data:`BUCKET_ERROR` if the registry
+        could not be patched — the bytes are cached either way, and saying so is
+        the difference between a recoverable state and a lost one.
+    """
+    blob = _store_blob(ctx, fetched.path, sha)
+    mirror_ref, mirror_note = _populate_mirror(ctx, blob, sha)
+    observed = _license_from_observed(candidate.license)
+    asset = Asset(
+        pid=f"openalex:{_short_id(work.get('id'))}",
+        files=[
+            AssetFile(
+                path=f"sha256/{sha}",
+                sha256=f"sha256:{sha}",
+                size=fetched.size,
+                media_type=fetched.media_type,
+            )
+        ],
+        license=observed,
+        redistributable=is_permissive(observed.id),
+        access=_access_from_work(work),
+        mirror=mirror_ref,
+        acquisition=Acquisition(
+            rung=candidate.rung,
+            url=candidate.url,
+            candidate=candidate.as_json(),
+            match=match.as_json(),
+            fetched=ctx.today,
+        ),
+    )
+    try:
+        patch_asset(ctx.registry_path, entry.citekey, asset)
+    except RegistryError as exc:
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            sha256=sha,
+            rung=candidate.rung,
+            url=candidate.url,
+            path=str(blob),
+            reason=(
+                f"acquired {sha} but could not record it: {exc} — the bytes are "
+                "in the cache, so re-run once the registry is readable"
+            ),
+        )
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=BUCKET_FETCHED,
+        sha256=sha,
+        rung=candidate.rung,
+        url=candidate.url,
+        candidate=candidate.as_json(),
+        match=match.as_json(),
+        reason=mirror_note,
+        committable=asset.redistributable,
+        path=str(blob),
+        license=observed.id,
+    )
+
+
+def _try_candidate(
+    entry: Entry,
+    ctx: Context,
+    work: dict[str, Any],
+    candidate: Candidate,
+    state: _Ladder,
+    *,
+    recorded: tuple[Asset, str] | None,
+    dry_run: bool,
+) -> Outcome | None:
+    """Walk one candidate to a verdict, or ``None`` to continue the ladder.
+
+    :param entry: The registry entry.
+    :param ctx: The acquisition context.
+    :param work: The resolved anchor work.
+    :param candidate: The candidate under consideration.
+    :param state: The ladder state.
+    :param recorded: The already-recorded ``(asset, checksum)`` under
+        ``--refetch``, or ``None`` on a first acquisition.
+    :param dry_run: Report rather than download.
+    :returns: A terminal outcome, or ``None`` when the ladder should go on.
+    """
+    _note(state.tried, candidate.rung)
+    match = _gate(entry, candidate, state)
+    if match is None:
+        return None
+    if dry_run:
+        return _dry_run_outcome(entry, candidate, match, state)
+    fetched = _land_bytes(ctx, entry, candidate)
+    if fetched is None:
+        return None
+    sha = sha256_file(fetched.path)
+    if recorded is not None:
+        asset, previous = recorded
+        return _refetch_outcome(entry, ctx, asset, candidate, fetched, sha, previous)
+    if match.verdict == QUARANTINE:
+        path = _write_quarantine(ctx, entry, fetched.path, sha, candidate, match)
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_QUARANTINED,
+            sha256=sha,
+            rung=candidate.rung,
+            url=candidate.url,
+            candidate=candidate.as_json(),
+            match=match.as_json(),
+            reason=match.reason,
+            tried=state.tried,
+            path=str(path),
+        )
+    return _accept(entry, ctx, work, candidate, match, fetched, sha)
+
+
+def _exhausted(entry: Entry, work: dict[str, Any], state: _Ladder) -> Outcome:
+    """Build the ``manual`` row for a ladder that produced nothing.
+
+    This is the *only* path to ``manual``. A throttle, a transport failure, or an
+    unresolvable identifier never lands here: telling a human to download a paper
+    by hand because a provider rate-limited us is exactly the confusion the
+    failure-honesty rule exists to prevent (spec §9).
+
+    :param entry: The registry entry.
+    :param work: The resolved anchor work.
+    :param state: The ladder state.
+    :returns: A :data:`BUCKET_MANUAL` outcome carrying the rungs tried, the
+        landing URLs to click, and the closest refusal if there was one.
+    """
+    reason = (
+        "the acquisition ladder is exhausted — every rung was consulted and none "
+        "served PDF bytes"
+    )
+    candidate: dict[str, Any] | None = None
+    match: dict[str, Any] | None = None
+    if state.refusal is not None:
+        refused, record = state.refusal
+        candidate, match = refused.as_json(), record.as_json()
+        reason = f"{reason}; the closest candidate was refused: {record.reason}"
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=BUCKET_MANUAL,
+        reason=reason,
+        tried=state.tried,
+        landing_urls=_all_landing_urls(work),
+        candidate=candidate,
+        match=match,
+    )
+
+
+def acquire_one(
+    entry: Entry, ctx: Context, *, refetch: bool = False, dry_run: bool = False
+) -> Outcome:
+    """Acquire the PDF for one registry entry.
+
+    **Resolution before acquisition.** An entry that already records a checksum
+    is a pure substrate resolution — cache, then mirror — and touches the network
+    not at all. **Trust on first use, gated.** With no checksum recorded, the
+    ladder runs and the checksum is established from the accepted bytes, with the
+    match gate standing where ``dataset`` has a pre-known hash. **Drift refuses**
+    (spec §4).
+
+    Rate limits and transport failures propagate to the caller rather than being
+    bucketed here: only an exhausted ladder means "no PDF was obtainable".
+
+    :param entry: The registry entry to acquire for.
+    :param ctx: The acquisition context.
+    :param refetch: Re-run the ladder even though a checksum is recorded, and
+        refuse if the bytes have changed.
+    :param dry_run: Report the rung that would yield bytes; fetch and write
+        nothing.
+    :returns: The outcome, in one of the ``BUCKET_*`` buckets.
+    :raises RateLimitError: If a provider throttles a metadata call.
+    :raises HttpError: On a metadata transport failure.
+    :raises RetrievalError: If a configured mirror cannot be reached at all
+        (a missing ``rclone``), which is a configuration fault, not a fact about
+        this paper.
+    """
+    recorded = _recorded(entry)
+    if recorded is not None and not refetch:
+        return _resolve_recorded(entry, ctx, *recorded)
+    work, reason = _resolve_work(entry, ctx)
+    if work is None:
+        return Outcome(citekey=entry.citekey, bucket=BUCKET_ERROR, reason=reason)
+    state = _Ladder()
+    for candidate in _ladder(entry, work, ctx):
+        outcome = _try_candidate(
+            entry, ctx, work, candidate, state, recorded=recorded, dry_run=dry_run
+        )
+        if outcome is not None:
+            return outcome
+    return _exhausted(entry, work, state)

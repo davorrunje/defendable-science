@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from defendable_science.core.download import FetchedBytes
+from defendable_science.core.download import DownloadError, FetchedBytes
+from defendable_science.core.fixity import RetrievalError
+from defendable_science.core.http import HttpError, RateLimitError
 from defendable_science.literature import acquire as a
 from defendable_science.literature import registry as reg
 
@@ -328,6 +331,9 @@ def test_candidate_as_json_is_serializable() -> None:
         "year": 1997,
         "first_author_family": "Sill",
         "openalex": "W123",
+        # Not from the brief: task 10 added `license` to Candidate so a rung-4
+        # sibling's bytes record the *sibling's* license, not the anchor's.
+        "license": None,
     }
 
 
@@ -799,3 +805,842 @@ def test_rung_6_skips_a_malformed_resolver() -> None:
         {"match": "Neural", "url_template": "http://v/{openalex!z}.pdf"},  # ValueError
     ]
     assert a.venue_candidates(_entry(), _work("sill1997"), resolvers) == []
+
+
+# --- task 10: single-entry acquisition --------------------------------------
+#
+# Fixtures below build OpenAlex works and registry files inline rather than
+# reaching for the three captured payloads, because the ladder's branches need
+# shapes the real captures do not have (two PDF URLs, a permissive license, a
+# same-title sibling by a different author). The captured payloads still drive
+# the two named regression cases.
+
+
+def _ctx(tmp_path: Path, client: Any, fetcher: Any, **kw: Any) -> a.Context:
+    base: dict[str, Any] = {
+        "registry_path": tmp_path / "references.json",
+        "triage_path": tmp_path / "triage.yml",
+        "cache_dir": tmp_path / "cache",
+        "mirror": None,
+        "client": client,
+        "fetcher": fetcher,
+        "max_bytes": 1 << 20,
+        "resolvers": [],
+        "today": "2026-08-27",
+    }
+    base.update(kw)
+    return a.Context(**base)
+
+
+PDF = b"%PDF-1.4 body"
+PDF_SHA = hashlib.sha256(PDF).hexdigest()
+OTHER_PDF = b"%PDF-1.4 a different body"
+OTHER_SHA = hashlib.sha256(OTHER_PDF).hexdigest()
+
+
+class FakeFetcher:
+    """A ``BytesFetcher`` that serves canned bodies (or raises) per URL."""
+
+    def __init__(
+        self,
+        bodies: dict[str, bytes | Exception] | None = None,
+        default: bytes | Exception | None = PDF,
+    ) -> None:
+        self.bodies = bodies or {}
+        self.default = default
+        self.calls: list[str] = []
+
+    def __call__(self, url: str, dest: Path, max_bytes: int) -> FetchedBytes:
+        self.calls.append(url)
+        payload = self.bodies.get(url, self.default)
+        if isinstance(payload, Exception):
+            raise payload
+        if payload is None:
+            raise DownloadError(f"{url}: nothing here")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
+        media = "application/pdf" if payload.startswith(b"%PDF-") else "text/html"
+        return FetchedBytes(path=dest, media_type=media, size=len(payload))
+
+
+class NeverFetcher:
+    """A fetcher that fails the test if the ladder ever downloads anything."""
+
+    def __call__(self, url: str, dest: Path, max_bytes: int) -> FetchedBytes:
+        raise AssertionError(f"the fetcher must not be called, but got {url}")
+
+
+class FakeMirror:
+    """A stand-in for ``Mirror`` that never shells out to rclone."""
+
+    def __init__(
+        self, body: bytes | None = None, put_error: Exception | None = None
+    ) -> None:
+        self.body = body
+        self.put_error = put_error
+        self.puts: list[tuple[str, str]] = []
+        self.remote = "papers"
+        self.base_path = "literature"
+
+    def put(self, local: str | Path, sha256: str) -> None:
+        if self.put_error is not None:
+            raise self.put_error
+        self.puts.append((str(local), sha256))
+
+    def get(self, sha256: str, dst: str | Path) -> bool:
+        if self.body is None:
+            return False
+        target = Path(dst)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.body)
+        return True
+
+    def check(self, sha256: str) -> bool:
+        return self.body is not None
+
+
+def _oa(
+    wid: str = "W1",
+    title: str = "Monotonic Networks",
+    year: int = 1997,
+    family: str = "Sill",
+    pdf: str | None = None,
+    pdfs: list[str] | None = None,
+    landing: str | None = None,
+    lic: Any = None,
+    is_oa: Any = None,
+    venue: str | None = "Neural Information Processing Systems",
+) -> dict[str, Any]:
+    """Build a minimal OpenAlex work with exactly the shape a test needs."""
+    urls = pdfs if pdfs is not None else [pdf]
+    locations: list[dict[str, Any]] = [
+        {"landing_page_url": landing, "pdf_url": url, "license": lic} for url in urls
+    ]
+    source = {"display_name": venue} if venue is not None else None
+    return {
+        "id": f"https://openalex.org/{wid}",
+        "display_name": title,
+        "publication_year": year,
+        "authorships": [{"author": {"display_name": f"Joseph {family}"}}],
+        "open_access": {"is_oa": is_oa},
+        "best_oa_location": (
+            {"pdf_url": urls[0], "license": lic} if urls[0] is not None else None
+        ),
+        "locations": locations,
+        "primary_location": {"source": source},
+        "ids": {},
+        "doi": None,
+    }
+
+
+def _registry(
+    tmp_path: Path,
+    citekey: str = "sill1997monotonic",
+    title: str | None = "Monotonic Networks",
+    year: int | None = 1997,
+    family: str | None = "Sill",
+    doi: str | None = "10.1234/abc",
+    spine: dict[str, Any] | None = None,
+) -> tuple[Path, reg.Entry]:
+    """Write a one-entry ``references.json`` and return it with its decoded entry."""
+    item: dict[str, Any] = {"id": citekey, "type": "paper-conference"}
+    if title is not None:
+        item["title"] = title
+    if year is not None:
+        item["issued"] = {"date-parts": [[year]]}
+    if family is not None:
+        item["author"] = [{"family": family, "given": "Joseph"}]
+    if doi is not None:
+        item["DOI"] = doi
+    if spine is not None:
+        item["custom"] = {reg.NAMESPACE: spine}
+    path = tmp_path / "references.json"
+    path.write_text(json.dumps([item], indent=2) + "\n", encoding="utf-8")
+    return path, reg.load_registry(path).entries[0]
+
+
+def _spine(sha: str = PDF_SHA, **kw: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "schema": reg.SCHEMA,
+        "pid": None,
+        "files": [{"path": f"sha256/{sha}", "sha256": f"sha256:{sha}"}],
+        "license": {"id": None, "observed": None, "source": None},
+        "redistributable": False,
+    }
+    base.update(kw)
+    return base
+
+
+def _seed_blob(tmp_path: Path, body: bytes = PDF) -> Path:
+    blob = tmp_path / "cache" / "sha256" / hashlib.sha256(body).hexdigest()
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(body)
+    return blob
+
+
+def _asset(path: Path) -> reg.Asset:
+    asset = reg.load_registry(path).entries[0].asset
+    assert asset is not None
+    return asset
+
+
+# --- the license allowlist --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("spdx", "expected"),
+    [
+        ("cc-by", True),
+        ("cc-by-4.0", True),
+        ("cc0-1.0", True),
+        ("cc-by-sa", True),
+        ("mit", True),
+        ("apache-2.0", True),
+        ("CC-BY-4.0", True),
+        (None, False),
+        ("", False),
+        ("all-rights-reserved", False),
+        # Non-commercial is not a redistribution grant for an in-repo copy of a
+        # paper. Getting this backwards is a licence-compliance error.
+        ("cc-by-nc", False),
+        ("cc-by-nc-nd", False),
+        ("cc-by-nd", False),
+    ],
+)
+def test_is_permissive(spdx: str | None, expected: bool) -> None:
+    assert a.is_permissive(spdx) is expected
+
+
+@pytest.mark.parametrize(
+    ("work", "expected"),
+    [
+        ({"best_oa_location": {"license": "cc-by"}}, "cc-by"),
+        ({"primary_location": {"license": "CC-BY-4.0 "}}, "cc-by-4.0"),
+        ({"locations": [{"license": "mit"}]}, "mit"),
+        # everything unusable -> no observation at all
+        ({}, None),
+        ({"best_oa_location": None, "locations": "not-a-list"}, None),
+        ({"locations": ["junk", {"license": None}, {"license": "  "}]}, None),
+    ],
+)
+def test_license_from_work(work: dict[str, Any], expected: str | None) -> None:
+    assert a.license_from_work(work).id == expected
+
+
+def test_license_from_work_records_the_raw_string_and_its_source() -> None:
+    observed = a.license_from_work(
+        {"best_oa_location": {"license": "All-Rights-Reserved"}}
+    )
+    assert observed.observed == "All-Rights-Reserved"
+    assert observed.id == "all-rights-reserved"
+    assert observed.source == a.LICENSE_SOURCE
+
+
+def test_a_blank_observed_license_is_no_license() -> None:
+    """Private helper: a whitespace-only string is not a license observation."""
+    assert a._license_from_observed("   ") == reg.License()
+
+
+# --- resolution before acquisition (spec §4) --------------------------------
+
+
+def test_already_recorded_sha_resolves_from_cache_without_network(
+    tmp_path: Path,
+) -> None:
+    """The load-bearing no-network property of a recorded checksum."""
+    path, entry = _registry(tmp_path, spine=_spine())
+    _seed_blob(tmp_path)
+    client = FakeClient({})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_CACHED
+    assert outcome.sha256 == PDF_SHA
+    assert client.calls == []
+    assert path.read_bytes() == path.read_bytes()
+
+
+def test_already_recorded_sha_falls_through_to_mirror(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    mirror = FakeMirror(body=PDF)
+    outcome = a.acquire_one(
+        entry, _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=mirror)
+    )
+    assert outcome.bucket == a.BUCKET_CACHED
+    assert outcome.sha256 == PDF_SHA
+
+
+def test_a_mirror_that_does_not_hold_the_key_is_manual(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    outcome = a.acquire_one(
+        entry, _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=FakeMirror())
+    )
+    assert outcome.bucket == a.BUCKET_MANUAL
+
+
+def test_mirror_bytes_that_do_not_verify_are_treated_as_absent(
+    tmp_path: Path,
+) -> None:
+    """A corrupt copy is 'absent', per the substrate rule — never bound anyway."""
+    _path, entry = _registry(tmp_path, spine=_spine())
+    outcome = a.acquire_one(
+        entry,
+        _ctx(
+            tmp_path, FakeClient({}), NeverFetcher(), mirror=FakeMirror(body=b"corrupt")
+        ),
+    )
+    assert outcome.bucket == a.BUCKET_MANUAL
+
+
+def test_recorded_sha_with_no_bytes_anywhere_is_manual(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    outcome = a.acquire_one(entry, _ctx(tmp_path, FakeClient({}), NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.reason is not None
+    assert PDF_SHA in outcome.reason
+
+
+def test_a_corrupt_cache_blob_falls_through_to_the_mirror(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    blob = tmp_path / "cache" / "sha256" / PDF_SHA
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"corrupt")
+    outcome = a.acquire_one(
+        entry,
+        _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=FakeMirror(body=PDF)),
+    )
+    assert outcome.bucket == a.BUCKET_CACHED
+
+
+def test_a_recorded_spine_with_no_files_still_runs_the_ladder(tmp_path: Path) -> None:
+    """``pid`` recorded, bytes never acquired — resolution has nothing to resolve."""
+    path, entry = _registry(
+        tmp_path, spine=_spine(files=[], pid="openalex:W1"), doi=None
+    )
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert _asset(path).files[0].sha256 == f"sha256:{PDF_SHA}"
+    assert client.calls[0][0].endswith("/works/W1")
+
+
+def test_a_non_openalex_pid_is_resolved_as_written(tmp_path: Path) -> None:
+    _path, entry = _registry(
+        tmp_path, spine=_spine(files=[], pid="doi:10.1234/abc"), doi=None
+    )
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert client.calls[0][0].endswith("/works/doi:10.1234/abc")
+
+
+# --- the ladder -------------------------------------------------------------
+
+
+def test_identity_rung_fetches_and_records(tmp_path: Path) -> None:
+    """Sill 1997 — closed in OpenAlex, but its landing page *is* the PDF."""
+    path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _work("sill1997")})
+    fetcher = FakeFetcher()
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_OA_LANDING
+    assert outcome.sha256 == PDF_SHA
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.IDENTITY
+    asset = _asset(path)
+    assert asset.files[0].path == f"sha256/{PDF_SHA}"
+    assert asset.files[0].sha256 == f"sha256:{PDF_SHA}"
+    assert asset.pid == "openalex:W2293093810"
+    assert asset.acquisition is not None
+    assert asset.acquisition.rung == a.RUNG_OA_LANDING
+    assert asset.acquisition.fetched == "2026-08-27"
+    assert (tmp_path / "cache" / "sha256" / PDF_SHA).read_bytes() == PDF
+
+
+def test_files_path_is_always_a_blob_path_never_a_repo_path(tmp_path: Path) -> None:
+    """Spec §6 — ``fetch`` never writes bytes into the consumer's repository."""
+    path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf", lic="cc-by")})
+    a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert _asset(path).files[0].path.startswith("sha256/")
+    assert not (tmp_path / "sill1997monotonic.pdf").exists()
+
+
+def test_non_pdf_bytes_are_rejected_and_the_ladder_continues(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    work = _oa(pdfs=["http://x/one.pdf", "http://x/two.pdf"])
+    client = FakeClient({"/works/": work})
+    fetcher = FakeFetcher({"http://x/one.pdf": b"<html>not a pdf</html>"})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_OA_LOCATIONS
+    assert outcome.url == "http://x/two.pdf"
+    assert fetcher.calls == ["http://x/one.pdf", "http://x/two.pdf"]
+
+
+def test_download_error_on_one_rung_does_not_end_the_ladder(tmp_path: Path) -> None:
+    """A dead link is about *this URL*, never a verdict about the paper."""
+    _path, entry = _registry(tmp_path)
+    work = _oa(pdfs=["http://x/one.pdf", "http://x/two.pdf", "http://x/three.pdf"])
+    client = FakeClient({"/works/": work})
+    fetcher = FakeFetcher(
+        {
+            "http://x/one.pdf": DownloadError("http://x/one.pdf: 404"),
+            "http://x/two.pdf": DownloadError("http://x/two.pdf: 403"),
+        }
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.url == "http://x/three.pdf"
+    assert fetcher.calls == [
+        "http://x/one.pdf",
+        "http://x/two.pdf",
+        "http://x/three.pdf",
+    ]
+
+
+def test_all_rungs_exhausted_is_manual_with_landing_urls(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf="http://x/dead.pdf", landing="http://x/abstract")
+    sibling = _oa(wid="W2", family="Igel", pdf="http://x/sib.pdf")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": [sibling]},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(default=DownloadError("http://x/dead.pdf: 404"))
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.landing_urls == ["http://x/abstract"]
+    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_SIBLING]
+
+
+def test_a_ladder_with_no_candidates_at_all_is_manual(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/abstract")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.tried == []
+    assert outcome.match is None
+    assert outcome.landing_urls == ["http://x/abstract"]
+
+
+# --- the gate, in the ladder ------------------------------------------------
+
+
+def test_gated_quarantine_lands_bytes_and_writes_nothing(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    before = path.read_bytes()
+    anchor = _oa(pdf=None, landing="http://x/abstract")
+    sibling = _oa(wid="W2", year=2002, pdf="http://x/sib.pdf")
+    client = FakeClient({"/works/": anchor, "/works": {"results": [sibling]}})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.bucket == a.BUCKET_QUARANTINED
+    assert outcome.sha256 == PDF_SHA
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.QUARANTINE
+    directory = tmp_path / "cache" / "quarantine" / "sill1997monotonic"
+    assert (directory / f"{PDF_SHA}.pdf").read_bytes() == PDF
+    parked = json.loads((directory / f"{PDF_SHA}.json").read_text(encoding="utf-8"))
+    assert parked["url"] == "http://x/sib.pdf"
+    assert parked["rung"] == a.RUNG_SIBLING
+    assert parked["match"]["verdict"] == a.QUARANTINE
+    assert parked["candidate"]["openalex"] == "W2"
+    assert path.read_bytes() == before
+
+
+def test_gated_refusal_is_manual_with_the_axes_recorded(tmp_path: Path) -> None:
+    """The Sill-1997-vs-Igel-2023 shape, walked through the whole ladder."""
+    path, entry = _registry(tmp_path)
+    before = path.read_bytes()
+    anchor = _oa(pdf=None, landing="http://x/abstract")
+    sibling = _oa(wid="W2", family="Igel", pdf="http://x/sib.pdf")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": [sibling]},
+            "export.arxiv.org": _ARXIV_FEED,
+        }
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.match is not None
+    assert outcome.match["author"] == "mismatch"
+    assert outcome.candidate is not None
+    assert outcome.candidate["openalex"] == "W2"
+    assert outcome.tried == [a.RUNG_SIBLING, a.RUNG_ARXIV_SEARCH]
+    assert path.read_bytes() == before
+
+
+def test_a_venue_resolver_candidate_still_passes_the_gate(tmp_path: Path) -> None:
+    """Rung 6 is gated like any other search rung; a match binds the bytes."""
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/abstract")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    ctx = _ctx(
+        tmp_path,
+        client,
+        FakeFetcher(),
+        resolvers=[
+            {"match": "Neural", "url_template": "http://v/{openalex}.pdf"},
+        ],
+    )
+    outcome = a.acquire_one(entry, ctx)
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_VENUE
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.ACCEPT
+
+
+# --- refetch and drift ------------------------------------------------------
+
+
+def test_refetch_yielding_different_bytes_refuses_and_leaves_the_registry_alone(
+    tmp_path: Path,
+) -> None:
+    path, entry = _registry(tmp_path, spine=_spine(sha=OTHER_SHA))
+    before = path.read_bytes()
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()), refetch=True)
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "drift" in outcome.reason
+    assert OTHER_SHA in outcome.reason
+    assert PDF_SHA in outcome.reason
+    assert path.read_bytes() == before
+
+
+def test_refetch_yielding_identical_bytes_is_cached(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path, spine=_spine())
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()), refetch=True)
+    assert outcome.bucket == a.BUCKET_CACHED
+    assert outcome.sha256 == PDF_SHA
+    assert outcome.rung == a.RUNG_OA_BEST
+    assert (tmp_path / "cache" / "sha256" / PDF_SHA).read_bytes() == PDF
+
+
+# --- the mirror -------------------------------------------------------------
+
+
+def test_mirror_is_populated_on_first_acquisition(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    mirror = FakeMirror()
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher(), mirror=mirror))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert mirror.puts == [(str(tmp_path / "cache" / "sha256" / PDF_SHA), PDF_SHA)]
+    recorded = _asset(path).mirror
+    assert recorded is not None
+    assert (recorded.remote, recorded.key) == ("papers", f"literature/sha256/{PDF_SHA}")
+
+
+def test_a_failed_mirror_write_does_not_discard_the_acquisition(
+    tmp_path: Path,
+) -> None:
+    """The bytes are hashed and cached; calling that an error would be a lie."""
+    path, entry = _registry(tmp_path)
+    mirror = FakeMirror(put_error=RetrievalError("rclone copyto to mirror failed"))
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher(), mirror=mirror))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.reason is not None
+    assert "mirror write failed" in outcome.reason
+    assert _asset(path).mirror is None
+
+
+# --- failure honesty --------------------------------------------------------
+
+
+def test_rate_limit_propagates_rather_than_becoming_manual(tmp_path: Path) -> None:
+    """The failure-honesty test.
+
+    A throttle is not information about this paper. Bucketing it as ``manual``
+    would tell a human to go download by hand what the tool never asked for.
+    """
+    _path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": RateLimitError("429 from OpenAlex")})
+    with pytest.raises(RateLimitError):
+        a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+
+
+def test_a_transport_error_on_the_work_lookup_propagates(tmp_path: Path) -> None:
+    """Nothing here converts a 5xx into a statement about the paper."""
+    _path, entry = _registry(tmp_path)
+    client = FakeClient(
+        {"/works/doi:": _oa(pdf="http://x/p.pdf"), "/works/W1": HttpError("502")}
+    )
+    with pytest.raises(HttpError):
+        a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+
+
+def test_a_transport_error_during_resolution_is_an_error_row_not_manual(
+    tmp_path: Path,
+) -> None:
+    """``graph.resolve`` folds a non-throttle ``HttpError`` into a miss.
+
+    Not from the brief, which says every ``HttpError`` propagates. That is not
+    true of the *first* call, because ``graph.resolve`` has caught ``HttpError``
+    since defendable-science#1 and returns ``{resolved: False, reason}``. The
+    property the failure-honesty rule actually needs still holds — it lands in
+    ``errors[]``, never in ``manual[]`` — so this pins the real behaviour rather
+    than bending ``resolve``'s long-standing contract to the brief's wording.
+    """
+    _path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": HttpError("502 from OpenAlex")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "502 from OpenAlex" in outcome.reason
+
+
+def test_unresolvable_entry_is_an_error_not_manual(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": {}})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "could not resolve" in outcome.reason
+
+
+def test_an_entry_with_no_identifier_is_an_error_without_a_request(
+    tmp_path: Path,
+) -> None:
+    _path, entry = _registry(tmp_path, doi=None)
+    client = FakeClient({})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "nothing to resolve" in outcome.reason
+    assert client.calls == []
+
+
+def test_a_work_record_that_comes_back_unusable_is_an_error(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    client = FakeClient(
+        {"/works/doi:": _oa(pdf="http://x/p.pdf"), "/works/W1": ["not-a-work"]}
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()))
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "no usable work record" in outcome.reason
+
+
+def test_bytes_that_cannot_be_recorded_are_an_error_that_says_where_they_are(
+    tmp_path: Path,
+) -> None:
+    _path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    ctx = _ctx(
+        tmp_path, client, FakeFetcher(), registry_path=tmp_path / "moved-away.json"
+    )
+    outcome = a.acquire_one(entry, ctx)
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "could not record it" in outcome.reason
+    assert outcome.sha256 == PDF_SHA
+    assert (tmp_path / "cache" / "sha256" / PDF_SHA).exists()
+
+
+# --- dry run ----------------------------------------------------------------
+
+
+def test_dry_run_reports_the_rung_without_downloading(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    before = path.read_bytes()
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()), dry_run=True)
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.sha256 is None
+    assert outcome.rung == a.RUNG_OA_BEST
+    assert outcome.url == "http://x/p.pdf"
+    assert outcome.committable is False
+    assert path.read_bytes() == before
+
+
+def test_dry_run_reports_a_permissive_license_as_committable(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf", lic="cc-by")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()), dry_run=True)
+    assert outcome.committable is True
+    assert outcome.license == "cc-by"
+
+
+def test_dry_run_reports_a_quarantine_as_a_quarantine(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/abstract")
+    sibling = _oa(wid="W2", year=2002, pdf="http://x/sib.pdf")
+    client = FakeClient({"/works/": anchor, "/works": {"results": [sibling]}})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()), dry_run=True)
+    assert outcome.bucket == a.BUCKET_QUARANTINED
+    assert outcome.sha256 is None
+    assert not (tmp_path / "cache" / "quarantine").exists()
+
+
+# --- the license three-way --------------------------------------------------
+
+
+def test_permissive_license_marks_the_outcome_committable(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf", lic="cc-by")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.committable is True
+    assert outcome.license == "cc-by"
+    asset = _asset(path)
+    assert asset.redistributable is True
+    assert asset.license.id == "cc-by"
+    assert asset.license.source == a.LICENSE_SOURCE
+
+
+def test_absent_license_is_not_redistributable(tmp_path: Path) -> None:
+    """36 of 50 works in the run that motivated this feature had no license."""
+    path, entry = _registry(tmp_path)
+    client = FakeClient({"/works/": _oa(pdf="http://x/p.pdf")})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.committable is False
+    assert outcome.license is None
+    asset = _asset(path)
+    assert asset.redistributable is False
+    assert asset.license.observed is None
+
+
+def test_unrecognized_license_is_not_redistributable(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    client = FakeClient(
+        {"/works/": _oa(pdf="http://x/p.pdf", lic="all-rights-reserved")}
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.committable is False
+    asset = _asset(path)
+    assert asset.redistributable is False
+    assert asset.license.observed == "all-rights-reserved"
+
+
+def test_a_siblings_license_is_recorded_not_the_anchors(tmp_path: Path) -> None:
+    """Rung 4 serves a *sibling's* bytes; the anchor's license does not describe them."""
+    path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/abstract", lic="cc-by")
+    sibling = _oa(wid="W2", year=1998, pdf="http://x/sib.pdf", lic="cc-by-nc")
+    client = FakeClient({"/works/": anchor, "/works": {"results": [sibling]}})
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_SIBLING
+    assert _asset(path).license.observed == "cc-by-nc"
+    assert outcome.committable is False
+
+
+def test_an_arxiv_candidate_carries_no_license_observation(tmp_path: Path) -> None:
+    path, entry = _registry(
+        tmp_path, title="Smooth Min-Max Monotonic Networks", year=2023, family="Igel"
+    )
+    anchor = _oa(
+        title="Smooth Min-Max Monotonic Networks",
+        year=2023,
+        family="Igel",
+        pdf=None,
+        landing="http://x/abstract",
+        lic="cc-by",
+    )
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": _ARXIV_FEED,
+        }
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, FakeFetcher()))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_ARXIV_SEARCH
+    assert _asset(path).license.observed is None
+
+
+# --- access, landing pages, names -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("open_access", "expected"),
+    [({"is_oa": True}, "open"), ({"is_oa": False}, "gated"), ({}, None), (None, None)],
+)
+def test_access_from_work(open_access: Any, expected: str | None) -> None:
+    assert a._access_from_work({"open_access": open_access}) == expected
+
+
+@pytest.mark.parametrize(
+    ("work", "expected"),
+    [
+        ({}, []),
+        ({"locations": "nope"}, []),
+        ({"locations": ["junk", {"landing_page_url": None}]}, []),
+        ({"locations": [{"landing_page_url": "  "}]}, []),
+        (
+            {"locations": [{"landing_page_url": "http://x/a"}] * 2},
+            ["http://x/a"],
+        ),
+    ],
+)
+def test_all_landing_urls(work: dict[str, Any], expected: list[str]) -> None:
+    """Wider than :func:`landing_urls` — the manual worklist wants click targets."""
+    assert a._all_landing_urls(work) == expected
+
+
+def test_a_citekey_with_path_characters_stays_inside_the_cache(
+    tmp_path: Path,
+) -> None:
+    assert a._quarantine_dir(tmp_path, "../../etc/passwd") == (
+        tmp_path / "quarantine" / ".._.._etc_passwd"
+    )
+
+
+def test_outcome_as_json_carries_every_field() -> None:
+    outcome = a.Outcome(citekey="k", bucket=a.BUCKET_MANUAL, tried=["r"])
+    assert a.Outcome(citekey="k", bucket=a.BUCKET_MANUAL).as_json() == {
+        "citekey": "k",
+        "bucket": a.BUCKET_MANUAL,
+        "sha256": None,
+        "rung": None,
+        "url": None,
+        "candidate": None,
+        "match": None,
+        "reason": None,
+        "tried": [],
+        "landing_urls": [],
+        "committable": False,
+        "path": None,
+        "license": None,
+    }
+    assert outcome.as_json()["tried"] == ["r"]
+
+
+def test_a_rung_is_listed_once_however_many_candidates_it_offered(
+    tmp_path: Path,
+) -> None:
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(
+        pdfs=["http://x/one.pdf", "http://x/two.pdf"], landing="http://x/abstract"
+    )
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    outcome = a.acquire_one(
+        entry, _ctx(tmp_path, client, FakeFetcher(default=DownloadError("gone")))
+    )
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LOCATIONS]
