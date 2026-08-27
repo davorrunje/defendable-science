@@ -44,8 +44,14 @@ PAPER_COLUMNS = [
     "note",
 ]
 
+#: The columns ``papers.md`` must carry for ``promote`` to register a paper.
+REGISTRY_COLUMNS = ["paper-id", "root", "backend"]
+
 #: Allowed source states for the ``rank`` transition.
 _RANK_SOURCES = frozenset({"candidate", "parked"})
+
+#: Character cap on a minted row id (truncated on a word boundary).
+_ID_MAX = 40
 
 Row = dict[str, str]
 
@@ -57,6 +63,27 @@ class BacklogError(ValueError):
 def columns_for(level: Level) -> list[str]:
     """Return the column order for a backlog `level`."""
     return list(HYPOTHESIS_COLUMNS if level == "hypothesis" else PAPER_COLUMNS)
+
+
+def _slug(one_line: str, limit: int = _ID_MAX) -> str:
+    """Kebab-case `one_line` into an id, truncated on a word boundary.
+
+    A mid-word cut is avoided because the paper-level id becomes the ``paper-id``
+    that keys the paper across backlog, registry, dashboard and ``progress``, so
+    an unreadable default id is effectively unusable.
+
+    :param one_line: The one-line summary to slugify.
+    :param limit: Maximum length; the last whole word that fits is kept, or a
+        hard cut if the first word alone exceeds it.
+    :returns: The slug, or ``"row"`` if `one_line` has no alphanumerics.
+    """
+    base = re.sub(r"[^a-z0-9]+", "-", one_line.lower()).strip("-")
+    if not base:
+        return "row"
+    if len(base) <= limit:
+        return base
+    head, sep, _ = base[: limit + 1].rpartition("-")
+    return head if sep else base[:limit]
 
 
 # --- markdown table I/O -----------------------------------------------------
@@ -100,70 +127,198 @@ def _is_separator(cells: list[str]) -> bool:
 
 
 @dataclass
-class Backlog:
-    """An in-memory backlog table.
+class _Document:
+    """A host markdown document with its table located in place.
 
-    :param level: The backlog level (selects the column profile).
+    :param preamble: Text before the table's header line, verbatim; the whole
+        document when it holds no table.
+    :param header: The column order read from the file, or ``None`` if the
+        document holds no table.
+    :param rows: The data rows, keyed by the file's own header.
+    :param postamble: Text after the table's last data row, verbatim.
+    :param saw_table_shape: Whether table-like rows were seen but never anchored
+        by a GFM separator (a malformed table, not an empty document).
+    """
+
+    preamble: str = ""
+    header: list[str] | None = None
+    rows: list[Row] = field(default_factory=list)
+    postamble: str = ""
+    saw_table_shape: bool = False
+
+
+def _collect_rows(
+    lines: list[str], header: list[str], start: int
+) -> tuple[list[Row], int]:
+    """Parse the contiguous data rows at `start`, with the index just past them.
+
+    The table ends at the first line that is not a non-separator pipe row, so
+    whatever follows is host prose to be preserved rather than table content.
+
+    :param lines: The document's lines (newlines kept).
+    :param header: The confirmed header, whose width every row must match.
+    :param start: Index of the first line after the GFM separator.
+    :returns: The parsed rows and the index of the first post-table line.
+    :raises BacklogError: If a data row's cell count does not match `header` (a
+        ragged row would otherwise silently pad/drop required columns).
+    """
+    rows: list[Row] = []
+    end = start
+    while end < len(lines):
+        if "|" not in lines[end]:
+            break
+        cells = _split_cells(lines[end])
+        if _is_separator(cells):
+            break
+        if len(cells) != len(header):
+            raise BacklogError(
+                f"ragged backlog row: {len(cells)} cells, header has "
+                f"{len(header)} ({cells!r})"
+            )
+        rows.append({header[i]: cells[i] for i in range(len(header))})
+        end += 1
+    return rows, end
+
+
+def _parse_document(text: str) -> _Document:
+    """Locate the markdown table in `text`, keeping the prose around it.
+
+    The header is the pipe line confirmed by a following GFM ``|---|`` separator;
+    that anchor is what distinguishes a real table from stray prose pipes.
+
+    :param text: The host markdown document.
+    :returns: The located document (``header is None`` if it holds no table).
+    :raises BacklogError: If a data row is ragged (see :func:`_collect_rows`).
+    """
+    lines = text.splitlines(keepends=True)
+    candidate: list[str] | None = None
+    candidate_at = 0
+    pending = 0  # consecutive unconfirmed pipe rows (a table shape sans separator)
+    saw_table_shape = False
+    for i, line in enumerate(lines):
+        if "|" not in line:
+            candidate = None  # prose breaks a pending header candidate
+            pending = 0
+            continue
+        cells = _split_cells(line)
+        if _is_separator(cells):
+            if candidate is None:
+                continue
+            rows, end = _collect_rows(lines, candidate, i + 1)
+            return _Document(
+                preamble="".join(lines[:candidate_at]),
+                header=candidate,
+                rows=rows,
+                postamble="".join(lines[end:]),
+            )
+        candidate, candidate_at = cells, i  # a header only if a separator follows
+        pending += 1
+        if pending >= 2:  # header + row(s) shape with no separator between
+            saw_table_shape = True
+    return _Document(preamble=text, saw_table_shape=saw_table_shape)
+
+
+def _render_table(header: list[str], rows: list[Row]) -> str:
+    """Render `rows` as a GFM table in `header`'s column order."""
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join("---" for _ in header) + "|",
+    ]
+    lines.extend(
+        "| " + " | ".join(_escape(row.get(c, "")) for c in header) + " |"
+        for row in rows
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _splice(preamble: str, postamble: str, header: list[str], rows: list[Row]) -> str:
+    """Re-emit a host document with its table region replaced.
+
+    Everything the table does not own — the heading and the prose before and
+    after it — is written back verbatim, so ``load → mutate → save`` is lossless.
+
+    :param preamble: Host text before the table.
+    :param postamble: Host text after the table.
+    :param header: The column order to render.
+    :param rows: The rows to render.
+    :returns: The whole document, table spliced in.
+    """
+    if preamble and not preamble.endswith("\n"):
+        preamble += "\n"  # a table cannot start mid-line
+    return preamble + _render_table(header, rows) + postamble
+
+
+@dataclass
+class Backlog:
+    """A backlog table together with the host document it was read from.
+
+    :param level: The backlog level (selects the canonical column profile).
     :param rows: The parsed rows, each a ``column -> value`` mapping.
+    :param preamble: Host text before the table (heading, explanatory prose),
+        re-emitted verbatim by :meth:`dumps` so a round-trip loses nothing.
+    :param postamble: Host text after the table, re-emitted verbatim.
+    :param file_header: The column order read from the file; ``None`` for a
+        backlog not read from one, which uses this level's profile.
     """
 
     level: Level
     rows: list[Row] = field(default_factory=list)
+    preamble: str = ""
+    postamble: str = ""
+    file_header: list[str] | None = None
 
     @property
     def columns(self) -> list[str]:
-        """The column order for this backlog's level."""
-        return columns_for(self.level)
+        """The column order this backlog reads and writes.
+
+        The host file's own header when one was parsed, so extra columns survive
+        and a file is never silently restructured into ``columns_for(level)``;
+        this level's canonical profile otherwise.
+        """
+        return list(self.file_header) if self.file_header else columns_for(self.level)
+
+    def _require(self, *columns: str) -> None:
+        """Guard that the host table can carry the columns a mutation writes.
+
+        :param columns: The columns the caller is about to write.
+        :raises BacklogError: Naming the missing columns and both layouts. The
+            mutation is refused rather than written into a header that cannot
+            hold it, which serialization would silently drop.
+        """
+        missing = [c for c in columns if c not in self.columns]
+        if missing:
+            raise BacklogError(
+                f"backlog table cannot carry required column(s) {missing}: its "
+                f"header is {self.columns}; add them, or migrate the table to "
+                f"the {self.level} profile {columns_for(self.level)}"
+            )
 
     @classmethod
     def loads(cls, text: str, level: Level) -> Backlog:
-        """Parse a markdown backlog table from `text`.
+        """Parse a markdown backlog table from `text`, host document included.
 
         :param text: The markdown document (may contain prose around the table).
         :param level: The backlog level.
-        :returns: The parsed backlog.
+        :returns: The parsed backlog, carrying the surrounding prose and the
+            file's own header so :meth:`dumps` can write both back.
         :raises BacklogError: If table-like content is present but never anchored
             by a GFM separator (a malformed table is not a genuinely empty one),
             or a data row's cell count does not match the header (a ragged row
             would otherwise silently pad/drop required columns).
         """
-        header: list[str] | None = None
-        rows: list[Row] = []
-        candidate: list[str] | None = None
-        pending = 0  # consecutive unconfirmed pipe rows (a table shape sans separator)
-        saw_table_shape = False
-        for line in text.splitlines():
-            if "|" not in line:
-                candidate = None  # prose breaks a pending header candidate
-                pending = 0
-                continue
-            cells = _split_cells(line)
-            if _is_separator(cells):
-                # The GFM separator confirms the preceding pipe line was the header;
-                # this is what distinguishes the table from stray prose pipes.
-                if header is None and candidate is not None:
-                    header = candidate
-                    candidate = None
-                    pending = 0
-                continue
-            if header is None:
-                candidate = cells  # a header only if a separator follows it
-                pending += 1
-                if pending >= 2:  # header + row(s) shape with no separator between
-                    saw_table_shape = True
-                continue
-            if len(cells) != len(header):
-                raise BacklogError(
-                    f"ragged backlog row: {len(cells)} cells, header has "
-                    f"{len(header)} ({cells!r})"
-                )
-            rows.append({header[i]: cells[i] for i in range(len(header))})
-        if header is None and saw_table_shape:
+        doc = _parse_document(text)
+        if doc.header is None and doc.saw_table_shape:
             raise BacklogError(
                 "malformed backlog table: table-like rows with no GFM '|---|' "
                 "separator to anchor a header"
             )
-        return cls(level=level, rows=rows)
+        return cls(
+            level=level,
+            rows=doc.rows,
+            preamble=doc.preamble,
+            postamble=doc.postamble,
+            file_header=doc.header,
+        )
 
     @classmethod
     def load(cls, path: str | Path, level: Level) -> Backlog:
@@ -174,26 +329,22 @@ class Backlog:
         return cls.loads(file_path.read_text(encoding="utf-8"), level)
 
     def dumps(self) -> str:
-        """Serialize the backlog to a markdown table string."""
-        cols = self.columns
-        lines = [
-            "| " + " | ".join(cols) + " |",
-            "|" + "|".join("---" for _ in cols) + "|",
-        ]
-        lines.extend(
-            "| " + " | ".join(_escape(row.get(c, "")) for c in cols) + " |"
-            for row in self.rows
-        )
-        return "\n".join(lines) + "\n"
+        """Serialize the backlog, host document included.
+
+        The table is rendered in :attr:`columns` order; the heading and prose
+        around it are written back verbatim.
+        """
+        return _splice(self.preamble, self.postamble, self.columns, self.rows)
 
     def save(self, path: str | Path) -> None:
-        """Write the backlog table to `path`."""
+        """Write the backlog — table and surrounding prose — to `path`."""
         Path(path).write_text(self.dumps(), encoding="utf-8")
 
     # --- lookup ---
 
     def get(self, row_id: str) -> Row:
         """Return the row with `row_id`, or raise :class:`BacklogError`."""
+        self._require("id")
         for row in self.rows:
             if row.get("id") == row_id:
                 return row
@@ -201,7 +352,7 @@ class Backlog:
 
     def _fresh_id(self, one_line: str) -> str:
         """Mint a stable, unique kebab-case id from a one-line summary."""
-        base = re.sub(r"[^a-z0-9]+", "-", one_line.lower()).strip("-")[:40] or "row"
+        base = _slug(one_line)
         existing = {row.get("id", "") for row in self.rows}
         if base not in existing:
             return base
@@ -248,6 +399,7 @@ class Backlog:
     def _append(
         self, one_line: str, provenance: str, status: str, row_id: str | None
     ) -> Row:
+        self._require("id", "one-line", "provenance", "status")
         if not provenance.strip():
             raise BacklogError("provenance is required (no orphan ideas)")
         if row_id is not None and any(r.get("id") == row_id for r in self.rows):
@@ -268,6 +420,7 @@ class Backlog:
         :raises BacklogError: If the row's status is not ``candidate``/``parked``,
             or a score key is not a column of this level.
         """
+        self._require("status")
         row = self.get(row_id)
         if row.get("status") not in _RANK_SOURCES:
             raise BacklogError(
@@ -296,6 +449,7 @@ class Backlog:
         :returns: The updated row.
         :raises BacklogError: If the row's status is not ``ranked``.
         """
+        self._require("status")
         row = self.get(row_id)
         if row.get("status") != "ranked":
             raise BacklogError(
@@ -313,6 +467,7 @@ class Backlog:
         :returns: The updated row.
         :raises BacklogError: If `reason` is empty.
         """
+        self._require("status", "note")
         if not reason.strip():
             raise BacklogError("a drop reason is required (file-drawer discipline)")
         row = self.get(row_id)
@@ -412,24 +567,44 @@ def scaffold_hypothesis(
 def append_papers_registry(
     papers_md: str | Path, paper_id: str, root: str, backend: str
 ) -> None:
-    """Append one paper row to the ``papers.md`` registry (create if absent).
+    """Insert one paper row into the ``papers.md`` registry (create if absent).
+
+    The row is spliced in as the registry table's last data row wherever that
+    table sits in the document, so prose after it stays prose instead of being
+    orphaned behind a stray row. Columns the host header carries beyond
+    :data:`REGISTRY_COLUMNS` are written empty for the author to fill, never
+    dropped and never producing a ragged row.
 
     :param papers_md: Path to ``docs/research/papers.md``.
     :param paper_id: The stable paper id (must be new).
     :param root: The paper's root path, relative to the repo.
     :param backend: The experiment-backend binding for the paper.
-    :raises BacklogError: If `paper_id` is already registered.
+    :raises BacklogError: If `paper_id` is already registered, the registry table
+        lacks one of :data:`REGISTRY_COLUMNS`, or its rows are not anchored by a
+        GFM separator (writing into a malformed registry would corrupt it).
     """
     path = Path(papers_md)
-    header = "| paper-id | root | backend |\n|---|---|---|\n"
-    text = path.read_text(encoding="utf-8") if path.is_file() else header
-    if re.search(rf"^\|\s*{re.escape(paper_id)}\s*\|", text, flags=re.MULTILINE):
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    doc = _parse_document(text)
+    if doc.header is None and doc.saw_table_shape:
+        raise BacklogError(
+            f"malformed registry table in {path}: table-like rows with no GFM "
+            "'|---|' separator to anchor a header"
+        )
+    header = doc.header or list(REGISTRY_COLUMNS)
+    missing = [c for c in REGISTRY_COLUMNS if c not in header]
+    if missing:
+        raise BacklogError(
+            f"registry table in {path} is missing required column(s) {missing}: "
+            f"its header is {header}"
+        )
+    if any(row.get("paper-id") == paper_id for row in doc.rows):
         raise BacklogError(f"paper-id {paper_id!r} already in {path}")
-    if not text.endswith("\n"):
-        text += "\n"
-    text += f"| {paper_id} | {root} | {backend} |\n"
+    doc.rows.append({"paper-id": paper_id, "root": root, "backend": backend})
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(
+        _splice(doc.preamble, doc.postamble, header, doc.rows), encoding="utf-8"
+    )
 
 
 def _registry_root(root: Path, research: Path) -> str:

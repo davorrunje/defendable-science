@@ -56,9 +56,11 @@ explicit human pick — the exploration/resolution firewall
 > (`defendable_science/exploration/backlog.py`, shared with `hypothesis-exploration`)
 > — ensure via [`ensure-tooling`](../../resources/ensure-tooling.md),
 > operating on `portfolio-backlog.md` at the paper level. `add` realizes the
-> `generate` verb's row-append; `list` is a read-only inspection command. By hand
-> (if the CLI isn't available): edit the `portfolio-backlog.md` table directly,
-> keeping the column order.
+> `generate` verb's row-append; `list` is a read-only inspection command. The
+> table's host document is preserved — a heading and prose around the table
+> survive every verb, and columns your repo adds beyond the standard order are
+> kept (left empty on new rows). By hand (if the CLI isn't available): edit the
+> `portfolio-backlog.md` table directly, keeping the column order.
 
 ## Generation lenses
 
@@ -125,7 +127,10 @@ paper roots and their experiment-backend binding.
   the backend from this binding and contain no backend-specific logic, so
   `backend:` is set here at registration time.
 - **When it is written.** `promote` adds the registry row and scaffolds the paper
-  root (`hypotheses/`, `backlog.md`, `paper/`). A candidate in
+  root (`hypotheses/`, `backlog.md`, `paper/`). The row is spliced into the
+  registry table wherever that table sits, so `papers.md` can carry prose around
+  it, and columns you add beyond `paper-id | root | backend` are preserved and
+  left empty for you to fill. A candidate in
   `portfolio-backlog.md` is *not* in `papers.md` — the backlog is proposals; the
   registry is committed papers.
 - **paper-id.** A stable, human-readable slug (kebab-case), assigned at promotion
