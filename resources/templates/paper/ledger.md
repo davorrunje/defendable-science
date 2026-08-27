@@ -1,7 +1,7 @@
 ---
 status:
   level: paper
-  id: <paper-id>
+  id: null                     # <paper-id> — kebab-case slug from the papers.md registry
   verdict: null                # the ledger backs the decision; the verdict lives in decision.md
   readiness: drafting
   signed-off-by: null
@@ -11,7 +11,7 @@ status:
   load-bearing: null
   understanding: {status: pending, unresolved: []}
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Claim → evidence ledger: <paper-id>

@@ -1,7 +1,7 @@
 ---
 status:
   level: thesis
-  id: <thesis-slug>
+  id: null                     # <thesis-slug> — fill when the thesis is framed
   verdict: n/a                 # thesis uses `readiness: defensible` below, not a verdict
   readiness: framing           # framing | synthesis | defensible
   signed-off-by: null          # the defensibility sign-off lives in kappa.md, not here
@@ -11,7 +11,7 @@ status:
   load-bearing: null
   understanding: {status: pending, unresolved: []}
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Thesis aims & narrative

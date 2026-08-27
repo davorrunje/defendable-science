@@ -1,7 +1,7 @@
 ---
 status:
   level: paper
-  id: <paper-id>               # kebab-case slug from the papers.md registry
+  id: null                     # <paper-id> — kebab-case slug from the papers.md registry
   verdict: null                # no-go | publish — decided later in decision.md
   readiness: drafting          # drafting | under-review | published (sub-states of done)
   signed-off-by: null          # set at the decision.md publish/no-go sign-off
@@ -11,7 +11,7 @@ status:
   load-bearing: null           # n/a at paper level (hypothesis→paper field)
   understanding: {status: pending, unresolved: []}
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Pitch: <working title>

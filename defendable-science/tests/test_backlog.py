@@ -824,57 +824,9 @@ def test_promote_without_scaffold_still_emits_the_bare_row(tmp_path: Path) -> No
 
 
 # --- the scaffolded pitch carries status frontmatter (#96) --------------------
-
-#: The repo root, reachable from the test tree. The plugin's ``resources/`` is
-#: *not* importable from the package — the wheel ships only ``defendable_science``
-#: and the two artifacts release on separate cadences (ADR-0026) — so the drift
-#: guards below are the only thing keeping the code templates and the shipped
-#: authoring skeletons in agreement.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _status_block(text: str) -> list[str]:
-    """Return the frontmatter's status lines, inline comments and blanks stripped."""
-    match = re.search(r"\A---\n(.*?)^---\n", text, re.S | re.M)
-    assert match is not None, "no terminated YAML frontmatter"
-    out = []
-    for line in match.group(1).splitlines():
-        stripped = re.sub(r"\s+#.*$", "", line).rstrip()
-        if stripped:
-            out.append(stripped)
-    return out
-
-
-def _placeholderless(lines: list[str]) -> list[str]:
-    """Blank out the two fields that legitimately differ (id, date)."""
-    return [re.sub(r"^(  (?:id|last-updated)): .*", r"\1: <X>", ln) for ln in lines]
-
-
-@pytest.mark.parametrize(
-    ("template_path", "constant"),
-    [
-        ("resources/templates/hypothesis/hypothesis.md", "_HYPOTHESIS_TEMPLATE"),
-        ("resources/templates/paper/pitch.md", "_PAPER_TEMPLATE"),
-    ],
-)
-def test_code_template_status_block_matches_the_shipped_template(
-    template_path: str, constant: str
-) -> None:
-    """The status block is what `progress` projects; a drift makes a paper vanish.
-
-    The prose deliberately differs — the shipped template is the fuller authoring
-    skeleton — but the frontmatter must not, and nothing at runtime can enforce
-    that because the package cannot read the plugin's ``resources/``.
-    """
-    shipped = _REPO_ROOT / template_path
-    assert shipped.is_file(), (
-        f"{shipped} is missing; the drift guard cannot run. These tests are meant "
-        "to run from a repo checkout, which has both artifacts."
-    )
-    from_file = _placeholderless(_status_block(shipped.read_text(encoding="utf-8")))
-    raw = getattr(b, constant).replace("{{", "{").replace("}}", "}")
-    from_code = _placeholderless(_status_block(raw))
-    assert from_code == from_file
+#
+# The drift guard over the shipped templates lives in ``tests/test_status.py``,
+# which covers all nine of them against the single renderer.
 
 
 def test_scaffolded_pitch_has_status_frontmatter(tmp_path: Path) -> None:
