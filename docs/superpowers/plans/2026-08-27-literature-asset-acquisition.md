@@ -21,6 +21,7 @@
 - **Failure honesty is load-bearing here.** A throttle, a 5xx, or any transport failure must never be reported as "this paper has no PDF". Distinguish *failed* from *legitimately absent*; never surface a raw traceback.
 - **Never commit to `main`.** Work continues on `design/literature-asset-acquisition`; each phase below is its own PR.
 - **Commit authorship:** `Davor Runje <davor@synthpop.ai>` with a `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` trailer.
+- **Commits on this branch are unsigned.** Hardware SSH signing (Secretive / Secure Enclave) is unreachable from a non-interactive shell, and the repo owner authorized `--no-gpg-sign` for the duration of this branch. Every commit command below carries the flag; without it the commit fails with `communication with agent failed`. **Before merging to `main`, re-sign the branch** (amend or squash-and-sign) if signed history is required there.
 - **Domain-neutrality:** no ML-, venue-, or consumer-specific assumptions in shipped code. `venue_resolvers` ships empty.
 
 ## Deviation from the spec, recorded
@@ -65,7 +66,12 @@ A pure refactor. `dataset/retrieval.py` currently owns `sha256_file`, `_bare`, `
 - Consumes: nothing.
 - Produces: `RetrievalError`, `sha256_file(path, *, chunk=1<<20) -> str`, `bare_sha256(sha256: str) -> str`, `blob_path(cache_dir: Path, sha256: str) -> Path`, `verified(path: Path, sha256: str) -> bool`.
 
-> **The trap in this task.** `tests/test_retrieval.py:107` and `:122` do `monkeypatch.setattr(r, "sha256_file", _boom)` to cover the "present-but-unreadable file is treated as absent" branches. Once `verified()` lives in `core/fixity.py` and calls fixity's *module-global* `sha256_file`, patching `retrieval`'s re-exported binding no longer reaches it — those two branches go uncovered and the 100% gate fails. Both monkeypatch targets must change to the fixity module. This is the single most likely way to get this task wrong.
+> **The trap in this task.** `tests/test_retrieval.py:107` and `:122` both do `monkeypatch.setattr(r, "sha256_file", _boom)` to cover "present-but-unreadable file" branches, but they cover *different* branches and only ONE moves:
+>
+> - `test_verified_unreadable_present_file_treated_as_absent` exercises `_verified`, which becomes `core.fixity.verified` and calls fixity's *module-global* `sha256_file`. Patching `retrieval`'s re-exported binding no longer reaches it → **re-point this one to the fixity module**.
+> - `test_verify_unreadable_file_is_corrupt_not_crash` exercises `retrieval.verify()`, which still calls `sha256_file` through `retrieval`'s own binding → **leave this one patched on `r`**.
+>
+> Re-pointing both leaves `retrieval.py`'s `verify()` OSError branch uncovered (99.86%) and the 100% gate fails; re-pointing neither leaves fixity's branch uncovered. Read which function each test actually drives before changing either.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -224,25 +230,28 @@ Expected: PASS (8 tests)
 Delete `RetrievalError`, `sha256_file`, `_bare`, `_blob_path`, and `_verified`. Add to the imports:
 
 ```python
-from defendable_science.core.fixity import (
-    RetrievalError,
-    bare_sha256,
-    blob_path,
-    sha256_file,
-    verified,
-)
+from defendable_science.core.fixity import RetrievalError as RetrievalError
+from defendable_science.core.fixity import bare_sha256 as bare_sha256
+from defendable_science.core.fixity import blob_path as blob_path
+from defendable_science.core.fixity import sha256_file as sha256_file
+from defendable_science.core.fixity import verified as verified
 ```
+
+The explicit `X as X` form is required: strict mypy's `no_implicit_reexport` rejects the
+plain multi-import for names that tests reach through `retrieval`'s namespace.
 
 Then replace every internal call site: `_bare(` → `bare_sha256(`, `_blob_path(` → `blob_path(`, `_verified(` → `verified(`. Leave `hashlib` imported only if still used (it is not — remove it; ruff will flag `F401` otherwise).
 
 - [ ] **Step 6: Re-point the two monkeypatch sites**
 
-In `tests/test_retrieval.py`, add `from defendable_science.core import fixity as fx` and change both patch targets:
+In `tests/test_retrieval.py`, add `from defendable_science.core import fixity as fx` and change **only** the patch target in `test_verified_unreadable_present_file_treated_as_absent`:
 
 ```python
 # was: monkeypatch.setattr(r, "sha256_file", _boom)
 monkeypatch.setattr(fx, "sha256_file", _boom)
 ```
+
+Leave `test_verify_unreadable_file_is_corrupt_not_crash` patching `r.sha256_file` — it drives `retrieval.verify()`, which calls the name through `retrieval`'s own binding. See the trap note above.
 
 In `tests/test_live_retrieval.py:139`, change `r._blob_path(cache, sha)` to `r.blob_path(cache, sha)`.
 
@@ -259,7 +268,7 @@ Expected: clean.
 ```bash
 git add defendable_science/core/fixity.py defendable_science/dataset/retrieval.py \
         tests/test_fixity.py tests/test_retrieval.py tests/test_live_retrieval.py
-git commit -m "refactor: promote fixity primitives to core/fixity.py
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "refactor: promote fixity primitives to core/fixity.py
 
 Substrate per 04-substrate-and-contract.md §2.1: both asset front-ends build
 on SHA-256 hashing and content-addressed blob paths; neither owns them. Pure
@@ -333,7 +342,7 @@ Expected: clean.
 ```bash
 git add defendable_science/core/mirror.py defendable_science/dataset/retrieval.py \
         tests/test_mirror.py tests/test_retrieval.py
-git commit -m "refactor: promote Mirror to core/mirror.py
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "refactor: promote Mirror to core/mirror.py
 
 Second half of the substrate promotion. dataset/retrieval.py now holds only
 the dataset resolution chain; the mirror is shared machinery.
@@ -645,7 +654,7 @@ Expected: 100%. If the `finally: response.close()` path or the `OSError` branch 
 
 ```bash
 git add defendable_science/core/download.py tests/test_download.py
-git commit -m "feat(core): streaming binary downloader with a hard size cap
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(core): streaming binary downloader with a hard size cap
 
 Separate from core/http.py: that is a JSON client with a JSON cache and a
 retry loop around resp.json(). Partial files are removed on failure so a
@@ -1258,7 +1267,7 @@ Expected: PASS (15 tests)
 
 ```bash
 git add defendable_science/literature/registry.py tests/test_lit_registry.py
-git commit -m "feat(literature): registry read model over CSL-JSON + custom spine
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): registry read model over CSL-JSON + custom spine
 
 CSL-JSON sets additionalProperties:false and defines no files/license/mirror
 field, so the substrate spine lives under the schema-designated `custom` key,
@@ -1435,7 +1444,7 @@ Expected: PASS (25 tests)
 
 ```bash
 git add defendable_science/literature/registry.py tests/test_lit_registry.py
-git commit -m "feat(literature): surgical patch_asset writer
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): surgical patch_asset writer
 
 Patches only custom['defendable-science'] and rewrites atomically; unknown
 top-level keys, foreign custom namespaces and key order all survive. #94 and
@@ -1692,7 +1701,7 @@ Expected: PASS, coverage 100%, all clean.
 
 ```bash
 git add defendable_science/literature/registry.py tests/test_lit_registry.py
-git commit -m "feat(literature): triage sidecar read + comment-safe restricted write
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): triage sidecar read + comment-safe restricted write
 
 pyyaml cannot round-trip comments, and triage rationales ARE the PRISMA audit
 trail. So the writer refuses a commented file with an actionable message
@@ -2227,7 +2236,7 @@ Expected: PASS. The named regression `test_the_named_regression_refuses_igel_for
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py
-git commit -m "feat(literature): the acquisition match gate (#97 acceptance criterion)
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): the acquisition match gate (#97 acceptance criterion)
 
 Author family name is a hard gate: no candidate is accepted or quarantined
 across an author mismatch. That refuses Igel 2023 for Sill 1997 (all three
@@ -2577,7 +2586,7 @@ Expected: PASS. `test_rung_3_recovers_sill_from_a_pdf_serving_landing_page` is t
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py tests/fixtures/openalex
-git commit -m "feat(literature): identity-derived ladder rungs 1-3 + PDF acceptance
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): identity-derived ladder rungs 1-3 + PDF acceptance
 
 Reading all locations[] and sniffing PDF-shaped landing pages recovers Sill
 1997 (oa_status closed, best_oa_location.pdf_url null, but locations[0]
@@ -2911,7 +2920,7 @@ Expected: PASS.
 
 ```bash
 git add defendable_science/literature/acquire.py defendable_science/core/http.py tests/
-git commit -m "feat(literature): search-derived ladder rungs 4-6
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): search-derived ladder rungs 4-6
 
 Rung 4 (sibling-version) is the generic answer to 'OpenAlex holds this paper
 twice and the DOI names the closed one'. Rung 6 ships empty so no venue
@@ -3039,7 +3048,7 @@ Expected: 100%. Any uncovered line is a ladder branch with no test — add the t
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py
-git commit -m "feat(literature): single-entry acquisition (TOFU, drift refusal, quarantine)
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): single-entry acquisition (TOFU, drift refusal, quarantine)
 
 Resolution before acquisition: a recorded sha256 means cache -> mirror and no
 network. Without one, the ladder runs and the hash is established from the
@@ -3192,7 +3201,7 @@ Expected: PASS.
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py
-git commit -m "feat(literature): registry sweep with an honest report
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): registry sweep with an honest report
 
 A rate limit aborts with complete:false and a not_attempted count rather
 than bucketing the untried papers as 'manual'. Other transport failures are
@@ -3247,7 +3256,7 @@ Expected: PASS.
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py
-git commit -m "feat(literature): confirm — promote quarantine or adopt a manual PDF
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): confirm — promote quarantine or adopt a manual PDF
 
 confirm does double duty, which is what makes the manual rung a workflow
 rather than a dead end. Adoption copies rather than moves: a human's
@@ -3291,7 +3300,7 @@ Run: `uv run pytest tests/test_acquire.py -v --no-cov` → PASS
 
 ```bash
 git add defendable_science/literature/acquire.py tests/test_acquire.py
-git commit -m "feat(literature): offline verify + mirror push/check
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(literature): offline verify + mirror push/check
 
 Parity with dataset verify. An entry with no asset reports missing, never ok:
 verify --all on a fresh registry must say nothing is verified rather than
@@ -3348,7 +3357,7 @@ Expected: PASS, coverage 100%, clean.
 
 ```bash
 git add defendable_science/cli.py tests/test_acquire_cli.py
-git commit -m "feat(cli): literature fetch | confirm | verify | mirror
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "feat(cli): literature fetch | confirm | verify | mirror
 
 Exit 1 when the report carries errors or is incomplete, so no agent or CI
 loop reads a half-swept registry as a finished one. Exactly one of CITEKEY
@@ -3416,7 +3425,7 @@ Expected: clean.
 
 ```bash
 git add decisions docs/design skills resources/ensure-tooling.md CHANGELOG.md
-git commit -m "docs: ADR-0037 + design/skill corrections for literature acquisition
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "docs: ADR-0037 + design/skill corrections for literature acquisition
 
 Amends 02-literature.md §4, whose current wording instructs something that
 produces a schema-invalid references.json, and records the two variants of
@@ -3488,7 +3497,7 @@ Expected: every flag and verb the guide mentions exists with the documented spel
 
 ```bash
 git add docs/guides/literature.md tools/build_docs_site.py
-git commit -m "docs: task-oriented literature guide, survey paper as the example
+git -c user.name="Davor Runje" -c user.email="davor@synthpop.ai" commit --no-gpg-sign -m "docs: task-oriented literature guide, survey paper as the example
 
 The capability's only user-facing docs were USER-GUIDE.md §4c (~25 lines),
 which is not enough to pick up four verbs, a registry spine, quarantine and
