@@ -19,12 +19,17 @@ repos:
         stages: [pre-commit, pre-merge-commit, manual]
         args: [--py311-plus]
 
--   repo: https://github.com/codespell-project/codespell
-    rev: v2.4.3
+# codespell and detect-secrets run as `repo: local` hooks, not remote ones, so
+# each tool's version is authored only in `defendable-science/pyproject.toml`'s
+# `lint` group. A remote `rev:` here would be a second pin on a second
+# Dependabot schedule (issue #79, ADR-0036).
+-   repo: local
     hooks:
     -   id: codespell
+        name: Spell check (codespell)
         stages: [pre-commit, pre-merge-commit, manual]
-        args: [--ignore-words=.codespell-whitelist.txt]
+        entry: "tools/codespell.sh"
+        language: system
         exclude: |
             (?x)^(
                 defendable-science/uv.lock
@@ -66,12 +71,11 @@ repos:
         require_serial: true
         verbose: true
 
--   repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
+-   repo: local
     hooks:
     -   id: detect-secrets
-        args: [
-            '--baseline', '.secrets.baseline',
-        ]
-        exclude: defendable-science/uv.lock
+        name: Detect secrets
         stages: [pre-commit, pre-merge-commit, manual]
+        entry: "tools/detect-secrets.sh"
+        language: system
+        exclude: defendable-science/uv.lock

@@ -99,6 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concept-matrix generator that was never implemented; the CSL-JSON registry
   loader/patcher and triage sidecar reader it also claimed are real as of
   this release.
+- **`codespell` and `detect-secrets` versions are authored in one place.** Each
+  was pinned twice — a remote hook `rev:` in `.pre-commit-config.yaml` and a `==`
+  pin in `defendable-science/pyproject.toml`'s `lint` group — on two independent
+  Dependabot schedules (`pre-commit` and `uv`), which had already drifted once.
+  Both now run as `repo: local` hooks via `tools/codespell.sh` /
+  `tools/detect-secrets.sh`, leaving the `lint` group's pins as the single source
+  of truth; `pre-commit-hooks` and `pyupgrade` are the only remote `rev:`s left.
+  Hook behaviour is unchanged (same `args`, same `exclude`). (#79)
 
 ## [0.2.0] - 2026-07-28
 
