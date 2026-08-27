@@ -19,7 +19,7 @@ you add, not in prose the template ships with.
 | `hypothesis/strategy.md` | `hypothesis-testing` · strategy (rigor kit + defend) | `.../<slug>/strategy.md` |
 | `hypothesis/design-plan-README.md` | *pointer only* — design/plan are **delegated to the bound engineering backend** | `.../<slug>/{design,plan}.md` |
 | `hypothesis/findings.md` | `hypothesis-testing` · findings (**material decision**) | `.../<slug>/findings.md` |
-| `paper/pitch.md` | `paper-synthesis` · pitch | `docs/research/<paper>/paper/pitch.md` |
+| `paper/pitch.md` | `paper-exploration` · promote scaffolds the stub (status frontmatter + the backlog row's one-line and provenance); `paper-synthesis` · pitch develops it | `docs/research/<paper>/paper/pitch.md` |
 | `paper/positioning.md` | `paper-synthesis` · positioning | `.../paper/positioning.md` |
 | `paper/ledger.md` | `paper-synthesis` · sections (Toulmin-sextet claim→evidence ledger) | `.../paper/ledger.md` |
 | `paper/decision.md` | `paper-synthesis` · decision (**material decision**) | `.../paper/decision.md` |

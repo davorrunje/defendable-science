@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+import re
+from datetime import date
+from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from defendable_science.cli import app
 from defendable_science.exploration import backlog as b
 
-if TYPE_CHECKING:
-    from pathlib import Path
+
+def _split_frontmatter(text: str) -> str:
+    """Return the YAML frontmatter source of a markdown document."""
+    match = re.search(r"\A---\n(.*?)^---\n", text, re.S | re.M)
+    assert match is not None, "no terminated YAML frontmatter"
+    return match.group(1)
+
 
 runner = CliRunner()
 
@@ -813,3 +821,144 @@ def test_promote_without_scaffold_still_emits_the_bare_row(tmp_path: Path) -> No
     payload = json.loads(result.stdout)
     assert payload["status"] == "promoted"
     assert "artifacts" not in payload
+
+
+# --- the scaffolded pitch carries status frontmatter (#96) --------------------
+
+#: The repo root, reachable from the test tree. The plugin's ``resources/`` is
+#: *not* importable from the package — the wheel ships only ``defendable_science``
+#: and the two artifacts release on separate cadences (ADR-0026) — so the drift
+#: guards below are the only thing keeping the code templates and the shipped
+#: authoring skeletons in agreement.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _status_block(text: str) -> list[str]:
+    """Return the frontmatter's status lines, inline comments and blanks stripped."""
+    match = re.search(r"\A---\n(.*?)^---\n", text, re.S | re.M)
+    assert match is not None, "no terminated YAML frontmatter"
+    out = []
+    for line in match.group(1).splitlines():
+        stripped = re.sub(r"\s+#.*$", "", line).rstrip()
+        if stripped:
+            out.append(stripped)
+    return out
+
+
+def _placeholderless(lines: list[str]) -> list[str]:
+    """Blank out the two fields that legitimately differ (id, date)."""
+    return [re.sub(r"^(  (?:id|last-updated)): .*", r"\1: <X>", ln) for ln in lines]
+
+
+@pytest.mark.parametrize(
+    ("template_path", "constant"),
+    [
+        ("resources/templates/hypothesis/hypothesis.md", "_HYPOTHESIS_TEMPLATE"),
+        ("resources/templates/paper/pitch.md", "_PAPER_TEMPLATE"),
+    ],
+)
+def test_code_template_status_block_matches_the_shipped_template(
+    template_path: str, constant: str
+) -> None:
+    """The status block is what `progress` projects; a drift makes a paper vanish.
+
+    The prose deliberately differs — the shipped template is the fuller authoring
+    skeleton — but the frontmatter must not, and nothing at runtime can enforce
+    that because the package cannot read the plugin's ``resources/``.
+    """
+    shipped = _REPO_ROOT / template_path
+    assert shipped.is_file(), (
+        f"{shipped} is missing; the drift guard cannot run. These tests are meant "
+        "to run from a repo checkout, which has both artifacts."
+    )
+    from_file = _placeholderless(_status_block(shipped.read_text(encoding="utf-8")))
+    raw = getattr(b, constant).replace("{{", "{").replace("}}", "}")
+    from_code = _placeholderless(_status_block(raw))
+    assert from_code == from_file
+
+
+def test_scaffolded_pitch_has_status_frontmatter(tmp_path: Path) -> None:
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    root = b.scaffold_paper(
+        research,
+        "depth-collapse",
+        "Depth collapse explains the OOD gap",
+        backend="bench",
+        provenance="limitation-driven, from aug-policy-robustness §6",
+        today="2026-03-04",
+    )
+    text = (root / "paper" / "pitch.md").read_text(encoding="utf-8")
+
+    status = yaml.safe_load(_split_frontmatter(text))["status"]
+    assert status["level"] == "paper"
+    assert status["id"] == "depth-collapse"
+    assert status["verdict"] is None
+    assert status["readiness"] == "drafting"
+    assert status["signed-off-by"] is None
+    assert status["signed-off-date"] is None
+    assert status["evidence"] == []
+    assert status["blockers"] == []
+    assert status["covers"] == []
+    assert status["understanding"] == {"status": "pending", "unresolved": []}
+    # YAML types an unquoted ISO date as a date, which is what `progress` sees.
+    assert status["last-updated"] == date(2026, 3, 4)
+
+    # Both fields carried from the backlog row are present, verbatim.
+    assert "Depth collapse explains the OOD gap" in text
+    assert "limitation-driven, from aug-policy-robustness §6" in text
+
+
+def test_scaffolded_pitch_drafts_no_prose_for_the_author(tmp_path: Path) -> None:
+    # A tracked stub, not a drafted pitch: seeding prose the author did not write
+    # would cut against the agency principle (meta-spec 2.1).
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    root = b.scaffold_paper(research, "p1", "a claim", backend="bench")
+    text = (root / "paper" / "pitch.md").read_text(encoding="utf-8")
+    for section in ("Contribution", "Target venue + bar", "Load-bearing hypotheses"):
+        assert f"## {section}\n\n<!--" in text
+
+
+def test_scaffolded_pitch_defaults_the_date_to_today(tmp_path: Path) -> None:
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    root = b.scaffold_paper(research, "p1", "a claim")
+    text = (root / "paper" / "pitch.md").read_text(encoding="utf-8")
+    assert f"last-updated: {b.today_iso()}" in text
+
+
+def test_promote_scaffold_pitch_is_tracked_end_to_end(tmp_path: Path) -> None:
+    """The CLI path carries the row's provenance into the frontmatter'd pitch."""
+    path = tmp_path / "portfolio-backlog.md"
+    board = b.Backlog(level="paper")
+    board.add("Depth collapse explains the OOD gap", "own reading", row_id="dc")
+    board.rank("dc", feas="high", interest="high")
+    board.save(path)
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "dc",
+            "--backlog",
+            str(path),
+            "--level",
+            "paper",
+            "--scaffold",
+            "--research-root",
+            str(research),
+            "--backend",
+            "bench",
+            "--date",
+            "2026-03-04",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    pitch = Path(json.loads(result.stdout)["artifacts"]["pitch"])
+    status = yaml.safe_load(_split_frontmatter(pitch.read_text(encoding="utf-8")))
+    assert status["status"]["id"] == "dc"
+    assert status["status"]["last-updated"] == date(2026, 3, 4)
+    assert "own reading" in pitch.read_text(encoding="utf-8")

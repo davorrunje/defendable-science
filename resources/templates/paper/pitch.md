@@ -40,3 +40,9 @@ status:
      surfaces it) — that is honest, not failure. -->
 
 - `<YYYY-MM-DD-slug>` — *<role in the claim>* — load-bearing: *<yes/no>*
+
+## Provenance
+
+<!-- Carried from the portfolio-backlog row: the generation lens it came from
+     (mechanism-transfer / limitation-driven / result-driven) + the verbatim
+     origin — which resolved paper, limitation, or result prompted it. -->

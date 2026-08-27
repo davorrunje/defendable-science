@@ -1441,7 +1441,12 @@ def _scaffold_promoted(
         )
         return {"hypothesis": str(target)}
     root = backlog_mod.scaffold_paper(
-        research, row["id"], row["one-line"], backend=backend
+        research,
+        row["id"],
+        row["one-line"],
+        backend=backend,
+        provenance=row["provenance"],
+        today=today,
     )
     return {
         "paper_root": str(root),

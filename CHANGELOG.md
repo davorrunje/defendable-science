@@ -83,6 +83,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A promoted paper is tracked from the moment it is scaffolded.**
+  `scaffold_paper` wrote a two-line `pitch.md` with no status frontmatter, while
+  `scaffold_hypothesis` one level down wrote the full status block. Since
+  `progress dashboard` is a *pure projection* of that frontmatter, a freshly
+  promoted paper was registered in `papers.md`, had a root and a pitch, and
+  contributed nothing to the dashboard until someone hand-wrote the block —
+  registered but untracked. The pitch is now seeded from a `_PAPER_TEMPLATE`
+  mirroring `resources/templates/paper/pitch.md`, carrying the backlog row's
+  one-line and provenance and today's date; the prose stays the template's
+  comment prompts, because a tracked *stub* is the goal and seeding prose the
+  author did not write would cut against the agency principle. The plugin's
+  `resources/` is not readable from the package — the wheel ships only
+  `defendable_science` and the two artifacts release on separate cadences
+  (ADR-0026) — so the duplication is deliberate and a test fails on any drift in
+  the status block, for the hypothesis pair as well as the new paper one.
+  `resources/templates/paper/pitch.md` gained the `## Provenance` section its
+  hypothesis counterpart already had. (#96)
 - **Rung 6 (`venue_resolvers`) no longer reports a verification it never
   performed.** `RUNG_VENUE` was in `GATED_RUNGS`, so every consumer-configured
   venue candidate ran through `evaluate_match` — but `venue_candidates` builds
