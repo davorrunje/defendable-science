@@ -23,7 +23,63 @@ CHUNK = 1 << 16
 
 
 class DownloadError(RuntimeError):
-    """Raised when a byte retrieval fails, is empty, or exceeds the size cap."""
+    """Raised when a byte retrieval fails, is empty, or exceeds the size cap.
+
+    Carries the HTTP status when the failure had one, because a caller walking a
+    list of candidate URLs must be able to tell a **hard miss** (``404``: that
+    link is dead, which is a fact about the paper) from a **block** (``403``,
+    ``429``, ``503``, or a transport failure: we were prevented from looking, and
+    know nothing about the paper). Reporting the second as the first is how "we
+    failed" becomes "there is no PDF" — the confusion the failure-honesty rule
+    exists to prevent.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        retry_after: int | None = None,
+    ) -> None:
+        """Record the failure alongside what the server said about it.
+
+        :param message: The human-readable failure.
+        :param status: The HTTP status code, or ``None`` for a transport-level
+            failure that never got one.
+        :param retry_after: ``Retry-After`` in seconds, when the server sent a
+            parsable one.
+        """
+        super().__init__(message)
+        self.status = status
+        self.retry_after = retry_after
+
+    @property
+    def rate_limited(self) -> bool:
+        """Return whether this failure is a throttle rather than a refusal.
+
+        The signal is the same one
+        :class:`~defendable_science.core.http.RateLimitError` uses for the JSON
+        client — a ``429``, or a ``503`` carrying ``Retry-After`` — so the byte
+        layer and the metadata layer agree on what "slow down" looks like.
+
+        :returns: Whether the caller should back off rather than move on.
+        """
+        return self.status == 429 or (
+            self.status == 503 and self.retry_after is not None
+        )
+
+    @property
+    def hard_miss(self) -> bool:
+        """Return whether this failure is evidence the URL has no bytes to serve.
+
+        Only ``404`` and ``410`` qualify: the server answered, and its answer was
+        "there is nothing here". Everything else — a block, a server fault, an
+        oversized body, a dropped connection — leaves the question open, and a
+        caller must not fold it into "no PDF exists".
+
+        :returns: Whether the absence of bytes is established rather than assumed.
+        """
+        return self.status in (404, 410)
 
 
 @dataclass
@@ -86,6 +142,26 @@ def _media_type(headers: Mapping[str, str]) -> str | None:
     return raw.split(";", 1)[0].strip().lower() or None
 
 
+def _retry_after_seconds(headers: Mapping[str, str]) -> int | None:
+    """Parse a ``Retry-After`` header value as integer seconds, else ``None``.
+
+    The same rule as ``core.http``'s namesake, deliberately duplicated rather
+    than imported: this module stays independent of the JSON client (see the
+    module docstring), and the rule is six lines.
+
+    :param headers: The response headers.
+    :returns: The delay in seconds, or ``None`` when the header is absent or is
+        an HTTP-date / otherwise unparsable.
+    """
+    value = headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
 def stream_to_file(
     url: str,
     dest: Path,
@@ -105,8 +181,10 @@ def stream_to_file(
     :param session: The streaming transport (defaults to ``requests.Session``).
     :param timeout: Per-request timeout in seconds.
     :returns: The landed bytes with their reported media type and size.
-    :raises DownloadError: On a non-200 status, a transport failure, an empty
-        body, or a body exceeding `max_bytes`.
+    :raises DownloadError: On a non-200 status, a transport failure (including one
+        that interrupts the body mid-stream), a write failure, an empty body, or a
+        body exceeding `max_bytes`. The status — and ``Retry-After`` on a throttle
+        — travels on the exception, so the caller can tell a hard miss from a block.
     """
     transport = session if session is not None else _default_session()
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -116,7 +194,11 @@ def stream_to_file(
         raise DownloadError(f"{url}: {exc}") from exc
     try:
         if response.status_code != 200:
-            raise DownloadError(f"{url}: HTTP {response.status_code}")
+            raise DownloadError(
+                f"{url}: HTTP {response.status_code}",
+                status=response.status_code,
+                retry_after=_retry_after_seconds(response.headers),
+            )
         size = 0
         with dest.open("wb") as handle:
             for block in response.iter_content(chunk_size=CHUNK):
@@ -131,6 +213,13 @@ def stream_to_file(
     except DownloadError:
         dest.unlink(missing_ok=True)
         raise
+    except OSError as exc:
+        # The body was interrupted mid-stream (``requests``' transport errors are
+        # ``OSError`` subclasses) or the write itself failed (a full disk). Either
+        # way a truncated file is on disk and must not escape as a raw traceback
+        # through a caller that only handles `DownloadError`.
+        dest.unlink(missing_ok=True)
+        raise DownloadError(f"{url}: {exc}") from exc
     finally:
         response.close()
     return FetchedBytes(path=dest, media_type=_media_type(response.headers), size=size)

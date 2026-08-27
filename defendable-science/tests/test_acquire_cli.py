@@ -20,6 +20,7 @@ from typer.testing import CliRunner
 from defendable_science import cli
 from defendable_science.cli import app
 from defendable_science.core import http
+from defendable_science.core.download import DownloadError
 from defendable_science.core.mirror import Mirror
 from defendable_science.literature import acquire as a
 
@@ -850,3 +851,55 @@ def test_lit_mirror_rejects_bad_shapes(
     with pytest.raises(typer.Exit) as exc:
         cli._lit_context()
     assert exc.value.exit_code == 1
+
+
+# --- 8: a PDF host throttle aborts the sweep, end to end ------------------------
+#
+# The metadata-layer version of this is test 6 above. This is the byte-layer
+# twin: the ladder found a URL, the *PDF host* said 429, and the command must not
+# print a `manual` worklist with exit 0.
+
+
+def test_fetch_all_byte_layer_throttle_exits_1_and_buckets_nothing_manual(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_registry(tmp_path / "references.json", [_item("k1")])
+    _write_config(tmp_path, {"registry": "references.json", "triage": "triage.yml"})
+    work = {
+        "id": "https://openalex.org/W1",
+        "display_name": "A Title",
+        "publication_year": 2020,
+        "authorships": [{"author": {"display_name": "A Smith"}}],
+        "open_access": {"is_oa": True},
+        "best_oa_location": {"pdf_url": "http://arxiv.org/pdf/1234", "license": None},
+        "locations": [
+            {
+                "landing_page_url": None,
+                "pdf_url": "http://arxiv.org/pdf/1234",
+                "license": None,
+            }
+        ],
+        "primary_location": {"source": None},
+        "ids": {},
+        "doi": None,
+    }
+    routes = {
+        "https://api.openalex.org/works/doi:10.1234/x": work,
+        "https://api.openalex.org/works/W1": work,
+    }
+    monkeypatch.setattr(cli, "_lit_client", lambda: _fake_client(routes))
+
+    def throttled(url: str, dest: Path, max_bytes: int) -> Any:
+        raise DownloadError(f"{url}: HTTP 429", status=429, retry_after=60)
+
+    monkeypatch.setattr(cli, "stream_to_file", throttled)
+
+    result = runner.invoke(app, ["literature", "fetch", "--all"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert report["complete"] is False
+    assert report["manual"] == []
+    assert "HTTP 429" in report["errors"][0]["error"]
+    assert "Traceback" not in (result.stdout + result.stderr)

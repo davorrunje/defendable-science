@@ -136,8 +136,9 @@ or a genuine match gets discarded before the gate sees it. Rung 7 is
 *manual*: nothing fetched, reported with landing URLs for a human to click,
 adopted afterwards via `confirm --file`.
 
-**The gate.** Three axes — title (normalized, trailing subtitle optionally
-dropped), first-author family name, and year — combine into `accept` /
+**The gate.** Three axes — title (normalized: casefolded, punctuation
+replaced by whitespace, runs of whitespace collapsed; a subtitle's words are
+kept, not dropped), first-author family name, and year — combine into `accept` /
 `quarantine` / `refuse`. **First-author family name is a hard gate: no
 candidate is ever accepted or quarantined across an author mismatch.** Title
 agreement admits either a normalized-equal match or a **word-prefix**

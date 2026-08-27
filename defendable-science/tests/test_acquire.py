@@ -856,7 +856,7 @@ class FakeFetcher:
         if isinstance(payload, Exception):
             raise payload
         if payload is None:
-            raise DownloadError(f"{url}: nothing here")
+            raise DownloadError(f"{url}: nothing here", status=404)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(payload)
         media = "application/pdf" if payload.startswith(b"%PDF-") else "text/html"
@@ -1212,8 +1212,8 @@ def test_download_error_on_one_rung_does_not_end_the_ladder(tmp_path: Path) -> N
     client = FakeClient({"/works/": work})
     fetcher = FakeFetcher(
         {
-            "http://x/one.pdf": DownloadError("http://x/one.pdf: 404"),
-            "http://x/two.pdf": DownloadError("http://x/two.pdf: 403"),
+            "http://x/one.pdf": DownloadError("http://x/one.pdf: 404", status=404),
+            "http://x/two.pdf": DownloadError("http://x/two.pdf: 403", status=403),
         }
     )
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
@@ -1237,7 +1237,7 @@ def test_all_rungs_exhausted_is_manual_with_landing_urls(tmp_path: Path) -> None
             "export.arxiv.org": "<feed/>",
         }
     )
-    fetcher = FakeFetcher(default=DownloadError("http://x/dead.pdf: 404"))
+    fetcher = FakeFetcher(default=DownloadError("http://x/dead.pdf: 404", status=404))
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.landing_urls == ["http://x/abstract"]
@@ -1645,6 +1645,7 @@ def test_outcome_as_json_carries_every_field() -> None:
         "match": None,
         "reason": None,
         "tried": [],
+        "failures": [],
         "landing_urls": [],
         "committable": False,
         "path": None,
@@ -1668,7 +1669,8 @@ def test_a_rung_is_listed_once_however_many_candidates_it_offered(
         }
     )
     outcome = a.acquire_one(
-        entry, _ctx(tmp_path, client, FakeFetcher(default=DownloadError("gone")))
+        entry,
+        _ctx(tmp_path, client, FakeFetcher(default=DownloadError("gone", status=404))),
     )
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LOCATIONS]
@@ -1709,7 +1711,11 @@ def test_a_rungs_license_is_the_one_on_its_own_location(tmp_path: Path) -> None:
     )
     client = FakeClient({"/works/": work})
     fetcher = FakeFetcher(
-        {"http://x/licensed.pdf": DownloadError("http://x/licensed.pdf: 403")}
+        {
+            "http://x/licensed.pdf": DownloadError(
+                "http://x/licensed.pdf: 403", status=403
+            )
+        }
     )
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
     assert outcome.bucket == a.BUCKET_FETCHED
@@ -2504,3 +2510,237 @@ def test_mirror_entry_unreadable_local_blob_is_corrupt_not_a_crash(
     assert report["corrupt"] == [PDF_SHA]
     assert report["pushed"] == []
     assert mirror.puts == []
+
+
+# --- the byte layer's failure honesty ------------------------------------------
+#
+# The metadata layer got this right from the start: `_resolve_work` refuses to
+# call a miss a `manual` row, and a `RateLimitError` aborts the sweep. The *byte*
+# layer did not. Every `DownloadError` — 429, 403, 503, a dropped connection —
+# was swallowed by `_land_bytes`, the ladder walked on, and an exhausted ladder
+# was filed as "this paper has no PDF" with `complete: true` and exit 0. These
+# tests assert the negative: which verdicts a transport failure must *not* be
+# able to produce.
+
+
+def test_a_byte_layer_throttle_cannot_produce_a_manual_verdict(
+    tmp_path: Path,
+) -> None:
+    """The required test 1 — a 429 from a PDF host is never "no PDF exists".
+
+    arXiv answers 429 to unthrottled PDF pulls and publisher CDNs 403
+    non-browser agents, so this is what a 50-paper sweep hits in practice. It
+    must abort the sweep, exactly as an OpenAlex throttle does: nothing
+    bucketed as ``manual``, ``complete: false`` so the command exits non-zero,
+    the untried entries counted rather than adjudicated, and the cause text
+    still readable in the report.
+    """
+    _write_bib(
+        tmp_path,
+        [
+            _bib("sill1997", "10.1000/sill", family="Sill"),
+            _bib("later1", "10.1000/later1", family="Fb"),
+            _bib("later2", "10.1000/later2", family="Fc"),
+        ],
+    )
+    work = _oa(family="Sill", pdf="http://arxiv.org/pdf/1234")
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/sill": work,
+            "/works/W1": work,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(
+        default=DownloadError(
+            "http://arxiv.org/pdf/1234: HTTP 429", status=429, retry_after=60
+        )
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, fetcher))
+
+    assert report["manual"] == []
+    assert report["fetched"] == []
+    assert report["complete"] is False
+    assert report["not_attempted"] == 2
+    assert len(report["errors"]) == 1
+    error = report["errors"][0]["error"]
+    assert "rate-limited, sweep aborted" in error
+    assert "HTTP 429" in error
+    assert a.RUNG_OA_BEST in error
+
+
+def test_a_503_asking_us_to_wait_aborts_the_sweep_too(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    work = _oa(pdf="http://x/one.pdf")
+    client = FakeClient({"/works/": work})
+    fetcher = FakeFetcher(
+        default=DownloadError("http://x/one.pdf: HTTP 503", status=503, retry_after=5)
+    )
+    with pytest.raises(RateLimitError, match="throttled while downloading bytes"):
+        a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+
+def test_a_blocked_ladder_is_an_error_row_not_a_manual_one(tmp_path: Path) -> None:
+    """A 403 on every rung means we never looked, so ``manual`` is unearned.
+
+    ``manual`` is a promise: we consulted every rung and this paper has no
+    obtainable PDF. A CDN that refuses a non-browser agent has told us nothing
+    about the paper, so the row goes to ``errors`` — which also makes the sweep
+    exit non-zero — and it names each URL and its cause.
+    """
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf="http://x/blocked.pdf", landing="http://x/abstract")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(
+        default=DownloadError("http://x/blocked.pdf: HTTP 403", status=403)
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "not a 'no PDF exists' verdict" in outcome.reason
+    assert "http://x/blocked.pdf: HTTP 403" in outcome.reason
+    assert outcome.failures == [
+        {
+            "rung": a.RUNG_OA_BEST,
+            "url": "http://x/blocked.pdf",
+            "status": 403,
+            "error": "http://x/blocked.pdf: HTTP 403",
+            "blocking": True,
+        }
+    ]
+    # The message keys as `error`, like every other errors[] row.
+    payload = outcome.as_json()
+    assert "reason" not in payload
+    assert "http://x/blocked.pdf: HTTP 403" in payload["error"]
+    assert payload["failures"] == outcome.failures
+    # And the landing URLs still travel, so a human has somewhere to click.
+    assert payload["landing_urls"] == ["http://x/abstract"]
+
+
+def test_a_dead_link_still_earns_a_manual_verdict_and_records_the_cause(
+    tmp_path: Path,
+) -> None:
+    """``404`` is the one transport answer that *is* evidence about the paper.
+
+    The server answered, and its answer was "there is nothing here". So the row
+    stays ``manual`` — but the cause is recorded rather than discarded, which is
+    the difference between a worklist entry a human can act on and a bare
+    "nothing served bytes".
+    """
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf="http://x/dead.pdf", landing="http://x/abstract")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(
+        default=DownloadError("http://x/dead.pdf: HTTP 404", status=404)
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert outcome.failures[0]["blocking"] is False
+    assert outcome.failures[0]["status"] == 404
+    assert outcome.failures[0]["error"] == "http://x/dead.pdf: HTTP 404"
+
+
+def test_one_block_among_dead_links_is_enough_to_refuse_manual(
+    tmp_path: Path,
+) -> None:
+    """The verdict is only as good as its weakest rung.
+
+    Rung 1 is genuinely gone (404); rung 2 was blocked (403). The blocked one
+    might have been the PDF, so the entry cannot be filed as having none.
+    """
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdfs=["http://x/dead.pdf", "http://x/blocked.pdf"])
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(
+        {
+            "http://x/dead.pdf": DownloadError("dead: HTTP 404", status=404),
+            "http://x/blocked.pdf": DownloadError("blocked: HTTP 403", status=403),
+        }
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert [failure["blocking"] for failure in outcome.failures] == [False, True]
+    assert outcome.reason is not None
+    assert "blocked: HTTP 403" in outcome.reason
+    assert "dead: HTTP 404" not in outcome.reason
+
+
+def test_a_failure_with_no_status_at_all_blocks_a_manual_verdict(
+    tmp_path: Path,
+) -> None:
+    """A dropped connection or a full disk carries no status, and settles nothing."""
+    _path, entry = _registry(tmp_path)
+    client = FakeClient(
+        {
+            "/works/": _oa(pdf="http://x/one.pdf"),
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(
+        default=DownloadError("http://x/one.pdf: connection reset by peer")
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.failures[0]["status"] is None
+    assert outcome.failures[0]["blocking"] is True
+
+
+def test_a_refusal_is_still_reported_alongside_a_block(tmp_path: Path) -> None:
+    """The closest refusal is what a human reads first; a block must not hide it."""
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf="http://x/blocked.pdf")
+    sibling = _oa(wid="W2", family="Igel", pdf="http://x/sib.pdf")
+    client = FakeClient(
+        {
+            "/works/": anchor,
+            "/works": {"results": [sibling]},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    fetcher = FakeFetcher(default=DownloadError("blocked: HTTP 403", status=403))
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "the closest candidate was refused" in outcome.reason
+    assert outcome.match is not None
+    assert outcome.match["author"] == "mismatch"
+
+
+def test_bytes_that_land_after_a_block_are_a_plain_success(tmp_path: Path) -> None:
+    """A recorded failure is not a permanent stain: rung 2 served the PDF."""
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdfs=["http://x/blocked.pdf", "http://x/good.pdf"])
+    client = FakeClient({"/works/": anchor})
+    fetcher = FakeFetcher(
+        {"http://x/blocked.pdf": DownloadError("blocked: HTTP 403", status=403)}
+    )
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.url == "http://x/good.pdf"
+    assert outcome.failures == []

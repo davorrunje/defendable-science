@@ -371,15 +371,16 @@ looking for one.
 | `fetched` | bytes acquired this run, hashed, cached, mirrored if a mirror is configured, and recorded on the entry | nothing |
 | `cached` | the entry already had a checksum and the bytes resolved from the cache or the mirror | nothing |
 | `quarantined` | a search-derived candidate was *plausible but not certain*. Bytes are on disk; `references.json` is untouched | look at the PDF, then `confirm --sha256 <hash>` to accept it — or ignore it and treat the entry as `manual` |
-| `manual` | the ladder was exhausted; nothing served PDF bytes. The row carries `landing_urls[]` so there is somewhere to click | download it by hand, then `confirm --file <path>` |
+| `manual` | the ladder ran to the end **unblocked** and nothing served PDF bytes — every rung was consulted, and any link that failed did so with a `404`/`410`, i.e. the host said "there is nothing here". The row carries `landing_urls[]` so there is somewhere to click, and `failures[]` naming the dead links | download it by hand, then `confirm --file <path>` |
 | `committable` | the observed license is on the shipped permissive allowlist, so you *may* keep an in-repo copy | copy the blob into the repo yourself, if you want to. Nothing is copied for you |
-| `errors` | a tooling or metadata failure — a rate limit, a transport error, an unresolvable identifier, a conflicting request. **Not** a statement about the paper | fix or retry. Never treat this as "no PDF exists" |
+| `errors` | a tooling failure — a rate limit, a transport error (on metadata *or* on a PDF download), an unresolvable identifier, a conflicting request. **Not** a statement about the paper. A ladder that produced no bytes but was *blocked* on the way — a `403` from a CDN, a `5xx`, a dropped connection, a body over `max_bytes` — lands here rather than in `manual`, with `failures[]` naming each URL and its cause | fix or retry. Never treat this as "no PDF exists" |
 
 Four properties of the report worth knowing before you script against it:
 
 - **The buckets are not disjoint.** A permissively-licensed paper appears in
-  `fetched[]` *and* in `committable[]` — the same row object, twice.
-- **A row that came from an attempt carries the full outcome shape** — thirteen
+  `fetched[]` *and* in `committable[]` — two equal copies of the same row, one in
+  each list, rather than one row cross-referenced from two places.
+- **A row that came from an attempt carries the full outcome shape** — fourteen
   keys — not a per-bucket projection. A `fetched` row can legitimately carry a
   `reason`: the bytes landed and verified in the cache but the *mirror* write then
   failed. Projecting that row down to `{citekey, sha256, rung, url}` would hide a
@@ -390,8 +391,8 @@ Four properties of the report worth knowing before you script against it:
 
   ```json
   {"citekey": "igel2023smooth", "bucket": "errors", "sha256": null, "rung": null,
-   "url": null, "candidate": null, "match": null, "tried": [], "landing_urls": [],
-   "committable": false, "path": null, "license": null,
+   "url": null, "candidate": null, "match": null, "tried": [], "failures": [],
+   "landing_urls": [], "committable": false, "path": null, "license": null,
    "error": "no DOI and no recorded identifier on the entry — nothing to resolve; add a 'DOI' field to the registry entry first"}
   ```
 
@@ -406,9 +407,12 @@ Four properties of the report worth knowing before you script against it:
   Both spell the message `error` rather than `reason`, so you never have to check
   two keys for the same information. But if you read `.bucket` or `.tried` off an
   `errors[]` row, guard for their absence.
-- **`complete` and `not_attempted` are the honesty fields.** A provider throttle
-  aborts the sweep with `complete: false` and a count of entries never attempted,
-  rather than reporting the remaining papers as `manual`. Being rate-limited is
+- **`complete` and `not_attempted` are the honesty fields.** A throttle aborts
+  the sweep with `complete: false` and a count of entries never attempted, rather
+  than reporting the remaining papers as `manual`. That holds wherever the
+  throttle came from: a `429` from OpenAlex, and equally a `429` — or a `503`
+  carrying `Retry-After` — from the *PDF host*, which is what an unattended
+  50-paper sweep against arXiv actually hits. Being rate-limited is
   not information about a paper, and telling you to go download 30 PDFs by hand
   because a server said "slow down" would be a lie. A non-empty `errors[]` or
   `complete: false` also makes the command exit non-zero, so no CI loop reads a
@@ -424,6 +428,7 @@ A real `manual` row, for a paywalled 2010 journal paper in the survey's set:
   "bucket": "manual",
   "reason": "the acquisition ladder is exhausted — every rung was consulted and none served PDF bytes",
   "tried": [],
+  "failures": [],
   "landing_urls": [
     "https://doi.org/10.1109/tnn.2010.2044803",
     "https://pubmed.ncbi.nlm.nih.gov/20371402",
@@ -457,6 +462,7 @@ printing some other paper's checksum here would quietly break that.
   "match": {"verdict": "identity", "title": null, "author": null, "year": null, "reason": null},
   "reason": null,
   "tried": [],
+  "failures": [],
   "landing_urls": [],
   "committable": false,
   "path": ".defendable-science/cache/literature/sha256/<that same sha256>",

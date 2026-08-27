@@ -847,6 +847,12 @@ class Outcome:
         ``reason`` for a :data:`BUCKET_ERROR` outcome (spec §7's report shape),
         so a consumer reading ``errors[]`` never has to check two key spellings.
     :param tried: Rungs attempted, in order, each once.
+    :param failures: Per-URL byte-layer failures, as
+        ``{rung, url, status, error, blocking}`` — see :class:`_Ladder`. Empty on
+        every outcome that never downloaded anything, and on any outcome that
+        landed bytes. Populated on a ``manual`` row (the links that were dead)
+        and on the ``errors`` row a blocked ladder produces (the reason the run
+        cannot claim the paper has no PDF).
     :param landing_urls: Somewhere for a human to click, on a ``manual`` outcome.
     :param committable: Whether the observed license permits an in-repo copy.
         ``fetch`` never makes that copy (spec §6) — it only reports.
@@ -864,6 +870,7 @@ class Outcome:
     match: dict[str, Any] | None = None
     reason: str | None = None
     tried: list[str] = field(default_factory=list)
+    failures: list[dict[str, Any]] = field(default_factory=list)
     landing_urls: list[str] = field(default_factory=list)
     committable: bool = False
     path: str | None = None
@@ -890,6 +897,7 @@ class Outcome:
             "match": self.match,
             "reason": self.reason,
             "tried": list(self.tried),
+            "failures": [dict(failure) for failure in self.failures],
             "landing_urls": list(self.landing_urls),
             "committable": self.committable,
             "path": self.path,
@@ -935,10 +943,29 @@ class _Ladder:
         exhausted ladder can explain *which axis* failed rather than only that
         nothing was found. The first is kept rather than the last because rungs
         are walked best-first, so it is the closest thing to a match seen.
+    :param failures: Every byte-layer failure, in the order it happened, as
+        ``{rung, url, status, error, blocking}``. Nothing is discarded: a
+        download that failed is the one thing an exhausted ladder must not
+        forget, because "the fetch was blocked" and "the paper has no PDF" are
+        the two readings this module exists to keep apart. ``blocking`` is true
+        for a failure that leaves the question open (a ``403``, a ``5xx``, a
+        dropped connection, an oversized body) and false for a hard miss
+        (``404`` / ``410``), where the server did answer and its answer was
+        "there is nothing here".
     """
 
     tried: list[str] = field(default_factory=list)
     refusal: tuple[Candidate, MatchRecord] | None = None
+    failures: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def blocking(self) -> list[dict[str, Any]]:
+        """Return the failures that forbid a ``manual`` verdict.
+
+        :returns: The recorded failures whose cause was a block rather than an
+            established absence.
+        """
+        return [failure for failure in self.failures if failure["blocking"]]
 
 
 _UNSAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
@@ -1312,24 +1339,55 @@ def _gate(entry: Entry, candidate: Candidate, state: _Ladder) -> MatchRecord | N
 
 
 def _land_bytes(
-    ctx: Context, entry: Entry, candidate: Candidate
+    ctx: Context, entry: Entry, candidate: Candidate, state: _Ladder
 ) -> FetchedBytes | None:
     """Download one candidate and check it really is a PDF.
 
-    A :class:`~defendable_science.core.download.DownloadError` here is about *this
-    URL* — a dead proceedings link, a 403, an oversized body — so it ends the
-    candidate and nothing more. Ending the ladder on it would report "no PDF
+    A :class:`~defendable_science.core.download.DownloadError` here is about
+    *this URL* — a dead proceedings link, a 403, an oversized body — so it ends
+    the candidate and nothing more. Ending the ladder on it would report "no PDF
     exists" on the strength of one broken link.
+
+    But it is **recorded** on the ladder state before the walk goes on, with its
+    status and its message, because the opposite mistake is worse: an exhausted
+    ladder whose every rung was *blocked* knows nothing about whether the paper
+    has a PDF, and :func:`_exhausted` needs the evidence to say so instead of
+    filing a silent ``manual`` row. A ``403`` from a CDN that dislikes
+    non-browser agents is a routine event on a real sweep.
+
+    A **throttle** (``429``, or ``503`` with ``Retry-After``) is not per-URL at
+    all — the host is telling us to stop — so it is raised as
+    :class:`~defendable_science.core.http.RateLimitError`, the same signal the
+    metadata layer already uses to abort the sweep (spec §9). Walking on would
+    collect one 429 per remaining URL and then bucket the entry as if we had
+    looked.
 
     :param ctx: The acquisition context.
     :param entry: The registry entry (names the scratch file).
     :param candidate: The candidate to download.
+    :param state: The ladder state, which accumulates the failures.
     :returns: The landed PDF bytes, or ``None`` to move to the next candidate.
+    :raises RateLimitError: If the byte host throttles us.
     """
+    from defendable_science.core.http import RateLimitError
+
     dest = ctx.cache_dir / "incoming" / f"{_safe_name(entry.citekey)}.part"
     try:
         fetched = ctx.fetcher(candidate.url, dest, ctx.max_bytes)
-    except DownloadError:
+    except DownloadError as exc:
+        if exc.rate_limited:
+            raise RateLimitError(
+                f"{candidate.rung} throttled while downloading bytes: {exc}"
+            ) from exc
+        state.failures.append(
+            {
+                "rung": candidate.rung,
+                "url": candidate.url,
+                "status": exc.status,
+                "error": str(exc),
+                "blocking": not exc.hard_miss,
+            }
+        )
         return None
     if looks_like_pdf(fetched):
         return fetched
@@ -1578,7 +1636,7 @@ def _try_candidate(
         return None
     if dry_run:
         return _dry_run_outcome(entry, candidate, match, state)
-    fetched = _land_bytes(ctx, entry, candidate)
+    fetched = _land_bytes(ctx, entry, candidate, state)
     if fetched is None:
         return None
     sha = sha256_file(fetched.path)
@@ -1602,35 +1660,74 @@ def _try_candidate(
     return _accept(entry, ctx, work, candidate, match, fetched, sha)
 
 
-def _exhausted(entry: Entry, work: dict[str, Any], state: _Ladder) -> Outcome:
-    """Build the ``manual`` row for a ladder that produced nothing.
+def _failure_digest(failures: list[dict[str, Any]]) -> str:
+    """Render per-URL byte-layer failures as one human-readable clause.
 
-    This is the *only* path to ``manual``. A throttle, a transport failure, or an
-    unresolvable identifier never lands here: telling a human to download a paper
-    by hand because a provider rate-limited us is exactly the confusion the
-    failure-honesty rule exists to prevent (spec §9).
+    :param failures: The recorded failures.
+    :returns: ``"<rung> <url>: <error>"``, semicolon-separated, in the order the
+        failures happened.
+    """
+    return "; ".join(
+        f"{failure['rung']} {failure['url']}: {failure['error']}"
+        for failure in failures
+    )
+
+
+def _exhausted(entry: Entry, work: dict[str, Any], state: _Ladder) -> Outcome:
+    """Bucket a ladder that produced no bytes — ``manual`` only if it earned it.
+
+    Two different endings, and keeping them apart is the whole point:
+
+    - **Nothing was blocked.** Every rung was consulted and either offered
+        nothing, served something that was not a PDF, or served a link the host
+        answered as gone (``404`` / ``410``). That is a fact about the paper, so
+        it is a :data:`BUCKET_MANUAL` row — the human worklist.
+    - **Something was blocked.** At least one download failed for a reason that
+        says nothing about the paper: a ``403``, a ``5xx``, a dropped connection,
+        a body over the size cap. Then we did *not* look everywhere, so
+        ``manual`` would be a claim we did not earn and the row is a
+        :data:`BUCKET_ERROR` — which also makes ``fetch`` exit non-zero, so no CI
+        loop reads the sweep as finished (spec §9).
+
+    A throttle never reaches here at all: :func:`_land_bytes` raises
+    :class:`~defendable_science.core.http.RateLimitError` and the sweep aborts.
 
     :param entry: The registry entry.
     :param work: The resolved anchor work.
     :param state: The ladder state.
     :returns: A :data:`BUCKET_MANUAL` outcome carrying the rungs tried, the
-        landing URLs to click, and the closest refusal if there was one.
+        landing URLs to click, the per-URL failures and the closest refusal if
+        there was one — or a :data:`BUCKET_ERROR` outcome naming what blocked us.
     """
-    reason = (
-        "the acquisition ladder is exhausted — every rung was consulted and none "
-        "served PDF bytes"
-    )
     candidate: dict[str, Any] | None = None
     match: dict[str, Any] | None = None
+    refused_note = ""
     if state.refusal is not None:
         refused, record = state.refusal
         candidate, match = refused.as_json(), record.as_json()
-        reason = f"{reason}; the closest candidate was refused: {record.reason}"
+        refused_note = f"; the closest candidate was refused: {record.reason}"
+    blocking = state.blocking
+    if blocking:
+        reason = (
+            f"the ladder produced no PDF, but {len(blocking)} of the URLs it "
+            "tried failed in transport rather than reporting no PDF, so whether "
+            "this paper has an obtainable PDF is unknown — this is not a "
+            f"'no PDF exists' verdict: {_failure_digest(blocking)}. Retry once "
+            "the source is reachable" + refused_note
+        )
+        bucket = BUCKET_ERROR
+    else:
+        reason = (
+            "the acquisition ladder is exhausted — every rung was consulted and "
+            "none served PDF bytes" + refused_note
+        )
+        bucket = BUCKET_MANUAL
     return Outcome(
         citekey=entry.citekey,
-        bucket=BUCKET_MANUAL,
+        bucket=bucket,
         reason=reason,
         tried=state.tried,
+        failures=state.failures,
         landing_urls=_all_landing_urls(work),
         candidate=candidate,
         match=match,
@@ -1649,8 +1746,11 @@ def acquire_one(
     match gate standing where ``dataset`` has a pre-known hash. **Drift refuses**
     (spec §4).
 
-    Rate limits and transport failures propagate to the caller rather than being
-    bucketed here: only an exhausted ladder means "no PDF was obtainable".
+    Rate limits propagate to the caller rather than being bucketed here —
+    whether they came from a metadata call or from a PDF host — and only a
+    ladder that ran to the end **unblocked** means "no PDF was obtainable". A
+    ladder every rung of which was blocked in transport is an
+    :data:`BUCKET_ERROR`, not a ``manual`` row (:func:`_exhausted`).
 
     :param entry: The registry entry to acquire for.
     :param ctx: The acquisition context.
@@ -1659,7 +1759,8 @@ def acquire_one(
     :param dry_run: Report the rung that would yield bytes; fetch and write
         nothing.
     :returns: The outcome, in one of the ``BUCKET_*`` buckets.
-    :raises RateLimitError: If a provider throttles a metadata call.
+    :raises RateLimitError: If a provider throttles a metadata call, or a PDF
+        host throttles a byte download.
     :raises HttpError: On a metadata transport failure.
     :raises RetrievalError: If a configured mirror cannot be reached at all
         (a missing ``rclone``), which is a configuration fault, not a fact about
@@ -1900,8 +2001,11 @@ def fetch_all(
     A rate limit **aborts** the sweep with ``complete: false`` and a
     ``not_attempted`` count, because a throttle is not information about the
     remaining papers: reporting them as ``manual`` would tell a human to
-    download by hand what the tool simply never asked for. Any other transport
-    failure is per-entry — it lands in ``errors`` and the sweep continues.
+    download by hand what the tool simply never asked for. That holds for a
+    throttle from a *PDF host* exactly as it does for one from a metadata
+    provider — arXiv and publisher CDNs throttle unattended sweeps, and the
+    remaining entries are no more "manual" for it. Any other transport failure
+    is per-entry — it lands in ``errors`` and the sweep continues.
 
     :param ctx: The acquisition context.
     :param citekeys: Explicit entries to attempt, in this order; the whole
@@ -2085,12 +2189,19 @@ def mirror_entry(
     Probes the mirror before deciding what to do with each file: a copy
     already there is reported as such rather than re-pushed, and
     `check_only` never calls :meth:`Mirror.put` regardless of what the probe
-    finds. A transport failure — most commonly a missing ``rclone`` binary —
-    is not caught here: it propagates as the actionable ``RetrievalError``
-    `Mirror` already raises (`core/mirror.py`), because a transport failure
-    and "no copy in the mirror" are different problems with different fixes,
-    and folding the former into the latter is exactly the failure the
-    substrate rule (spec §9) exists to prevent.
+    finds. A transport failure that `Mirror` *raises* — most commonly a
+    missing ``rclone`` binary — is not caught here: it propagates as the
+    actionable ``RetrievalError``, because a transport failure and "no copy in
+    the mirror" are different problems with different fixes.
+
+    .. warning::
+       That distinction is only as good as the probe underneath it, and today
+       it is **not** watertight. ``Mirror._run_ok`` reads a non-zero
+       ``rclone`` exit as "absent", so an auth, quota or network failure on
+       the probe is reported here as `missing` rather than raised. Treat a
+       `missing` entry as "not confirmed present", never as "the mirror has
+       been checked and does not have it". Tracked as a follow-up on the
+       promoted ``core/mirror.py`` module, which ``dataset`` shares.
 
     **A local blob is re-hashed before it is pushed.** Every other path that
     calls :meth:`Mirror.put` in this codebase does so immediately after
@@ -2120,9 +2231,10 @@ def mirror_entry(
         blob to push, or because the entry records no asset at all), and
         ``corrupt`` (a local blob whose bytes no longer match the recorded
         checksum — never pushed).
-    :raises RetrievalError: If the mirror transport itself fails (a missing
-        ``rclone`` binary, or a push that fails) — surfaced intact rather
-        than folded into `missing`.
+    :raises RetrievalError: If the mirror transport raises — a missing
+        ``rclone`` binary, or a push that fails — surfaced intact rather than
+        folded into `missing`. A *probe* that fails without raising is the
+        gap the warning above describes.
     """
     report: dict[str, Any] = {
         "citekey": entry.citekey,

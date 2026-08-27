@@ -191,8 +191,13 @@ with a per-host minimum interval.
 
 Three axes, candidate-vs-registry-entry:
 
-- **title** — normalized: casefolded, punctuation and runs of whitespace collapsed, a trailing
-  subtitle after `:` optionally dropped.
+- **title** — normalized: casefolded, punctuation (including any `:`) replaced by whitespace,
+  and runs of whitespace collapsed. *Amended 2026-08-27, during implementation:* this clause
+  originally added "a trailing subtitle after `:` optionally dropped". Nothing drops a subtitle —
+  `normalize_title` strips the punctuation and leaves the subtitle's words in place, and the
+  subtitle case is carried by the word-prefix containment relation below instead. Dropping the
+  subtitle would have been the more destructive of the two mechanisms anyway, since it discards
+  information before the axis is evaluated.
 - **first-author family name** — casefolded, diacritics folded.
 - **year** — integer.
 
@@ -338,6 +343,12 @@ invisible, which is exactly the silent degradation §9 forbids. Error rows key t
 `error` (not `reason`), consistently across both the per-entry outcomes and the sweep's own
 synthesized rows, so a consumer never has to check two spellings.
 
+*Amended 2026-08-27, after review.* The outcome shape carries one more field than the sketch
+above: `failures[]`, a list of `{rung, url, status, error, blocking}` recording every byte-layer
+download failure the ladder hit. It is empty on any outcome that landed bytes; it is the evidence
+for a `manual[]` row's dead links, and the reason a blocked ladder is an `errors[]` row instead
+(§9).
+
 Note also that naming a citekey explicitly *and* passing `--disposition` is a conflict rather
 than a filter: an explicitly requested entry the filter would exclude produces an `errors[]` row
 naming the conflict, never a silent omission. Dropping it quietly would let the report claim
@@ -432,6 +443,31 @@ completely.
   `RateLimitError` propagates (graph.py's existing contract); transport failures land in
   `errors[]`. Only an **exhausted ladder** — every rung consulted, none yielding accepted bytes
   — produces a `manual[]` row, and the row records which rungs were tried.
+
+  *Amended 2026-08-27, after a whole-branch review found the byte layer violating this.* The rule
+  binds the **PDF download** exactly as it binds the metadata call, and stating it once was not
+  enough: the first implementation discarded every `DownloadError` in `_land_bytes` (message and
+  all) and let an exhausted-because-blocked ladder become a `manual[]` row with `complete: true`
+  and exit 0. Three requirements make the rule enforceable rather than aspirational:
+
+  1. `DownloadError` carries `status` and `retry_after`, so a caller can tell a **hard miss**
+     (`404`/`410` — the host answered "nothing here", which *is* evidence about the paper) from a
+     **block** (`403`, `5xx`, a dropped connection, a body over `max_bytes` — evidence about
+     nothing).
+  2. **Every** byte-layer failure is recorded on the ladder state and surfaces as `failures[]` on
+     the outcome: `{rung, url, status, error, blocking}`. A cause that is not captured cannot be
+     reported, and an uncaptured cause is how the first implementation managed to say "none
+     served PDF bytes" without knowing whether that was true.
+  3. A ladder with **any** `blocking` failure is an `errors[]` row, not a `manual[]` one — the
+     blocked URL might have been the PDF, so `manual`'s promise ("we looked everywhere and this
+     paper has no obtainable PDF") is unearned. A byte-layer `429`, or a `503` carrying
+     `Retry-After`, raises `RateLimitError` and takes the **same sweep abort** as a metadata
+     throttle: `complete: false`, a `not_attempted` count, nothing bucketed for the untried.
+
+  Mid-stream honesty at the same layer: `stream_to_file`'s cleanup handler catches `OSError` as
+  well as `DownloadError`, because `requests`' transport errors and a failed `handle.write` are
+  `OSError`s that otherwise escaped as a raw traceback and left a truncated `.part` on disk —
+  falsifying that function's own "a partial file is removed on any failure".
 - **`fetch --all` exits non-zero if anything landed in `errors[]`**, so no agent or CI loop can
   read a half-swept registry as a complete one.
 - **A partial sweep is marked.** `complete: false` plus the not-attempted count if the run aborts

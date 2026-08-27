@@ -382,6 +382,13 @@ def asset_to_json(asset: Asset) -> dict[str, Any]:
 def _locate(items: list[Any], citekey: str) -> int:
     """Return the index of the entry matching `citekey` by ``id`` then ``DOI``.
 
+    The DOI fallback is **API-only**: no shipped caller reaches it, because
+    everything in ``literature/`` patches by the ``id`` it read out of this same
+    file. It is kept because a library caller holding a DOI and no citekey has
+    nowhere else to go — but see :func:`patch_asset`'s warning: passing a DOI
+    writes to whichever entry carries it, which need not be the entry the caller
+    thinks it resolved.
+
     :raises RegistryError: If no entry matches.
     """
     for index, item in enumerate(items):
@@ -406,8 +413,16 @@ def patch_asset(path: str | Path, citekey: str, asset: Asset) -> None:
     round-trips it through a model would silently drop what the model does not
     know about.
 
+    .. warning::
+       The ``DOI`` fallback in the lookup is for **API callers only**, and it is
+       reached by nothing this package ships: every internal caller passes the
+       ``id`` it read out of this same file. A caller that passes a DOI instead
+       of a citekey will write the spine onto whichever entry carries that DOI —
+       which may not be the entry it believes it resolved. Pass a citekey.
+
     :param path: The registry path.
-    :param citekey: The entry to patch, matched on ``id`` then ``DOI``.
+    :param citekey: The entry to patch, matched on ``id``, then — for API
+        callers only — on ``DOI``.
     :param asset: The spine to store.
     :raises RegistryError: If the file is unusable, no entry matches `citekey`, or
         the entry's existing ``custom`` field is not an object.
@@ -445,6 +460,33 @@ class TriageRow:
     raw: dict[str, Any]
 
 
+def _triage_mapping(target: Path, text: str) -> dict[Any, Any]:
+    """Parse the triage sidecar into its raw top-level mapping.
+
+    Raw on purpose: the row values are handed back exactly as ``pyyaml`` gave
+    them, including rows that are not mappings, so a *writer* can see what a
+    reader would skip.
+
+    :param target: The path, for error messages.
+    :param text: The file contents.
+    :returns: The top-level mapping, or ``{}`` for an empty file.
+    :raises RegistryError: If the text is not valid YAML, or is not a mapping at
+        the top level.
+    """
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise RegistryError(f"{target}: invalid YAML: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise RegistryError(
+            f"{target}: expected a YAML mapping of citekey → row, got "
+            f"{type(data).__name__}"
+        )
+    return data
+
+
 def load_triage(path: str | Path) -> dict[str, TriageRow]:
     """Load the triage sidecar, keyed by citekey.
 
@@ -460,17 +502,7 @@ def load_triage(path: str | Path) -> dict[str, TriageRow]:
     target = Path(path)
     if not target.is_file():
         return {}
-    try:
-        data = yaml.safe_load(target.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise RegistryError(f"{target}: invalid YAML: {exc}") from exc
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise RegistryError(
-            f"{target}: expected a YAML mapping of citekey → row, got "
-            f"{type(data).__name__}"
-        )
+    data = _triage_mapping(target, target.read_text(encoding="utf-8"))
     rows: dict[str, TriageRow] = {}
     for citekey, row in data.items():
         if not isinstance(row, dict):
@@ -505,11 +537,26 @@ def patch_triage(
     caller surfaces the refusal and the human edits by hand. Scalars only, for the
     same reason: a nested value is a structure worth a human's attention.
 
+    The same posture covers a **row that is not a mapping**. ``sill1997: include``
+    (a shorthand disposition) and a bare ``igel2023:`` (a citekey queued with
+    nothing under it yet) are ordinary hand-authoring, and both are invisible to
+    :func:`load_triage`, which skips them. Rebuilding the file from what a reader
+    could see would therefore delete them — the exact "we round-tripped a human's
+    file and dropped what we did not know" failure this module was written to
+    avoid. So the write is refused, naming the rows, and the human is told to
+    edit by hand.
+
+    .. warning::
+       One class of loss is **not** guarded: ``yaml.safe_load`` resolves anchors
+       and aliases, so a sidecar using ``&anchor`` / ``*alias`` is written back
+       fully expanded. The data survives; the sharing does not. A file using
+       anchors should be hand-edited rather than patched.
+
     :param path: The sidecar path (created if absent).
     :param citekey: The row to patch (created if absent).
     :param updates: Scalar keys to set; a ``None`` value deletes the key.
-    :raises RegistryError: If the file carries comments, is unreadable, or any
-        update value is not a scalar.
+    :raises RegistryError: If the file carries comments, holds a row that is not
+        a mapping, is unreadable, or any update value is not a scalar.
     """
     for key, value in updates.items():
         if value is not None and not isinstance(value, (str, int, bool)):
@@ -525,8 +572,18 @@ def patch_triage(
                 f"{target}: carries comments, which cannot be preserved on write "
                 f"— set {sorted(updates)} on {citekey!r} by hand"
             )
-        rows = load_triage(target)
-        data: dict[str, Any] = {key: row.raw for key, row in rows.items()}
+        raw = _triage_mapping(target, text)
+        opaque = sorted(
+            str(key) for key, row in raw.items() if not isinstance(row, dict)
+        )
+        if opaque:
+            raise RegistryError(
+                f"{target}: rows {opaque} are not mappings — a shorthand "
+                "'citekey: value' or a citekey with nothing under it yet. This "
+                "writer cannot rewrite the file without dropping them, so it is "
+                f"refusing — set {sorted(updates)} on {citekey!r} by hand"
+            )
+        data: dict[str, Any] = {str(key): row for key, row in raw.items()}
     else:
         data = {}
     row = data.setdefault(citekey, {})

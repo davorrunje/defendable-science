@@ -477,3 +477,80 @@ def test_patch_triage_creates_a_missing_file(tmp_path: Path) -> None:
     path = tmp_path / "t.yml"
     reg.patch_triage(path, "k", {"disposition": "screened"})
     assert reg.load_triage(path)["k"].disposition == "screened"
+
+
+# --- the write must not lose a row a reader cannot see -------------------------
+#
+# `load_triage` skips a row that is not a mapping, which is right for a reader:
+# one malformed row should not make the sidecar unreadable. `patch_triage` used
+# to rebuild the file from what that reader returned, so every skipped row was
+# deleted on write — the "we round-tripped a human's file and dropped what we did
+# not know" failure (#94, #95) reappearing in the writer built to avoid it.
+
+
+def test_patch_triage_refuses_rather_than_dropping_a_non_mapping_row(
+    tmp_path: Path,
+) -> None:
+    """The required test 2 — the two shorthands a human really writes.
+
+    ``sill1997: include`` is a shorthand disposition and ``igel2023:`` is a
+    citekey queued with nothing under it yet. Both are ordinary hand-authoring
+    and both are invisible to `load_triage`. The refusal names them, and the file
+    is byte-identical afterwards.
+    """
+    path = tmp_path / "t.yml"
+    original = (
+        "sill1997: include\n"
+        "igel2023:\n"
+        "other2020:\n"
+        "  disposition: exclude\n"
+        "  rationale: out of scope\n"
+    )
+    path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "other2020", {"disposition": "include"})
+
+    message = str(caught.value)
+    assert "not mappings" in message
+    assert "sill1997" in message
+    assert "igel2023" in message
+    assert "'disposition'" in message
+    assert path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "t.yml.tmp").exists()
+
+
+def test_patch_triage_refuses_when_the_row_it_was_asked_to_patch_is_shorthand(
+    tmp_path: Path,
+) -> None:
+    """The same rule applies to the target row: rewriting it is still a rewrite."""
+    path = tmp_path / "t.yml"
+    original = "k: include\n"
+    path.write_text(original, encoding="utf-8")
+    with pytest.raises(reg.RegistryError, match="not mappings"):
+        reg.patch_triage(path, "k", {"disposition": "screened"})
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_patch_triage_still_writes_when_every_row_is_a_mapping(
+    tmp_path: Path,
+) -> None:
+    """The refusal is targeted: an all-mapping file patches as before."""
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a:\n  disposition: inbox\nb:\n  disposition: exclude\n", encoding="utf-8"
+    )
+    reg.patch_triage(path, "a", {"disposition": "screened"})
+    rows = reg.load_triage(path)
+    assert rows["a"].disposition == "screened"
+    assert rows["b"].disposition == "exclude"
+
+
+def test_patch_triage_keeps_a_non_string_citekey_addressable(tmp_path: Path) -> None:
+    """A YAML key that is not a string (``2020:``) is still a row, not a casualty."""
+    path = tmp_path / "t.yml"
+    path.write_text("2020:\n  disposition: inbox\n", encoding="utf-8")
+    reg.patch_triage(path, "k", {"disposition": "screened"})
+    rows = reg.load_triage(path)
+    assert rows["2020"].disposition == "inbox"
+    assert rows["k"].disposition == "screened"

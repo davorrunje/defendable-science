@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bound to a citekey (see ADR-0037). `fetch` never writes PDF bytes into the
   consumer's repository, under any flag. This is the tooling `skills/digest/
   SKILL.md` step 1 required but that did not previously exist.
+  A download that fails is never filed as "this paper has no PDF": each failure
+  is recorded per URL in the report's `failures[]`, a blocked ladder is an
+  `errors[]` row (exit 1) rather than a `manual[]` one, and a `429` from a PDF
+  host aborts the sweep with `complete: false` exactly as a metadata throttle
+  does.
 
 ### Changed
 
