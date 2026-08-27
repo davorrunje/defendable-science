@@ -1376,30 +1376,155 @@ def rank(
     _emit_row(row)
 
 
+def _check_scaffold_opts(
+    level: str, paper_root: str, research: str, backend: str
+) -> None:
+    """Validate the ``--scaffold`` option combination for `level`.
+
+    :param level: The validated backlog level.
+    :param paper_root: ``--paper-root`` (hypothesis level).
+    :param research: ``--research-root`` (paper level).
+    :param backend: ``--backend`` (paper level).
+    :raises typer.Exit: Code 2 if an option this level requires is missing.
+    """
+    if level == "hypothesis":
+        needed = {"--paper-root": paper_root}
+    else:
+        # ``backend`` has no default: the plugin ships no experiment backend, so
+        # a registry row with an empty binding is not a usable paper (ADR-0013).
+        needed = {"--research-root": research, "--backend": backend}
+    missing = sorted(name for name, value in needed.items() if not value)
+    if missing:
+        typer.echo(
+            f"--scaffold at the {level} level requires {', '.join(missing)}", err=True
+        )
+        raise typer.Exit(code=2)
+
+
+def _scaffold_promoted(
+    level: str,
+    row: dict[str, str],
+    *,
+    paper_root: str,
+    research: str,
+    backend: str,
+    slug: str,
+    date: str,
+) -> dict[str, str]:
+    """Scaffold the next-stage artifact for a just-promoted `row`.
+
+    :param level: The validated backlog level.
+    :param row: The promoted row, whose ``one-line``/``provenance`` are carried
+        into the artifact verbatim.
+    :param paper_root: The paper root (hypothesis level).
+    :param research: The ``docs/research`` directory (paper level).
+    :param backend: The experiment-backend binding to record (paper level).
+    :param slug: Explicit hypothesis folder name; ``<date>-<row-id>`` otherwise.
+    :param date: ISO date for the folder name and ``last-updated``.
+    :returns: The created paths, keyed for the caller's JSON report.
+    :raises backlog_mod.BacklogError: If a target artifact already exists.
+    """
+    today = date or backlog_mod.today_iso()
+    if level == "hypothesis":
+        target = backlog_mod.scaffold_hypothesis(
+            paper_root,
+            slug or f"{today}-{row['id']}",
+            row["one-line"],
+            row["provenance"],
+            today=today,
+        )
+        return {"hypothesis": str(target)}
+    root = backlog_mod.scaffold_paper(
+        research, row["id"], row["one-line"], backend=backend
+    )
+    return {
+        "paper_root": str(root),
+        "pitch": str(root / "paper" / "pitch.md"),
+        "backlog": str(root / "backlog.md"),
+        "registry": str(Path(research) / "papers.md"),
+    }
+
+
 @backlog.command()
 def promote(
     row_id: str,
     backlog_path: _BacklogPath = "backlog.md",
     level: _LevelOpt = "hypothesis",
+    scaffold: Annotated[
+        bool,
+        typer.Option("--scaffold", help="Also scaffold the next-stage artifact."),
+    ] = False,
+    paper_root: Annotated[
+        str,
+        typer.Option("--paper-root", help="Paper root (hypothesis level scaffold)."),
+    ] = "",
+    research_root: Annotated[
+        str,
+        typer.Option("--research-root", help="docs/research dir (paper level)."),
+    ] = "",
+    backend: Annotated[
+        str,
+        typer.Option("--backend", help="Experiment-backend binding (paper level)."),
+    ] = "",
+    slug: Annotated[
+        str,
+        typer.Option("--slug", help="Hypothesis folder name; <date>-<id> otherwise."),
+    ] = "",
+    date: Annotated[
+        str, typer.Option("--date", help="ISO date for the scaffold (default today).")
+    ] = "",
 ) -> None:
     """Mark a ``ranked`` row ``promoted`` (an explicit human pick).
 
-    Flips the row's status and saves the backlog. Scaffolding the next-stage
-    artifact is a follow-up step (``scaffold_hypothesis`` / ``scaffold_paper``).
+    Flips the row's status and saves the backlog. With ``--scaffold`` it also
+    creates the next-stage artifact the row hands off to — the hypothesis folder
+    at the hypothesis level, or the paper root plus its ``papers.md`` registry row
+    at the paper level — and reports the created paths instead of the bare row.
+
+    Scaffolding runs *before* the backlog is written, so a refused scaffold (the
+    artifact already exists) leaves the row ``ranked`` and the operation
+    retryable, never ``promoted`` with nothing on disk.
 
     :param row_id: The row to promote.
     :param backlog_path: Path to the backlog table.
     :param level: Backlog level.
-    :raises typer.Exit: Code 1 on a guard violation.
+    :param scaffold: Also scaffold the next-stage artifact.
+    :param paper_root: The paper root; required with ``--scaffold`` at the
+        hypothesis level.
+    :param research_root: The ``docs/research`` directory; required with
+        ``--scaffold`` at the paper level.
+    :param backend: The experiment-backend binding; required with ``--scaffold``
+        at the paper level (the plugin bundles no default).
+    :param slug: Explicit ``<YYYY-MM-DD-slug>`` hypothesis folder name.
+    :param date: ISO date for the folder name and ``last-updated``.
+    :raises typer.Exit: Code 1 on a guard violation, code 2 on a missing option.
     """
     board = _open_backlog(backlog_path, level)
+    if scaffold:
+        _check_scaffold_opts(level, paper_root, research_root, backend)
     try:
         row = board.promote(row_id)
+        artifacts = (
+            _scaffold_promoted(
+                level,
+                row,
+                paper_root=paper_root,
+                research=research_root,
+                backend=backend,
+                slug=slug,
+                date=date,
+            )
+            if scaffold
+            else None
+        )
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     board.save(backlog_path)
-    _emit_row(row)
+    if artifacts is None:
+        _emit_row(row)
+    typer.echo(json.dumps({"row": row, "artifacts": artifacts}, indent=2))
+    raise typer.Exit(code=0)
 
 
 @backlog.command()

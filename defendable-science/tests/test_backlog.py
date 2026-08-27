@@ -256,7 +256,7 @@ def test_add_duplicate_id_raises() -> None:
 
 
 def test_today_is_iso() -> None:
-    assert len(b._today()) == 10
+    assert len(b.today_iso()) == 10
 
 
 def test_registry_root_fallback(tmp_path: Path) -> None:
@@ -624,3 +624,192 @@ def test_scaffold_paper_row_is_inside_the_table(tmp_path: Path) -> None:
     assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
     assert doc.rows[1]["root"] == "docs/research/second"
     assert doc.postamble.startswith("\n## Scope notes")
+
+
+# --- promote --scaffold (#113) ------------------------------------------------
+
+
+def _ranked_backlog(path: Path, level: str, row_id: str) -> None:
+    """Write a backlog at `path` holding one ``ranked`` row `row_id`."""
+    board = b.Backlog(level=level)  # type: ignore[arg-type]
+    board.add("a claim worth testing", "scouted:W123", row_id=row_id)
+    board.rank(row_id, feas="high", interest="high")
+    board.save(path)
+
+
+def test_promote_scaffold_hypothesis(tmp_path: Path) -> None:
+    path = tmp_path / "backlog.md"
+    _ranked_backlog(path, "hypothesis", "h1")
+    paper_root = tmp_path / "docs" / "research" / "depth-collapse"
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "h1",
+            "--backlog",
+            str(path),
+            "--paper-root",
+            str(paper_root),
+            "--scaffold",
+            "--date",
+            "2026-03-04",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["row"]["status"] == "promoted"
+    target = paper_root / "hypotheses" / "2026-03-04-h1" / "hypothesis.md"
+    assert payload["artifacts"] == {"hypothesis": str(target)}
+    text = target.read_text(encoding="utf-8")
+    assert "last-updated: 2026-03-04" in text
+    assert "scouted:W123" in text  # provenance carried verbatim
+    assert "a claim worth testing" in text
+    assert b.Backlog.load(path, "hypothesis").get("h1")["status"] == "promoted"
+
+
+def test_promote_scaffold_hypothesis_explicit_slug_and_default_date(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "backlog.md"
+    _ranked_backlog(path, "hypothesis", "h1")
+    paper_root = tmp_path / "paper"
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "h1",
+            "--backlog",
+            str(path),
+            "--paper-root",
+            str(paper_root),
+            "--scaffold",
+            "--slug",
+            "2026-01-01-hand-picked",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    target = paper_root / "hypotheses" / "2026-01-01-hand-picked" / "hypothesis.md"
+    assert target.is_file()
+    # No --date: last-updated falls back to today.
+    assert f"last-updated: {b.today_iso()}" in target.read_text(encoding="utf-8")
+
+
+def test_promote_scaffold_paper_registers_and_reports(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio-backlog.md"
+    _ranked_backlog(path, "paper", "depth-collapse")
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "depth-collapse",
+            "--backlog",
+            str(path),
+            "--level",
+            "paper",
+            "--scaffold",
+            "--research-root",
+            str(research),
+            "--backend",
+            "bench",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    root = research / "depth-collapse"
+    assert payload["artifacts"] == {
+        "paper_root": str(root),
+        "pitch": str(root / "paper" / "pitch.md"),
+        "backlog": str(root / "backlog.md"),
+        "registry": str(research / "papers.md"),
+    }
+    assert (root / "paper" / "pitch.md").is_file()
+    assert (root / "backlog.md").is_file()
+    registry = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    assert registry.rows == [
+        {
+            "paper-id": "depth-collapse",
+            "root": "docs/research/depth-collapse",
+            "backend": "bench",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("level", "extra", "wanted"),
+    [
+        ("hypothesis", [], "--paper-root"),
+        ("paper", ["--research-root", "x"], "--backend"),
+        ("paper", ["--backend", "bench"], "--research-root"),
+    ],
+)
+def test_promote_scaffold_missing_option_exits_2(
+    tmp_path: Path, level: str, extra: list[str], wanted: str
+) -> None:
+    path = tmp_path / "backlog.md"
+    _ranked_backlog(path, level, "r1")
+    result = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            "r1",
+            "--backlog",
+            str(path),
+            "--level",
+            level,
+            "--scaffold",
+            *extra,
+        ],
+    )
+    assert result.exit_code == 2
+    assert wanted in result.stderr
+    # Refused before any mutation: the row is still ranked.
+    assert b.Backlog.load(path, level).get("r1")["status"] == "ranked"  # type: ignore[arg-type]
+
+
+def test_promote_scaffold_refused_leaves_row_ranked(tmp_path: Path) -> None:
+    # A promoted row with no artifact on disk is the inconsistency to avoid, so
+    # the scaffold runs before the backlog is written and a refusal is retryable.
+    path = tmp_path / "portfolio-backlog.md"
+    _ranked_backlog(path, "paper", "depth-collapse")
+    research = tmp_path / "docs" / "research"
+    (research / "depth-collapse").mkdir(parents=True)  # already there
+    args = [
+        "backlog",
+        "promote",
+        "depth-collapse",
+        "--backlog",
+        str(path),
+        "--level",
+        "paper",
+        "--scaffold",
+        "--research-root",
+        str(research),
+        "--backend",
+        "bench",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "already exists" in result.stderr
+    assert not (research / "papers.md").exists()  # no half-written registry
+    assert b.Backlog.load(path, "paper").get("depth-collapse")["status"] == "ranked"
+
+    # Retryable once the obstruction is gone.
+    (research / "depth-collapse").rmdir()
+    assert runner.invoke(app, args).exit_code == 0
+    assert b.Backlog.load(path, "paper").get("depth-collapse")["status"] == "promoted"
+
+
+def test_promote_without_scaffold_still_emits_the_bare_row(tmp_path: Path) -> None:
+    path = tmp_path / "backlog.md"
+    _ranked_backlog(path, "hypothesis", "h1")
+    result = runner.invoke(app, ["backlog", "promote", "h1", "--backlog", str(path)])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "promoted"
+    assert "artifacts" not in payload
