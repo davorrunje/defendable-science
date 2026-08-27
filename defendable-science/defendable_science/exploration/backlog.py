@@ -52,6 +52,31 @@ PAPER_COLUMNS = [
 #: The columns ``papers.md`` must carry for ``promote`` to register a paper.
 REGISTRY_COLUMNS = ["paper-id", "root", "backend"]
 
+_REGISTRY_PREAMBLE = """\
+# Papers registry
+
+<!-- paper-id → the paper's root + its experiment-backend binding.
+     `defendable-science backlog promote --scaffold` appends rows; a paper-id is
+     stable once written, because it keys the paper across the backlog, the
+     dashboard and `progress`. -->
+
+"""
+
+
+def registry_dumps(preamble: str = _REGISTRY_PREAMBLE) -> str:
+    """Render an empty-but-valid ``papers.md``.
+
+    The header is rendered from :data:`REGISTRY_COLUMNS`, so a column added there
+    cannot leave scaffolding behind — an invented 4th column is exactly why
+    ``promote --scaffold`` could not register a paper into a hand-written
+    registry.
+
+    :param preamble: Host prose to place above the table.
+    :returns: The whole document.
+    """
+    return _splice(preamble, "", list(REGISTRY_COLUMNS), [])
+
+
 #: Allowed source states for the ``rank`` transition.
 _RANK_SOURCES = frozenset({"candidate", "parked"})
 
