@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 #: The ``custom`` sub-key that holds our spine.
 NAMESPACE = "defendable-science"
 
@@ -425,5 +427,116 @@ def patch_asset(path: str | Path, citekey: str, asset: Asset) -> None:
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(
         json.dumps(items, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    tmp.replace(target)
+
+
+@dataclass
+class TriageRow:
+    """One ``triage.yml`` row — our decisions about a paper.
+
+    :param citekey: The row key, joining to the bib entry.
+    :param disposition: The state-machine value, when set.
+    :param raw: The full row, so callers can read fields this model does not name.
+    """
+
+    citekey: str
+    disposition: str | None
+    raw: dict[str, Any]
+
+
+def load_triage(path: str | Path) -> dict[str, TriageRow]:
+    """Load the triage sidecar, keyed by citekey.
+
+    A missing file yields ``{}`` — a project with no triage yet is not an error.
+    A row that is not a mapping is skipped rather than fatal, so one malformed
+    row does not make the whole sidecar unreadable.
+
+    :param path: The sidecar path.
+    :returns: Rows by citekey.
+    :raises RegistryError: If the file exists but is not valid YAML, or is not a
+        YAML mapping at the top level.
+    """
+    target = Path(path)
+    if not target.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise RegistryError(f"{target}: invalid YAML: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise RegistryError(
+            f"{target}: expected a YAML mapping of citekey → row, got "
+            f"{type(data).__name__}"
+        )
+    rows: dict[str, TriageRow] = {}
+    for citekey, row in data.items():
+        if not isinstance(row, dict):
+            continue
+        rows[str(citekey)] = TriageRow(
+            citekey=str(citekey),
+            disposition=_opt_str(row.get("disposition")),
+            raw=row,
+        )
+    return rows
+
+
+def _has_comments(text: str) -> bool:
+    """Return whether the YAML text carries a comment line.
+
+    Deliberately conservative: any line whose first non-space character is ``#``
+    counts. An inline ``#`` inside a quoted scalar would be a false positive, and
+    a false positive here costs a refusal the human can work around, while a false
+    negative costs them their PRISMA rationales.
+    """
+    return any(line.lstrip().startswith("#") for line in text.splitlines())
+
+
+def patch_triage(
+    path: str | Path, citekey: str, updates: dict[str, str | int | bool | None]
+) -> None:
+    """Add or replace scalar keys on one triage row.
+
+    ``pyyaml`` cannot round-trip comments, and the triage sidecar's ``rationale``
+    fields *are* the PRISMA audit trail — often annotated. So this refuses to
+    rewrite a file carrying comments rather than silently destroying them; the
+    caller surfaces the refusal and the human edits by hand. Scalars only, for the
+    same reason: a nested value is a structure worth a human's attention.
+
+    :param path: The sidecar path (created if absent).
+    :param citekey: The row to patch (created if absent).
+    :param updates: Scalar keys to set; a ``None`` value deletes the key.
+    :raises RegistryError: If the file carries comments, is unreadable, or any
+        update value is not a scalar.
+    """
+    for key, value in updates.items():
+        if value is not None and not isinstance(value, (str, int, bool)):
+            raise RegistryError(
+                f"triage update {key!r} must be a scalar or None, got "
+                f"{type(value).__name__} — edit nested structure by hand"
+            )
+    target = Path(path)
+    if target.is_file():
+        text = target.read_text(encoding="utf-8")
+        if _has_comments(text):
+            raise RegistryError(
+                f"{target}: carries comments, which cannot be preserved on write "
+                f"— set {sorted(updates)} on {citekey!r} by hand"
+            )
+        rows = load_triage(target)
+        data: dict[str, Any] = {key: row.raw for key, row in rows.items()}
+    else:
+        data = {}
+    row = data.setdefault(citekey, {})
+    for key, value in updates.items():
+        if value is None:
+            row.pop(key, None)
+        else:
+            row[key] = value
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
     )
     tmp.replace(target)

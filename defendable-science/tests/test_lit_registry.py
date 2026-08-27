@@ -389,3 +389,91 @@ def test_patch_asset_doi_fallback_skips_a_non_dict_item(tmp_path: Path) -> None:
     items = json.loads(path.read_text(encoding="utf-8"))
     assert items[0] == "not-a-csl-item"
     assert items[1]["custom"][reg.NAMESPACE]["pid"] == "ok"
+
+
+def test_load_triage_reads_rows(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "sill1997monotonic:\n  disposition: screened\n  rationale: seminal\n",
+        encoding="utf-8",
+    )
+    rows = reg.load_triage(path)
+    assert rows["sill1997monotonic"].disposition == "screened"
+    assert rows["sill1997monotonic"].raw["rationale"] == "seminal"
+
+
+def test_load_triage_missing_file_is_empty_not_an_error(tmp_path: Path) -> None:
+    assert reg.load_triage(tmp_path / "absent.yml") == {}
+
+
+def test_load_triage_blank_file_is_empty(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("", encoding="utf-8")
+    assert reg.load_triage(path) == {}
+
+
+def test_load_triage_skips_non_mapping_rows(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("a: 3\nb:\n  disposition: screened\n", encoding="utf-8")
+    rows = reg.load_triage(path)
+    assert set(rows) == {"b"}
+
+
+def test_load_triage_non_mapping_top_level_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("- a\n- b\n", encoding="utf-8")
+    with pytest.raises(reg.RegistryError, match="expected a YAML mapping"):
+        reg.load_triage(path)
+
+
+def test_load_triage_invalid_yaml_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("a: [unclosed\n", encoding="utf-8")
+    with pytest.raises(reg.RegistryError, match="invalid YAML"):
+        reg.load_triage(path)
+
+
+def test_patch_triage_adds_and_replaces_scalars(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("k:\n  disposition: inbox\n", encoding="utf-8")
+    reg.patch_triage(path, "k", {"disposition": "screened", "priority": 2})
+    rows = reg.load_triage(path)
+    assert rows["k"].disposition == "screened"
+    assert rows["k"].raw["priority"] == 2
+
+
+def test_patch_triage_none_deletes_a_key(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("k:\n  disposition: inbox\n  stale: yes\n", encoding="utf-8")
+    reg.patch_triage(path, "k", {"stale": None})
+    assert "stale" not in reg.load_triage(path)["k"].raw
+
+
+def test_patch_triage_refuses_a_commented_file(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    original = "# PRISMA log — do not lose this\nk:\n  disposition: inbox\n"
+    path.write_text(original, encoding="utf-8")
+    with pytest.raises(reg.RegistryError, match="carries comments"):
+        reg.patch_triage(path, "k", {"disposition": "screened"})
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_patch_triage_refuses_a_nested_value(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("k:\n  disposition: inbox\n", encoding="utf-8")
+    with pytest.raises(reg.RegistryError, match="scalar"):
+        reg.patch_triage(path, "k", {"seeded": ["a", "b"]})  # type: ignore[dict-item]
+
+
+def test_patch_triage_creates_a_missing_row(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    path.write_text("other:\n  disposition: inbox\n", encoding="utf-8")
+    reg.patch_triage(path, "k", {"disposition": "screened"})
+    assert reg.load_triage(path)["k"].disposition == "screened"
+    assert reg.load_triage(path)["other"].disposition == "inbox"
+
+
+def test_patch_triage_creates_a_missing_file(tmp_path: Path) -> None:
+    path = tmp_path / "t.yml"
+    reg.patch_triage(path, "k", {"disposition": "screened"})
+    assert reg.load_triage(path)["k"].disposition == "screened"
