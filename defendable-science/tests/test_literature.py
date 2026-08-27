@@ -100,14 +100,18 @@ def test_http_gives_up_and_raises() -> None:
     client = http.HttpClient(
         session=session, sleep=lambda _s: None, cache_dir=None, max_retries=2
     )
-    with pytest.raises(http.HttpError, match="giving up"):
+    with pytest.raises(http.HttpError, match="giving up") as exc:
         client.get_json("https://x")
+    # A retry-budget exhaustion has no single status to point to — it must
+    # not masquerade as a genuine 404 by carrying that status_code.
+    assert exc.value.status_code is None
 
 
 def test_http_4xx_is_fatal() -> None:
     client = _client({"https://x": FakeResponse(404, {})})
-    with pytest.raises(http.HttpError, match="HTTP 404"):
+    with pytest.raises(http.HttpError, match="HTTP 404") as exc:
         client.get_json("https://x")
+    assert exc.value.status_code == 404
 
 
 def test_http_cache_avoids_second_call(tmp_path: Any) -> None:
@@ -222,6 +226,9 @@ def test_resolve_miss_is_not_fatal() -> None:
     rec = graph.resolve("W404", client=client)
     assert rec["resolved"] is False
     assert "reason" in rec
+    # The negative that matters (defendable-science#106): a genuine miss must
+    # never carry the transport-failure discriminator.
+    assert "transport_error" not in rec
 
 
 def test_enrich_work_reconstructs_abstract() -> None:
@@ -290,13 +297,30 @@ def test_cli_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
     assert json.loads(result.stdout)["openalex"] == "W1"
 
 
-def test_cli_resolve_miss_exits_0_with_resolved_false(
+def test_cli_resolve_miss_exits_1_with_resolved_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_lit_client", lambda: _client({}))
     result = runner.invoke(app, ["literature", "resolve", "W404"])
-    assert result.exit_code == 0  # resolve reports, never crashes
-    assert json.loads(result.stdout)["resolved"] is False
+    assert result.exit_code == 1  # a genuine miss reports, but is not "success"
+    body = json.loads(result.stdout)
+    assert body["resolved"] is False
+    assert "transport_error" not in body
+
+
+def test_cli_resolve_transport_error_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 502 exhausts the retry budget as a plain HttpError (not a rate limit,
+    # not a 404) — this must surface as a distinguishable failure, exit 2, not
+    # a clean "no such paper" (exit 1) nor a false success (exit 0).
+    client = _client(
+        {"https://api.openalex.org/works/W1": FakeResponse(502, {})}, max_retries=2
+    )
+    monkeypatch.setattr(cli, "_lit_client", lambda: client)
+    result = runner.invoke(app, ["literature", "resolve", "W1"])
+    assert result.exit_code == 2
+    body = json.loads(result.stdout)
+    assert body["resolved"] is False
+    assert body["transport_error"] is True
 
 
 def test_cli_refs_unresolved_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -975,6 +999,35 @@ def test_resolve_404_still_returns_genuine_miss() -> None:
     # The genuine not-found path is preserved: 404 → resolved False, not a raise.
     rec = graph.resolve("W404", client=_client({}))
     assert rec["resolved"] is False
+    # The negative: a genuine 404 must never carry the transport discriminator.
+    assert "transport_error" not in rec
+
+
+def test_resolve_transport_error_is_distinguishable_from_a_miss() -> None:
+    # A 502 that exhausts retries is a transport failure, not "no such paper" —
+    # defendable-science#106. It must not be reportable as the same shape a
+    # genuine miss gets.
+    client = _client(
+        {"https://api.openalex.org/works/W1": FakeResponse(502, {})}, max_retries=2
+    )
+    rec = graph.resolve("W1", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True
+
+
+def test_resolve_non_json_body_is_transport_error_not_a_miss() -> None:
+    # A 200 with an undecodable body is also a transport-layer fault, not a
+    # legitimate "this paper does not exist" — same discriminator applies.
+    bad = FakeResponse(200, {})
+
+    def _raise() -> Any:
+        raise ValueError("boom")
+
+    bad.json = _raise  # type: ignore[method-assign]
+    client = _client({"https://api.openalex.org/works/W1": bad})
+    rec = graph.resolve("W1", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True
 
 
 def test_resolve_s2_crossref_rate_limit_propagates() -> None:

@@ -32,7 +32,21 @@ _T = TypeVar("_T")
 
 
 class HttpError(RuntimeError):
-    """Raised when a request ultimately fails (after retries) or returns non-JSON."""
+    """Raised when a request ultimately fails (after retries) or returns non-JSON.
+
+    :param message: The error message.
+    :param status_code: The response's HTTP status, when the failure is a
+        known non-retryable status (e.g. ``404``). ``None`` when the failure
+        has no single status to point to — retries exhausted on a shifting
+        mix of ``5xx``/``429``, a network exception, or a non-JSON ``200``
+        body. Callers use this to tell a genuine miss (``404``) apart from a
+        transport failure, per the failure-honesty rule.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        """Build the error; see the class docstring for parameter semantics."""
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class RateLimitError(HttpError):
@@ -335,7 +349,10 @@ class HttpClient:
                 if resp.status_code == 200:
                     return extract(resp)
                 if resp.status_code not in (429, 500, 502, 503, 504):
-                    raise HttpError(f"{url}: HTTP {resp.status_code}")
+                    raise HttpError(
+                        f"{url}: HTTP {resp.status_code}",
+                        status_code=resp.status_code,
+                    )
                 last_error = f"HTTP {resp.status_code}"
                 retry_after = _retry_after_seconds(resp.headers)
                 rate_limited = resp.status_code == 429 or (
