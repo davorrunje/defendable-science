@@ -126,10 +126,9 @@ Two git-tracked layers joined by citekey/DOI (per ADR-0008, ADR-0020):
 
 **1. Bibliographic facts — CSL-JSON (`references.json`), source of truth.**
 Robust to parse/validate/manipulate (the skills append rows, join by key, build
-matrices programmatically). Carries the substrate spine fields for the PDF
-payload: `pid`/DOI, `files[]` (path + `sha256:…`), `license`, `mirror`. **BibTeX
-is exported on demand** (pandoc / Zotero) for LaTeX manuscripts — treat any `.bib`
-as a generated view, not the source. Do **not** hand-author `.bib` as the truth.
+matrices programmatically). **BibTeX is exported on demand** (pandoc / Zotero)
+for LaTeX manuscripts — treat any `.bib` as a generated view, not the source.
+Do **not** hand-author `.bib` as the truth.
 
 **2. Triage sidecar — `triage.yml`, keyed by citekey/DOI.** Our decisions about
 each paper:
@@ -147,11 +146,54 @@ disposition spawns a backlog entry (the reference→idea provenance link `scout`
 produced); `screened` in/out + rationale across a paper's set *is* the PRISMA log
 for `position`.
 
-**PDFs use the shared substrate.** Resolve via the cache → mirror → source chain;
-the authoritative checksum is SHA-256 in the registry (see
-[../../docs/design/04-substrate-and-contract.md](../../docs/design/04-substrate-and-contract.md) §2). A mirror is
-storage, not a redistribution grant — the `license` / `redistributable` fields
-gate whether a PDF may be committed vs. mirror-only.
+### The `custom.defendable-science` namespace — PDF provenance
+
+The substrate spine for a paper's PDF payload (`pid`, `files[]`, `license`,
+`mirror`, `acquisition`) lives under one namespaced object,
+`custom.defendable-science`, on the CSL-JSON item — **never** as top-level
+item properties. The CSL input schema forbids additional top-level properties
+on an item, so a top-level spine would make `references.json` schema-invalid;
+`custom` is the schema's own designated escape hatch and round-trips through
+Zotero and pandoc unchanged (ADR-0037). `literature fetch` / `confirm`
+populate this field; you should not hand-edit it.
+
+`files[].path` is always a **content-addressed blob path** — `fetch` never
+writes PDF bytes into this repository, automatically or behind a flag. A
+license is recorded as what was *observed* (`{id, observed, source}`), not an
+assertion of rights: absent or unrecognized means `redistributable: false`.
+If you want an in-repo copy of a permissively-licensed PDF, copy it yourself;
+`fetch --all`'s `committable[]` bucket is the worklist for exactly that.
+
+**PDFs use the shared substrate.** Resolve via the cache → mirror → source
+chain; the authoritative checksum is SHA-256 in the registry (see
+[../../docs/design/04-substrate-and-contract.md](../../docs/design/04-substrate-and-contract.md) §2). A literature
+entry usually has no pre-known hash on first acquisition, unlike a dataset
+manifest entry — `fetch` establishes one via the acquisition ladder and match
+gate below, rather than verifying against one already recorded.
+
+### Acquisition — the ladder and the match gate
+
+`literature fetch <citekey>` walks a ladder: identity-derived rungs read the
+anchor's own OpenAlex record (`best_oa_location`, every `locations[].pdf_url`,
+then any `locations[].landing_page_url` that actually serves PDF bytes); if
+none yield bytes, search-derived rungs try (a sibling-version title search, an
+arXiv query, and an empty-by-default, config-driven `venue_resolvers` list).
+Every search-derived candidate passes a **match gate** — title, first-author
+family name, and year, compared against the registry entry — that returns
+`accept`, `quarantine`, or `refuse`. **First-author family name is a hard
+gate: no candidate is ever accepted or quarantined across an author
+mismatch.** This is what lets the gate accept a genuine preprint/journal
+sibling pair one year apart while refusing a same-topic, different-author
+paper a loose title search would otherwise bind to the wrong citekey. See
+ADR-0037 for the full rationale.
+
+A `quarantine` verdict lands bytes + the candidate record on disk without
+touching `references.json`; nothing is ever auto-promoted. Review it, then
+`literature confirm <citekey> --sha256 <hash>` to accept it, or leave it and
+work the `manual[]` bucket instead. `literature confirm <citekey> --file
+<path>` adopts a hand-downloaded PDF — it **copies** the file (your original
+stays put) and records an empty, non-redistributable license, since the tool
+observed nothing about a file it didn't fetch itself.
 
 ## Composition
 
@@ -187,23 +229,47 @@ gate whether a PDF may be committed vs. mirror-only.
 - **Keyless-first, degrade gracefully.** OpenAlex needs no key (send `mailto=`).
   Semantic Scholar's key is optional — fall back to OpenAlex-only if absent, at
   the cost of citation contexts/intents. scite.ai is out of scope for v1.
-- **License gate is non-negotiable.** Never commit PDF bytes on the strength of a
-  mirror; only `redistributable` + a permissive `license` allows in-repo bytes.
+- **License gate is non-negotiable.** `fetch` never writes PDF bytes into this
+  repository, automatically or behind a flag, on the strength of a mirror or a
+  scraped license field — only a human, informed by `redistributable` + a
+  permissive `license`, commits an in-repo copy.
 - **Reproducibility.** Record the search date, API versions, and query filters in
   the run's provenance; the same anchors + filters should reproduce the set.
 
 ## Tooling
 
-The graph work is the **`defendable_science/literature/graph.py`** module of the
-`defendable-science` package, exposed as the CLI group **`defendable-science literature`**
-(`resolve | cites | refs | enrich | neighbors`), each emitting JSON. **Ensure it
-before use** via [`ensure-tooling`](../../resources/ensure-tooling.md) (`uv tool
-install defendable-science`, git/TestPyPI fallbacks). It wraps the OpenAlex + Semantic
-Scholar clients, the CSL-JSON bib loader/appender, and the triage-join +
-PRISMA-log / concept-matrix generators. Package deps: `requests` + `pyyaml` (+ the
-substrate's rclone mirror). Design: `../../docs/design/proposals/literature-citation-graph-client.md`.
+The CLI group **`defendable-science literature`** exposes nine commands, each
+emitting JSON. **Ensure it before use** via
+[`ensure-tooling`](../../resources/ensure-tooling.md) (`uv tool install
+defendable-science`, git/TestPyPI fallbacks).
 
-> **The endpoints the CLI wraps** (for reference, or a keyless manual check):
+- **`resolve | cites | refs | enrich | neighbors`** — the citation-graph
+  primitives (`defendable_science/literature/graph.py`), wrapping the
+  OpenAlex + Semantic Scholar clients. Design:
+  `../../docs/design/proposals/literature-citation-graph-client.md`.
+- **`fetch | confirm | verify | mirror`** — the registry + acquisition layer
+  (`defendable_science/literature/{registry,acquire}.py`): the CSL-JSON
+  registry loader/patcher, the `triage.yml` sidecar reader, the acquisition
+  ladder and match gate, and the mirror/verify wrappers described in
+  [Registry](#registry--bib--triage-sidecar) above. Design:
+  `../../docs/design/proposals/literature-asset-acquisition.md`, ADR-0037.
+
+`fetch`/`verify`/`mirror` each take exactly one of a `citekey` or `--all`
+(never both, never neither); `confirm` takes exactly one of `--sha256` or
+`--file`. `fetch --disposition <value>` restricts `--all` to entries whose
+`triage.yml` row carries that disposition.
+
+**A generator this skill does not (yet) provide:** the PRISMA-style log and
+concept-centric matrix described in §3/§Guardrails above are produced by
+following the described procedure over the triage sidecar's `rationale` /
+`role` fields by hand — there is no `literature` command that generates
+either artifact. Filed as a follow-up; do not assume a CLI command exists for
+them.
+
+Package deps: `requests` + `pyyaml` (+ the substrate's rclone mirror, invoked
+as a subprocess).
+
+> **The endpoints the graph commands wrap** (for reference, or a keyless manual check):
 > - Forward citations: `curl 'https://api.openalex.org/works?filter=cites:<WORKID>&mailto=<email>&per-page=200'`
 >   (paginate via `cursor=*`). Backward: read `referenced_works` on the anchor's work record.
 > - Contexts + SciCite intents + `isInfluential`:

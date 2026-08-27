@@ -48,5 +48,6 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0034](0034-digest-skill.md) | Dedicated `digest` skill for inbound paper comprehension, not a `defend` target | accepted |
 | [0035](0035-rename-to-defendable-science.md) | Rename the project to Defendable Science — repo, plugin, distribution, CLI, config dir, env vars, and docs domain; old PyPI packages dropped | accepted |
 | [0036](0036-automated-dependency-updates.md) | Automated dependency updates — Dependabot for the dev toolchain + Actions, scheduled `pre-commit autoupdate`, no auto-merge | accepted |
+| [0037](0037-literature-asset-acquisition.md) | Literature asset acquisition — substrate spine under CSL `custom`, three-way match gate with an author hard gate | accepted |
 
 Format: MADR (Markdown Any Decision Records). Deciders: Davor Runje (with Claude).

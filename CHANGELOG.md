@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`literature fetch | confirm | verify | mirror`** — the literature registry
+  now closes the same PDF-provenance loop `dataset` already had: `fetch`
+  acquires a paper's PDF through a generic acquisition ladder (OpenAlex
+  locations, PDF-serving landing pages, sibling-version and arXiv search, an
+  empty-by-default `venue_resolvers` config hook), `confirm` promotes a
+  quarantined candidate or adopts a manually downloaded PDF, `verify` re-hashes
+  on-disk bytes offline, and `mirror` pushes to / probes the configured rclone
+  remote. Every search-derived candidate passes a three-way match gate
+  (accept / quarantine / refuse) with first-author family name as a hard
+  gate, so a wrong-author false positive is refused rather than silently
+  bound to a citekey (see ADR-0037). `fetch` never writes PDF bytes into the
+  consumer's repository, under any flag. This is the tooling `skills/digest/
+  SKILL.md` step 1 required but that did not previously exist.
+  A download that fails is never filed as "this paper has no PDF": each failure
+  is recorded per URL in the report's `failures[]`, a blocked ladder is an
+  `errors[]` row (exit 1) rather than a `manual[]` one, and a `429` from a PDF
+  host aborts the sweep with `complete: false` exactly as a metadata throttle
+  does.
+
+### Changed
+
+- **Substrate spine promoted to `custom.defendable-science`.** The PDF
+  provenance record (`pid`, `files[]`, `license`, `mirror`, `acquisition`)
+  lives under CSL-JSON's own `custom` namespace, not as top-level item
+  properties — the CSL schema forbids the latter, which would have made
+  `references.json` schema-invalid (ADR-0037). `docs/design/02-literature.md`
+  §4 and `skills/literature/SKILL.md` are corrected to match.
+- `sha256_file` / `blob_path` / `RetrievalError` and the rclone `Mirror`
+  promoted from `dataset/retrieval.py` to `core/fixity.py` / `core/mirror.py`
+  as shared substrate primitives; `dataset` behaviour is unchanged.
+- `resources/ensure-tooling.md`'s compatible package range bumped to
+  `>=0.3.0,<0.4.0` for the new verbs.
+
+### Fixed
+
+- `skills/literature/SKILL.md` §Tooling no longer claims a PRISMA-log or
+  concept-matrix generator that was never implemented; the CSL-JSON registry
+  loader/patcher and triage sidecar reader it also claimed are real as of
+  this release.
+
 ## [0.2.0] - 2026-07-28
 
 **The project is renamed from Honest Scholar to Defendable Science** (ADR-0035).

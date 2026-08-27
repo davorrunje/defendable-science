@@ -1,0 +1,52 @@
+{
+  "id": "https://openalex.org/W4403706439",
+  "display_name": "MonoKAN: Certified Monotonic Kolmogorov-Arnold Network",
+  "publication_year": 2024,
+  "authorships": [
+    {
+      "author": {
+        "display_name": "Alejandro Polo-Molina"
+      }
+    },
+    {
+      "author": {
+        "display_name": "David Alfaya"
+      }
+    },
+    {
+      "author": {
+        "display_name": "José Portela"
+      }
+    }
+  ],
+  "open_access": {
+    "oa_status": "green"
+  },
+  "best_oa_location": {
+    "landing_page_url": "http://arxiv.org/abs/2409.11078",
+    "pdf_url": "https://arxiv.org/pdf/2409.11078",
+    "license": "cc-by-nc-nd"
+  },
+  "locations": [
+    {
+      "landing_page_url": "http://arxiv.org/abs/2409.11078",
+      "pdf_url": "https://arxiv.org/pdf/2409.11078",
+      "license": "cc-by-nc-nd"
+    },
+    {
+      "landing_page_url": "https://doi.org/10.48550/arxiv.2409.11078",
+      "pdf_url": null,
+      "license": null
+    }
+  ],
+  "primary_location": {
+    "landing_page_url": "http://arxiv.org/abs/2409.11078",
+    "pdf_url": "https://arxiv.org/pdf/2409.11078",
+    "license": "cc-by-nc-nd"
+  },
+  "ids": {
+    "openalex": "https://openalex.org/W4403706439",
+    "doi": "https://doi.org/10.48550/arxiv.2409.11078"
+  },
+  "doi": "https://doi.org/10.48550/arxiv.2409.11078"
+}

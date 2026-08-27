@@ -351,7 +351,7 @@ class _GitProc(Protocol):
 
 
 #: A ``git`` subprocess runner with the ``subprocess.run`` shape (injectable
-#: for tests, mirroring :data:`defendable_science.dataset.retrieval.Runner`).
+#: for tests, mirroring :data:`defendable_science.core.mirror.Runner`).
 GitRunner = Callable[..., _GitProc]
 
 
