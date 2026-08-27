@@ -277,3 +277,115 @@ def test_decode_acquisition_missing_rung_is_none(tmp_path: Path) -> None:
     asset = reg.load_registry(path).get("sill1997monotonic").asset  # type: ignore[union-attr]
     assert asset is not None
     assert asset.acquisition is None
+
+
+def test_patch_asset_preserves_unknown_top_level_keys(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "r.json",
+        [
+            _item(
+                **{
+                    "note": "hand-written",
+                    "keyword": "monotone",
+                    "custom": {"zotero": {"k": 1}},
+                }
+            )
+        ],
+    )
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset(pid="openalex:W1"))
+    item = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert item["note"] == "hand-written"
+    assert item["keyword"] == "monotone"
+    assert item["custom"]["zotero"] == {"k": 1}
+    assert item["custom"][reg.NAMESPACE]["pid"] == "openalex:W1"
+
+
+def test_patch_asset_preserves_key_order(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.json", [_item()])
+    before = list(json.loads(path.read_text(encoding="utf-8"))[0])
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+    after = list(json.loads(path.read_text(encoding="utf-8"))[0])
+    assert after[: len(before)] == before
+    assert after[-1] == "custom"
+
+
+def test_patch_asset_leaves_other_entries_untouched(tmp_path: Path) -> None:
+    other = {"id": "other", "title": "Other", "note": "keep me"}
+    path = _write(tmp_path / "r.json", [_item(), other])
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+    assert json.loads(path.read_text(encoding="utf-8"))[1] == other
+
+
+def test_patch_asset_replaces_an_existing_spine(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / "r.json",
+        [_item(custom={reg.NAMESPACE: {"schema": 1, "pid": "old", "stale": True}})],
+    )
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset(pid="new"))
+    blob = json.loads(path.read_text(encoding="utf-8"))[0]["custom"][reg.NAMESPACE]
+    assert blob["pid"] == "new"
+    assert "stale" not in blob
+
+
+def test_patch_asset_falls_back_to_doi_lookup(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.json", [_item(id="weird-key", DOI="10.5555/x")])
+    reg.patch_asset(path, "10.5555/x", reg.Asset(pid="by-doi"))
+    item = json.loads(path.read_text(encoding="utf-8"))[0]
+    assert item["custom"][reg.NAMESPACE]["pid"] == "by-doi"
+
+
+def test_patch_asset_unknown_citekey_is_an_actionable_error(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.json", [_item()])
+    with pytest.raises(reg.RegistryError, match="no entry 'nope'"):
+        reg.patch_asset(path, "nope", reg.Asset())
+
+
+def test_patch_asset_is_atomic_and_leaves_no_temp_file(tmp_path: Path) -> None:
+    # NOTE: adjusted from the brief. The suite's autouse `_isolated_xdg_config_home`
+    # fixture (tests/conftest.py) also creates a `home/` dir under `tmp_path`, so
+    # asserting the full directory listing is brittle; assert on the specific
+    # temp artifact instead, matching the precedent in test_literature.py.
+    path = _write(tmp_path / "r.json", [_item()])
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+    assert not (tmp_path / "r.json.tmp").exists()
+    assert path.exists()
+
+
+def test_patch_asset_keeps_non_ascii_unescaped(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.json", [_item(author=[{"family": "Bélair"}])])
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+    assert "Bélair" in path.read_text(encoding="utf-8")
+
+
+def test_patch_asset_ends_with_a_newline(tmp_path: Path) -> None:
+    path = _write(tmp_path / "r.json", [_item()])
+    reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+    assert path.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_patch_asset_rejects_a_non_object_custom(tmp_path: Path) -> None:
+    # NOTE: match text adjusted from the brief to the implementation's actual
+    # wording ("has a 'custom' field that is not an object") — the brief's
+    # regex ("'custom' is not an object") does not occur as a substring of the
+    # brief's own implementation message.
+    path = _write(tmp_path / "r.json", [_item(custom="oops")])
+    with pytest.raises(reg.RegistryError, match="'custom' field that is not an object"):
+        reg.patch_asset(path, "sill1997monotonic", reg.Asset())
+
+
+# --- Not from the brief: added to close a coverage gap the brief's 10 tests
+# leave open (the DOI-fallback loop's non-dict guard in `_locate`). ---
+
+
+def test_patch_asset_doi_fallback_skips_a_non_dict_item(tmp_path: Path) -> None:
+    # A malformed/foreign CSL item (not an object) must not crash the DOI
+    # fallback scan — it is skipped, and the scan continues to the real match.
+    path = tmp_path / "r.json"
+    path.write_text(
+        json.dumps(["not-a-csl-item", _item(id="other-id", DOI="10.5555/y")]),
+        encoding="utf-8",
+    )
+    reg.patch_asset(path, "10.5555/y", reg.Asset(pid="ok"))
+    items = json.loads(path.read_text(encoding="utf-8"))
+    assert items[0] == "not-a-csl-item"
+    assert items[1]["custom"][reg.NAMESPACE]["pid"] == "ok"

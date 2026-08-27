@@ -375,3 +375,55 @@ def asset_to_json(asset: Asset) -> dict[str, Any]:
             "fetched": asset.acquisition.fetched,
         }
     return blob
+
+
+def _locate(items: list[Any], citekey: str) -> int:
+    """Return the index of the entry matching `citekey` by ``id`` then ``DOI``.
+
+    :raises RegistryError: If no entry matches.
+    """
+    for index, item in enumerate(items):
+        if isinstance(item, dict) and _opt_str(item.get("id")) == citekey:
+            return index
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        doi = _opt_str(item.get("DOI")) or _opt_str(item.get("doi"))
+        if doi is not None and doi.lower() == citekey.lower():
+            return index
+    raise RegistryError(f"no entry {citekey!r} in the registry")
+
+
+def patch_asset(path: str | Path, citekey: str, asset: Asset) -> None:
+    """Replace one entry's spine, leaving every other byte of the file alone.
+
+    Surgical by design: reads the raw JSON, mutates only
+    ``entry["custom"]["defendable-science"]``, and rewrites atomically. Unknown
+    top-level keys, unknown ``custom`` sub-keys (a Zotero namespace, say), and key
+    order all survive. The registry is a human-editable file; a writer that
+    round-trips it through a model would silently drop what the model does not
+    know about.
+
+    :param path: The registry path.
+    :param citekey: The entry to patch, matched on ``id`` then ``DOI``.
+    :param asset: The spine to store.
+    :raises RegistryError: If the file is unusable, no entry matches `citekey`, or
+        the entry's existing ``custom`` field is not an object.
+    """
+    target = Path(path)
+    items = _read_items(target)
+    index = _locate(items, citekey)
+    item = items[index]
+    custom = item.get("custom", {})
+    if not isinstance(custom, dict):
+        raise RegistryError(
+            f"{target}: entry {citekey!r} has a 'custom' field that is not an "
+            "object — fix it by hand rather than have it overwritten"
+        )
+    custom[NAMESPACE] = asset_to_json(asset)
+    item["custom"] = custom
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(
+        json.dumps(items, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    tmp.replace(target)
