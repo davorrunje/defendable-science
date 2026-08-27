@@ -63,6 +63,19 @@ _REGISTRY_PREAMBLE = """\
 """
 
 
+#: The heading and prose an empty hypothesis backlog carries. Public because
+#: ``scaffold.render`` renders the same file for ``init`` and this is the one
+#: definition of it: ``render`` imports ``backlog``, so the constant has to live
+#: here for both writers to share it rather than drift into two variants.
+HYPOTHESIS_PREAMBLE = """\
+# Hypothesis backlog
+
+<!-- Hypotheses for this paper: parked → candidate → ranked →
+     promoted | dropped. -->
+
+"""
+
+
 def registry_dumps(preamble: str = _REGISTRY_PREAMBLE) -> str:
     """Render an empty-but-valid ``papers.md``.
 
@@ -727,7 +740,8 @@ def scaffold_paper(
     docs_dir = layout.paper_docs_dir(paper_id)
     docs_dir.mkdir(parents=True)
     layout.backlog(paper_id).write_text(
-        Backlog(level="hypothesis").dumps(), encoding="utf-8"
+        Backlog(level="hypothesis", preamble=HYPOTHESIS_PREAMBLE).dumps(),
+        encoding="utf-8",
     )
     (docs_dir / "pitch.md").write_text(
         _PAPER_TEMPLATE.format(

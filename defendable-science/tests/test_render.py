@@ -13,6 +13,10 @@ from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.exploration import backlog as b
 from defendable_science.literature import registry as reg
 from defendable_science.scaffold import render as r
+from defendable_science.scaffold.layout import Layout
+
+#: The repo checkout, which carries the plugin-side templates the wheel cannot.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_default_cache_dir_is_the_cli_cache_root() -> None:
@@ -40,6 +44,18 @@ def test_rendered_backlogs_carry_the_canonical_column_profiles() -> None:
     assert paper.columns == b.HYPOTHESIS_COLUMNS
     assert portfolio.rows == []
     assert paper.rows == []
+
+
+def test_a_scaffolded_papers_backlog_is_the_rendered_one(tmp_path: Path) -> None:
+    """One artifact, one shape: `init` and a promotion write the same file."""
+    layout = Layout.default(tmp_path)
+    layout.research_root.mkdir(parents=True)
+
+    root = b.scaffold_paper(layout, "depth-collapse", "a follow-up paper")
+
+    scaffolded = (root / "backlog.md").read_text(encoding="utf-8")
+
+    assert scaffolded == r.render_paper_backlog()
 
 
 def test_rendered_portfolio_backlog_accepts_a_park(tmp_path: Path) -> None:
@@ -108,13 +124,34 @@ def test_rendered_config_loads_and_holds_nulls_not_placeholders(tmp_path: Path) 
     _no_placeholder(config)
 
 
-def test_rendered_milestones_is_a_mapping_of_gates_to_null() -> None:
-    """A gate is `null` until the author dates it — never a placeholder string."""
-    gates = yaml.safe_load(r.render_milestones())
+def test_rendered_milestones_carries_every_gate_unstarted_and_undated() -> None:
+    """A gate is undated until the author dates it — never a placeholder string."""
+    gates = yaml.safe_load(r.render_milestones())["milestones"]
 
-    assert isinstance(gates, dict)
-    assert list(gates) == list(r.PROGRAM_GATES)
-    assert all(date is None for date in gates.values())
+    assert [gate["name"] for gate in gates] == list(r.PROGRAM_GATES)
+    for gate in gates:
+        assert set(gate) == {"name", "status", "date", "next-deadline"}
+        assert gate["status"] == "not-started"
+        assert gate["date"] is None
+        assert gate["next-deadline"] is None
+
+
+def test_rendered_milestones_matches_the_shipped_template() -> None:
+    """One artifact, one shape — whichever side scaffolded it (#120).
+
+    Prose deliberately differs (the shipped template is the fuller authoring
+    skeleton); the parsed structure must not, and nothing at runtime can enforce
+    that because the wheel ships only ``defendable_science`` (ADR-0026).
+    """
+    shipped = _REPO_ROOT / "resources" / "templates" / "thesis" / "milestones.yml"
+    assert shipped.is_file(), (
+        f"{shipped} is missing; the drift guard cannot run. These tests are meant "
+        "to run from a repo checkout, which has both artifacts."
+    )
+
+    assert yaml.safe_load(r.render_milestones()) == yaml.safe_load(
+        shipped.read_text(encoding="utf-8")
+    )
 
 
 def test_rendered_dashboard_says_it_has_no_generator_yet() -> None:

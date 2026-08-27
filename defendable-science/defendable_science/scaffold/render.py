@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from defendable_science.exploration.backlog import Backlog, registry_dumps
+from defendable_science.exploration.backlog import (
+    HYPOTHESIS_PREAMBLE,
+    Backlog,
+    registry_dumps,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -34,6 +38,14 @@ PROGRAM_GATES: tuple[str, ...] = (
     "submission",
     "defense",
 )
+
+#: One gate of ``milestones.yml``, in the shipped template's shape.
+_MILESTONE_ENTRY = """\
+  - name: {gate}
+    status: not-started
+    date: null
+    next-deadline: null
+"""
 
 _GITIGNORE_MARKER = "# defendable-science"
 
@@ -57,15 +69,12 @@ def render_portfolio_backlog() -> str:
 
 
 def render_paper_backlog() -> str:
-    """Render an empty-but-valid hypothesis-level backlog for one paper."""
-    return Backlog(
-        level="hypothesis",
-        preamble=(
-            "# Hypothesis backlog\n\n"
-            "<!-- Hypotheses for this paper: parked → candidate → ranked →\n"
-            "     promoted | dropped. -->\n\n"
-        ),
-    ).dumps()
+    """Render an empty-but-valid hypothesis-level backlog for one paper.
+
+    The prose is ``backlog.HYPOTHESIS_PREAMBLE``, which ``scaffold_paper`` writes
+    too: one artifact, one shape, whether it lands from ``init`` or a promotion.
+    """
+    return Backlog(level="hypothesis", preamble=HYPOTHESIS_PREAMBLE).dumps()
 
 
 def render_references() -> str:
@@ -168,22 +177,31 @@ def render_dashboard() -> str:
 
 
 def render_milestones() -> str:
-    """Render ``thesis/milestones.yml`` — the program gates, each undated.
+    """Render ``thesis/milestones.yml`` — the program gates, none of them started.
 
-    A gate maps to ``null`` until the author dates it: absence means "not yet
-    set", so an undated gate cannot be read as a passed one. Gates are surfaced,
-    never scored — an overdue gate is a gap, not a penalty (meta-spec §3.6).
+    The structure is the shipped ``resources/templates/thesis/milestones.yml``
+    schema, guarded against it by ``tests/test_render.py``: one artifact must not
+    have two shapes depending on which side scaffolded it. ``date`` and
+    ``next-deadline`` are ``null`` until the author sets them — absence means
+    "not yet set", so an undated gate can never read as a passed one. Gates are
+    surfaced, never scored: an overdue gate is a gap, not a penalty.
 
     :returns: The milestones file text.
     """
-    gates = "".join(f"{gate}: null\n" for gate in PROGRAM_GATES)
+    entries = "\n".join(_MILESTONE_ENTRY.format(gate=gate) for gate in PROGRAM_GATES)
     return (
-        "# Thesis program gates — configurable and time-based. Institution gates\n"
-        "# vary, so edit this list to match yours. A gate's value is `null` until\n"
-        "# you date it (the scheduled or passed date). These are calendar gates,\n"
-        "# distinct from the defensibility state in the thesis status block;\n"
-        "# `progress` reports both and scores neither.\n"
-        "\n" + gates
+        "# Thesis program milestones — CONFIGURABLE, time-based. Institution gates\n"
+        "# vary and are deadline-driven, so edit this list to match your\n"
+        "# institution's progression. These are CALENDAR gates, distinct from the\n"
+        "# defensibility/coverage state in the thesis status block; `progress`\n"
+        "# surfaces both and scores neither.\n"
+        "#\n"
+        "# Per milestone:\n"
+        "#   status:        not-started | scheduled | passed\n"
+        "#   date:          the scheduled or passed date (null if not-started)\n"
+        "#   next-deadline: the next binding deadline (null if none / passed)\n"
+        "\n"
+        "milestones:\n" + entries
     )
 
 
