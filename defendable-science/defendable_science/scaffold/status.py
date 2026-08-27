@@ -94,7 +94,7 @@ TEMPLATE_FORMS: dict[str, dict[str, str]] = {
 
 
 class StatusError(ValueError):
-    """Raised on an unknown level or field, or unparseable frontmatter."""
+    """Raised on an unknown level or field, or unparsable frontmatter."""
 
 
 def render(level: str, fields: Mapping[str, str] | None = None) -> str:

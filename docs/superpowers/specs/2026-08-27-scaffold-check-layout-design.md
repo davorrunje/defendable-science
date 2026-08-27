@@ -230,7 +230,7 @@ whose `root` is missing or whose `backend` is empty; a missing `status:` block o
 a known staged document; an out-of-enum `verdict` or `readiness` for the level; an
 unreplaced `<...>` in any machine-read field; invalid CSL-JSON; a `triage.yml` key
 with no matching reference id; a `datasets.yml` failing manifest validation; an
-unparseable `config.yml`; an unknown `layout:` key; a `cache_dir` that is not
+unparsable `config.yml`; an unknown `layout:` key; a `cache_dir` that is not
 gitignored; a missing *required* layout path. The required set is the registries
 plus `config.yml` — a repo with no papers yet is complete, not broken, so a paper
 directory is required only for a `paper-id` that `papers.md` registers.

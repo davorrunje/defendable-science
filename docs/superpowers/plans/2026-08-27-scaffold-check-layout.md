@@ -940,7 +940,7 @@ TEMPLATE_FORMS: dict[str, dict[str, str]] = {
 
 
 class StatusError(ValueError):
-    """Raised on an unknown level or field, or unparseable frontmatter."""
+    """Raised on an unknown level or field, or unparsable frontmatter."""
 
 
 def render(level: str, fields: Mapping[str, str] | None = None) -> str:
@@ -3014,7 +3014,7 @@ def test_registries_check_reports_every_manifest_error() -> None:
     assert all(f.file == "datasets.yml" for f in findings if "entry" in f.message)
 
 
-def test_registries_check_flags_an_unparseable_manifest() -> None:
+def test_registries_check_flags_an_unparsable_manifest() -> None:
     files = _scaffolded()
     files[LAYOUT.datasets_manifest] = "- not: a mapping\n"
 
@@ -3106,7 +3106,7 @@ def test_config_check_is_silent_on_a_scaffolded_repo_with_a_bound_backend() -> N
     assert c.check_config(LAYOUT, FakeProbe(_scaffolded_with_backend("bench"))) == []
 
 
-def test_config_check_flags_unparseable_yaml_without_a_traceback() -> None:
+def test_config_check_flags_unparsable_yaml_without_a_traceback() -> None:
     files = _scaffolded()
     files[LAYOUT.config_file] = "cache_dir: [unclosed\n"
 
