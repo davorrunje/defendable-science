@@ -78,20 +78,28 @@ Rungs 1–3 are identity-derived from the OpenAlex work the citekey already
 resolves to (`best_oa_location`, every `locations[].pdf_url`, then every
 `locations[].landing_page_url` that serves PDF bytes — checked by magic bytes,
 because `Content-Type` lies). No gate needed; the URL already belongs to the
-anchor's own record.
+anchor's own record. A `.pdf` suffix orders the landing rung but does not gate
+it: suffix-less landing pages follow, capped at `LANDING_SNIFF_LIMIT`, because a
+publisher serving a PDF from an extension-less path is a real shape and dropping
+it unseen cost recall (#104).
 
-Rungs 4–6 are search-derived and every candidate passes the gate: a
+Rungs 4–5 are search-derived and every candidate passes the gate: a
 sibling-version title search (word-prefix or equal, same relation the gate
-itself uses — a rung's pre-filter must never be stricter than the gate),
-an arXiv title+author query, and a config-driven `venue_resolvers` list that
-ships **empty** — the generic rungs already recover the concrete cases that
-motivated the feature, so no ML-venue logic enters the plugin. Rung 7 is
-manual: report the landing URLs, adopt by hand via `confirm --file`.
+itself uses — a rung's pre-filter must never be stricter than the gate) and an
+arXiv title+author query. Rung 6 is the config-driven `venue_resolvers` list,
+which ships **empty** — the generic rungs already recover the concrete cases
+that motivated the feature, so no ML-venue logic enters the plugin. It is
+*trusted*, not gated: its candidate URL comes from a consumer's template and
+there is nothing in OpenAlex to match it against, so the record says `trusted`
+rather than claiming an `accept` it did not earn (ADR-0038). Rung 7 is manual:
+report the landing URLs, adopt by hand via `confirm --file`.
 
 ### The match gate
 
 Three axes — title (normalized), first-author family name, year — combine
-into `accept` / `quarantine` / `refuse`. First-author family name is a hard
+into `accept` / `quarantine` / `refuse`. Two verdicts sit outside the gate
+because no comparison was made: `identity` (rungs 1–3, the URL is the anchor's
+own) and `trusted` (rung 6, the operator vouched — ADR-0038). First-author family name is a hard
 gate: no candidate is ever accepted or quarantined across a mismatch. Title
 agreement is normalized-equality or **word-prefix containment** (not
 substring — substring isn't word-aware). Quarantine lands bytes plus the

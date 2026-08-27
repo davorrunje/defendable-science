@@ -288,9 +288,14 @@ def test_identity_rungs_are_not_gated() -> None:
 
 
 def test_search_rungs_are_gated() -> None:
-    assert (
-        frozenset({a.RUNG_SIBLING, a.RUNG_ARXIV_SEARCH, a.RUNG_VENUE}) == a.GATED_RUNGS
-    )
+    assert frozenset({a.RUNG_SIBLING, a.RUNG_ARXIV_SEARCH}) == a.GATED_RUNGS
+
+
+def test_the_venue_rung_is_trusted_not_gated() -> None:
+    # Its candidate is built from the anchor work, so evaluate_match would be
+    # comparing the entry against itself: an "accept" there is a verification
+    # that never happened (ADR-0038).
+    assert a.RUNG_VENUE not in a.GATED_RUNGS
 
 
 def test_match_record_as_json_is_serializable() -> None:
@@ -433,8 +438,11 @@ def test_identity_candidates_carry_the_works_own_metadata() -> None:
     assert cand.openalex == "W2293093810"
 
 
-def test_no_candidates_when_nothing_is_available() -> None:
-    assert a.identity_candidates(_work("monokan_journal")) == []
+def test_a_closed_work_still_offers_its_landing_pages_to_the_sniff_tail() -> None:
+    # No pdf_url anywhere, so rungs 1-2 are empty; the landing pages are offered
+    # because a suffix is a hint, not a requirement. looks_like_pdf disposes.
+    candidates = a.identity_candidates(_work("monokan_journal"))
+    assert {c.rung for c in candidates} == {a.RUNG_OA_LANDING}
 
 
 def test_candidates_are_deduplicated_by_url() -> None:
@@ -452,7 +460,7 @@ def test_candidates_are_deduplicated_by_url() -> None:
     assert [c.url for c in a.identity_candidates(work)] == ["http://x/p.pdf"]
 
 
-def test_landing_urls_only_returns_pdf_shaped_links() -> None:
+def test_landing_urls_puts_pdf_shaped_links_first() -> None:
     work = {
         "locations": [
             {"landing_page_url": "http://x/abs/1"},
@@ -462,7 +470,22 @@ def test_landing_urls_only_returns_pdf_shaped_links() -> None:
             "junk",
         ]
     }
-    assert a.landing_urls(work) == ["http://x/paper.pdf"]
+    assert a.landing_urls(work) == ["http://x/paper.pdf", "http://x/abs/1"]
+
+
+def test_the_sniff_tail_is_bounded_but_pdf_shaped_links_are_not() -> None:
+    # A work with a long locations[] array must not become one round-trip per
+    # entry; the cap applies only to the suffix-less tail.
+    extra = a.LANDING_SNIFF_LIMIT + 2
+    work = {
+        "locations": [
+            *({"landing_page_url": f"http://x/p{i}.pdf"} for i in range(extra)),
+            *({"landing_page_url": f"http://x/abs/{i}"} for i in range(extra)),
+        ]
+    }
+    urls = a.landing_urls(work)
+    assert urls[:extra] == [f"http://x/p{i}.pdf" for i in range(extra)]
+    assert urls[extra:] == [f"http://x/abs/{i}" for i in range(a.LANDING_SNIFF_LIMIT)]
 
 
 def test_family_name_is_the_last_token_of_a_display_name() -> None:
@@ -839,6 +862,15 @@ OTHER_PDF = b"%PDF-1.4 a different body"
 OTHER_SHA = hashlib.sha256(OTHER_PDF).hexdigest()
 
 
+HTML = b"<html>an abstract page, not a PDF</html>"
+
+#: Fixture URLs that stand for an HTML abstract page. The landing rung sniffs
+#: suffix-less URLs up to ``LANDING_SNIFF_LIMIT`` rather than dropping them on
+#: their suffix, so a decoy must actually serve non-PDF bytes to be rejected —
+#: which is precisely what ``looks_like_pdf`` is there to decide.
+DECOY_BODIES: dict[str, bytes | Exception] = {"http://x/abstract": HTML}
+
+
 class FakeFetcher:
     """A ``BytesFetcher`` that serves canned bodies (or raises) per URL."""
 
@@ -847,7 +879,7 @@ class FakeFetcher:
         bodies: dict[str, bytes | Exception] | None = None,
         default: bytes | Exception | None = PDF,
     ) -> None:
-        self.bodies = bodies or {}
+        self.bodies = {**DECOY_BODIES, **(bodies or {})}
         self.default = default
         self.calls: list[str] = []
 
@@ -1316,12 +1348,15 @@ def test_all_rungs_exhausted_is_manual_with_landing_urls(tmp_path: Path) -> None
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.landing_urls == ["http://x/abstract"]
-    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_SIBLING]
+    # The landing page is fetched and sniffed now, not dropped on its suffix, so
+    # it is a rung the ladder really did try.
+    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LANDING, a.RUNG_SIBLING]
 
 
 def test_a_ladder_with_no_candidates_at_all_is_manual(tmp_path: Path) -> None:
     _path, entry = _registry(tmp_path)
-    anchor = _oa(pdf=None, landing="http://x/abstract")
+    # No landing page either: this ladder really has nothing to offer.
+    anchor = _oa(pdf=None, landing=None)
     client = FakeClient(
         {
             "/works/": anchor,
@@ -1333,7 +1368,7 @@ def test_a_ladder_with_no_candidates_at_all_is_manual(tmp_path: Path) -> None:
     assert outcome.bucket == a.BUCKET_MANUAL
     assert outcome.tried == []
     assert outcome.match is None
-    assert outcome.landing_urls == ["http://x/abstract"]
+    assert outcome.landing_urls == []
 
 
 # --- the gate, in the ladder ------------------------------------------------
@@ -1364,7 +1399,8 @@ def test_gated_refusal_is_manual_with_the_axes_recorded(tmp_path: Path) -> None:
     """The Sill-1997-vs-Igel-2023 shape, walked through the whole ladder."""
     path, entry = _registry(tmp_path)
     before = path.read_bytes()
-    anchor = _oa(pdf=None, landing="http://x/abstract")
+    # No landing page, so the ladder reaches the gated rung untouched.
+    anchor = _oa(pdf=None, landing=None)
     sibling = _oa(wid="W2", family="Igel", pdf="http://x/sib.pdf")
     client = FakeClient(
         {
@@ -1383,10 +1419,12 @@ def test_gated_refusal_is_manual_with_the_axes_recorded(tmp_path: Path) -> None:
     assert path.read_bytes() == before
 
 
-def test_a_venue_resolver_candidate_still_passes_the_gate(tmp_path: Path) -> None:
-    """Rung 6 is gated like any other search rung; a match binds the bytes."""
+def test_a_venue_resolver_candidate_is_trusted_not_gate_verified(
+    tmp_path: Path,
+) -> None:
+    """Rung 6 binds the bytes, but says it was trusted, not verified (ADR-0038)."""
     _path, entry = _registry(tmp_path)
-    anchor = _oa(pdf=None, landing="http://x/abstract")
+    anchor = _oa(pdf=None, landing=None)
     client = FakeClient(
         {
             "/works/": anchor,
@@ -1406,7 +1444,12 @@ def test_a_venue_resolver_candidate_still_passes_the_gate(tmp_path: Path) -> Non
     assert outcome.bucket == a.BUCKET_FETCHED
     assert outcome.rung == a.RUNG_VENUE
     assert outcome.match is not None
-    assert outcome.match["verdict"] == a.ACCEPT
+    assert outcome.match["verdict"] == a.TRUSTED
+    # No axis is claimed, because none was compared.
+    assert outcome.match["title"] is None
+    assert outcome.match["author"] is None
+    assert outcome.match["year"] is None
+    assert "not verified" in outcome.match["reason"]
 
 
 # --- refetch and drift ------------------------------------------------------
@@ -1585,7 +1628,8 @@ def test_dry_run_reports_a_permissive_license_as_committable(tmp_path: Path) -> 
 
 def test_dry_run_reports_a_quarantine_as_a_quarantine(tmp_path: Path) -> None:
     _path, entry = _registry(tmp_path)
-    anchor = _oa(pdf=None, landing="http://x/abstract")
+    # No landing page, so the sibling is the first candidate a dry run reports.
+    anchor = _oa(pdf=None, landing=None)
     sibling = _oa(wid="W2", year=2002, pdf="http://x/sib.pdf")
     client = FakeClient({"/works/": anchor, "/works": {"results": [sibling]}})
     outcome = a.acquire_one(entry, _ctx(tmp_path, client, NeverFetcher()), dry_run=True)
@@ -1748,7 +1792,7 @@ def test_a_rung_is_listed_once_however_many_candidates_it_offered(
         _ctx(tmp_path, client, FakeFetcher(default=DownloadError("gone", status=404))),
     )
     assert outcome.bucket == a.BUCKET_MANUAL
-    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LOCATIONS]
+    assert outcome.tried == [a.RUNG_OA_BEST, a.RUNG_OA_LOCATIONS, a.RUNG_OA_LANDING]
 
 
 def test_a_corrupt_cache_blob_with_no_mirror_says_so_and_discards_it(
@@ -2819,3 +2863,71 @@ def test_bytes_that_land_after_a_block_are_a_plain_success(tmp_path: Path) -> No
     assert outcome.bucket == a.BUCKET_FETCHED
     assert outcome.url == "http://x/good.pdf"
     assert outcome.failures == []
+
+
+# --- the landing sniff tail, end to end (#104) --------------------------------
+
+
+def test_a_suffixless_landing_page_that_serves_a_pdf_is_recovered(
+    tmp_path: Path,
+) -> None:
+    """The rung's point: a publisher can serve a PDF from an extension-less path."""
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/content/1358")
+    client = FakeClient({"/works/": anchor})
+    fetcher = FakeFetcher({"http://x/content/1358": PDF}, default=None)
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_OA_LANDING
+    assert outcome.url == "http://x/content/1358"
+    assert outcome.sha256 == PDF_SHA
+    # Identity-derived: no gate ran, and none was claimed to have run.
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.IDENTITY
+
+
+def test_a_suffixless_landing_page_serving_html_is_rejected(tmp_path: Path) -> None:
+    """Sniffing costs a round-trip; %PDF- is what keeps an abstract page out."""
+    _path, entry = _registry(tmp_path)
+    anchor = _oa(pdf=None, landing="http://x/content/1358")
+    client = FakeClient(
+        {"/works/": anchor, "/works": {"results": []}, "export.arxiv.org": "<feed/>"}
+    )
+    fetcher = FakeFetcher({"http://x/content/1358": HTML}, default=None)
+    outcome = a.acquire_one(entry, _ctx(tmp_path, client, fetcher))
+    assert outcome.bucket == a.BUCKET_MANUAL
+    assert fetcher.calls == ["http://x/content/1358"]  # tried once, then moved on
+    assert outcome.landing_urls == ["http://x/content/1358"]
+
+
+# --- rung 6 is trusted, not gated (#105) --------------------------------------
+
+
+def test_a_venue_resolver_is_admitted_for_a_thin_entry(tmp_path: Path) -> None:
+    """The gate refused thin *entries*; that never said anything about the URL.
+
+    ``evaluate_match`` refuses when the entry lacks title/year/author, which used
+    to block rung 6 as a side effect. The refusal was about the registry entry's
+    own metadata, not about the consumer's template, so it is gone with the gate.
+    """
+    _path, entry = _registry(tmp_path, title=None, year=None, family=None)
+    anchor = _oa(pdf=None, landing=None)
+    client = FakeClient({"/works/": anchor, "/works": {"results": []}})
+    ctx = _ctx(
+        tmp_path,
+        client,
+        FakeFetcher(),
+        resolvers=[{"match": "Neural", "url_template": "http://v/{openalex}.pdf"}],
+    )
+    outcome = a.acquire_one(entry, ctx)
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.rung == a.RUNG_VENUE
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.TRUSTED
+
+
+def test_the_trusted_verdict_is_not_an_accept() -> None:
+    # A reader of the audit trail must be able to tell "we checked and it
+    # matched" from "we took the operator's word for it".
+    assert a.TRUSTED != a.ACCEPT
+    assert a.TRUSTED != a.IDENTITY

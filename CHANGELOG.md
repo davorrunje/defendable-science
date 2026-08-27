@@ -83,6 +83,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rung 6 (`venue_resolvers`) no longer reports a verification it never
+  performed.** `RUNG_VENUE` was in `GATED_RUNGS`, so every consumer-configured
+  venue candidate ran through `evaluate_match` — but `venue_candidates` builds
+  its candidate from the *anchor work*, the same OpenAlex record the citekey
+  already resolved to. The gate was therefore comparing the registry entry
+  against itself and could not do anything but pass, landing
+  `{"verdict": "accept", "title": "exact", "author": "exact", "year": "exact"}`
+  in the audit trail for a URL nothing had checked. Rung 6 is now recorded with a
+  new `trusted` verdict and a reason naming the situation, with all three axes
+  `null` because none was compared; `%PDF-` remains the only real constraint, and
+  now the report says so. **Behaviour change:** rung 6 no longer inherits
+  `evaluate_match`'s thin-metadata refusal — that refusal was about the entry's
+  own metadata, not the consumer's template, so a resolver now applies even to an
+  entry missing title/year/author. See ADR-0038 for why fetch-and-parse
+  verification was rejected as disproportionate. (#105)
+- **Suffix-less PDF-serving landing pages are recovered instead of dropped
+  unseen.** The landing rung kept only `landing_page_url`s whose string ended in
+  `.pdf`, so a publisher serving a PDF from an extension-less path (arXiv's
+  `/pdf/2409.11078` is the observed shape) was filtered out before
+  `looks_like_pdf`'s magic-byte check could accept it, and the paper went to
+  `manual[]` for a human to click. `.pdf`-shaped URLs still come first and stay
+  unbounded; up to `LANDING_SNIFF_LIMIT` (3) suffix-less ones now follow and are
+  judged on their bytes. The cap is what keeps a work with a long `locations[]`
+  array from turning into one round-trip per entry. (#104)
 - **`backlog` no longer rewrites the documents it edits.** `Backlog.loads()` was
   prose-tolerant but `dumps()`/`save()` emitted only the table, so the
   `load → mutate → save` round trip behind every `backlog park|add|rank|promote|

@@ -67,6 +67,14 @@ literature:
 Every key is optional. A missing `literature:` block means "all of the above
 defaults".
 
+`venue_resolvers` ships empty and is the one setting that buys you less safety
+than the rest. A `{match, url_template}` pair you add there is applied as-is:
+the tool has no way to check what your template resolves to, so the acquisition
+report marks those candidates `verdict: "trusted"` — you vouched for it — rather
+than `"accept"`, which is reserved for candidates a gate actually compared
+against your registry entry. The `%PDF-` byte check is the only thing standing
+behind a template. See ADR-0038.
+
 **`references.json` is CSL-JSON, and it is the source of truth.** JSON, because
 the skills append rows, join by key, and build comparison matrices
 programmatically, and a `.bib` file is a miserable thing to do that to. **BibTeX
