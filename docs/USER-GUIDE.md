@@ -198,10 +198,13 @@ claim is false is successful science.
   It keeps the `references.json` + `triage.yml` registry; it **proposes and
   surfaces, never adjudicates novelty**.
 
-  ```
-  literature scout --level hypothesis      # feeds hypothesis-exploration
-  literature position --level hypothesis   # feeds strategy.md
-  ```
+  > **Ask the assistant.** Scout the citation graph for research leads at
+  > hypothesis level (`literature` in `scout` mode) — feeds
+  > `hypothesis-exploration`. Or, once a claim is committed, position it
+  > against prior work at hypothesis level (`position` mode) — feeds
+  > `strategy.md`. There is no `defendable-science literature scout` or
+  > `literature position` command; these are skill modes you ask the
+  > assistant for (see [`docs/guides/literature.md`](guides/literature.md)).
 
 - [`dataset`](../skills/dataset/SKILL.md) manages the data your strategy declares:
   verbs `init / register / fetch / verify / mirror / audit` over `datasets.yml`.
@@ -209,9 +212,12 @@ claim is false is successful science.
   gated), a **SHA-256 fingerprint** (authoritative; a mismatch is a hard fail),
   and a Gebru **datasheet**. You confirm tier and license — the skill proposes.
 
-  ```
-  dataset register imagenet-c            # add an entry; confirm tier + license
-  dataset fetch imagenet-c               # materialize + verify against the registry
+  > **Ask the assistant.** Register `imagenet-c` in the dataset manifest —
+  > propose a tier and license for me to confirm. `register` is a `dataset`
+  > skill mode, not a CLI verb.
+
+  ```bash
+  defendable-science dataset fetch imagenet-c    # materialize + verify against the registry
   ```
 
 ### 4d. How runs become evidence — the experiment-backend contract
