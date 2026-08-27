@@ -1871,6 +1871,46 @@ def test_entries_without_a_triage_row_are_included_when_not_filtering(
     assert [row["citekey"] for row in report["fetched"]] == ["solo"]
 
 
+def test_an_explicit_citekey_with_no_triage_row_is_an_error_under_a_filter(
+    tmp_path: Path,
+) -> None:
+    """A citekey named by hand must never just vanish.
+
+    Silently dropping it would be indistinguishable from "it was processed
+    and landed nowhere" — the same ambiguity spec §9 forbids for a throttle.
+    Unlike the implicit whole-registry sweep, where a non-matching entry is
+    correctly just excluded, the caller asked for this one by name.
+    """
+    _write_bib(tmp_path, [_bib("solo", "10.1000/solo")])
+    report = a.fetch_all(
+        _ctx(tmp_path, FakeClient({}), NeverFetcher()),
+        citekeys=["solo"],
+        disposition="screened",
+    )
+    assert report["complete"] is True
+    assert len(report["errors"]) == 1
+    assert report["errors"][0]["citekey"] == "solo"
+    assert "disposition" in report["errors"][0]["error"]
+    for bucket in ("fetched", "cached", "quarantined", "manual"):
+        assert report[bucket] == []
+
+
+def test_an_explicit_citekey_with_a_non_matching_row_is_an_error_under_a_filter(
+    tmp_path: Path,
+) -> None:
+    _write_bib(tmp_path, [_bib("solo", "10.1000/solo")])
+    _write_triage(tmp_path, {"solo": "inbox"})
+    report = a.fetch_all(
+        _ctx(tmp_path, FakeClient({}), NeverFetcher()),
+        citekeys=["solo"],
+        disposition="screened",
+    )
+    assert report["complete"] is True
+    assert len(report["errors"]) == 1
+    assert report["errors"][0]["citekey"] == "solo"
+    assert "disposition" in report["errors"][0]["error"]
+
+
 def test_explicit_citekeys_override_the_registry_order(tmp_path: Path) -> None:
     _write_bib(
         tmp_path,

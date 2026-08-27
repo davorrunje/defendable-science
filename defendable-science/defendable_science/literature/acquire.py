@@ -1624,31 +1624,48 @@ def _select(
     triage: dict[str, TriageRow],
     citekeys: list[str] | None,
     disposition: str | None,
-) -> list[tuple[str, Entry | None]]:
+) -> list[tuple[str, Entry | None, str | None]]:
     """Choose which citekeys to sweep, and in what order.
+
+    ``disposition`` behaves differently depending on where the citekey list
+    came from. For an **implicit** whole-registry sweep (``citekeys`` is
+    ``None``), a citekey whose triage row does not match is silently
+    excluded — that is the filter's entire purpose there. For an
+    **explicitly**-named citekey, the same mismatch instead becomes an error
+    row: the caller asked for that citekey by name, so silently dropping it
+    would be indistinguishable from "it was processed and landed nowhere",
+    which is exactly the ambiguity this module exists to refuse (spec §9).
 
     :param registry: The loaded registry.
     :param triage: The loaded triage sidecar, by citekey.
     :param citekeys: Explicit entries to attempt, in this order; the whole
         registry, in file order, when ``None``.
     :param disposition: Restrict to citekeys whose triage row carries this
-        disposition. A citekey with no triage row is excluded when this is
-        given and included when it is not.
-    :returns: ``(citekey, entry)`` pairs, in sweep order; ``entry`` is ``None``
-        for a citekey with no matching registry entry.
+        disposition.
+    :returns: ``(citekey, entry, error)`` triples, in sweep order. ``error``
+        is set when the row is an outright failure rather than something to
+        attempt — an unknown citekey, or an explicitly-named citekey
+        excluded by ``disposition`` — in which case ``entry`` carries no
+        meaning and may be ``None``.
     """
-    keys = (
-        citekeys
-        if citekeys is not None
-        else [entry.citekey for entry in registry.entries]
-    )
-    selected: list[tuple[str, Entry | None]] = []
+    explicit = citekeys is not None
+    keys = citekeys if citekeys is not None else [e.citekey for e in registry.entries]
+    selected: list[tuple[str, Entry | None, str | None]] = []
     for key in keys:
         if disposition is not None:
             row = triage.get(key)
             if row is None or row.disposition != disposition:
+                if explicit:
+                    selected.append(
+                        (
+                            key,
+                            None,
+                            f"excluded by disposition={disposition!r} "
+                            "(no matching triage row)",
+                        )
+                    )
                 continue
-        selected.append((key, registry.get(key)))
+        selected.append((key, registry.get(key), None))
     return selected
 
 
@@ -1673,8 +1690,12 @@ def fetch_all(
         registry when ``None``. An entry named here that is not in the
         registry becomes an ``errors[]`` row rather than a crash.
     :param disposition: Restrict to entries whose ``triage.yml`` row carries
-        this disposition. An entry with no triage row is excluded when this is
-        given and included when it is not.
+        this disposition. For the implicit whole-registry sweep, an entry
+        with no matching row is excluded when this is given and included
+        when it is not. An **explicitly**-named citekey excluded this way
+        becomes an ``errors[]`` row instead of a silent drop — the caller
+        asked for it by name, so a reader must be able to tell "processed"
+        from "vanished".
     :param refetch: Re-run the ladder for entries that already have a
         checksum.
     :param dry_run: Report the rung that would yield bytes without
@@ -1700,10 +1721,13 @@ def fetch_all(
         "committable": [],
         "errors": [],
     }
-    for index, (citekey, entry) in enumerate(targets):
-        if entry is None:
+    for index, (citekey, entry, error) in enumerate(targets):
+        if error is not None or entry is None:
             report["errors"].append(
-                {"citekey": citekey, "error": f"no entry {citekey!r} in the registry"}
+                {
+                    "citekey": citekey,
+                    "error": error or f"no entry {citekey!r} in the registry",
+                }
             )
             continue
         try:
