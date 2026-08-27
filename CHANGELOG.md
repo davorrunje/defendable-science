@@ -48,6 +48,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`backlog` no longer rewrites the documents it edits.** `Backlog.loads()` was
+  prose-tolerant but `dumps()`/`save()` emitted only the table, so the
+  `load → mutate → save` round trip behind every `backlog park|add|rank|promote|
+  drop` deleted every non-table line — a heading and its explanatory prose gone
+  on the first `park`. Worse, rows were parsed against the *file's* header but
+  serialized against `columns_for(level)`, so a hand-written table with any other
+  column layout was written back with its row count preserved and its cells
+  **blank**: nothing looked wrong, and the content was gone. The parser now
+  retains the prose before and after the table plus the file's own header, and
+  `save` splices only the table region back. A mutation that a host header cannot
+  carry (no `id`/`status`, or `drop` with no `note` column) raises
+  `BacklogError` naming the missing columns and both layouts, rather than writing
+  cells that serialization would drop; columns a consumer has *added* survive and
+  are left empty on new rows. **Existing consumer backlogs may already carry this
+  damage — check `git log -p` on your `portfolio-backlog.md` and `backlog.md`
+  files.** (#94)
+- **`promote` inserts the `papers.md` row into the registry table**, wherever that
+  table sits in the document, instead of appending it at end-of-file with a
+  hardcoded three-column shape. A registry documented with prose after the table
+  got a stray row orphaned below the prose, and a registry extended with e.g.
+  `readiness` / `covers (thesis aims)` columns got a ragged three-cell row; both
+  meant the registry half of `promote` had to be done by hand. The row now
+  matches the host header's column count with extra columns left empty, and a
+  registry table missing `paper-id`/`root`/`backend`, or whose rows are not
+  anchored by a GFM separator, is refused loudly rather than corrupted. (#95)
+- **A minted backlog id is no longer cut mid-word.** The 40-character cap
+  truncated blindly, yielding ids like
+  `a-survey-of-monotonicity-methods-in-mach`; since a paper-level id becomes the
+  `paper-id` keying the paper across backlog, registry, dashboard and `progress`,
+  this made `--id` effectively mandatory. It now truncates on a word boundary.
+  (#94)
 - `skills/literature/SKILL.md` §Tooling no longer claims a PRISMA-log or
   concept-matrix generator that was never implemented; the CSL-JSON registry
   loader/patcher and triage sidecar reader it also claimed are real as of

@@ -345,3 +345,282 @@ def test_loads_ignores_prose_pipes_before_table() -> None:
     reloaded = b.Backlog.loads(doc, "hypothesis")
     assert [r["one-line"] for r in reloaded.rows] == ["real claim"]
     assert reloaded.columns == board.columns  # header taken from the real table
+
+
+# --- host-document preservation (#94) ----------------------------------------
+
+#: A hand-written portfolio backlog: heading, prose, table, prose after it.
+_HOST_DOC = """# Portfolio backlog
+
+Paper-level ideas not yet promoted to a paper root.
+
+| id | one-line | lens | provenance | feas | interest | status | note |
+|---|---|---|---|---|---|---|---|
+| earlier | some earlier idea | a lens | a resolved paper | med | high | parked | keep me |
+
+## How to use this file
+
+Rank before promoting; never delete a row.
+"""
+
+
+def _assert_host_doc_intact(text: str) -> None:
+    """Assert the prose and the pre-existing row survived a write."""
+    assert text.startswith("# Portfolio backlog\n")
+    assert "Paper-level ideas not yet promoted to a paper root." in text
+    assert text.endswith("Rank before promoting; never delete a row.\n")
+    assert "## How to use this file" in text
+    assert "| earlier | some earlier idea | a lens |" in text
+    assert "keep me" in text
+
+
+def test_load_mutate_save_preserves_prose(tmp_path: Path) -> None:
+    # The load → mutate → save round trip must not own anything but the table.
+    path = tmp_path / "portfolio-backlog.md"
+    path.write_text(_HOST_DOC, encoding="utf-8")
+    board = b.Backlog.load(path, "paper")
+    board.park("a fresh idea", "own")
+    board.save(path)
+    text = path.read_text(encoding="utf-8")
+    _assert_host_doc_intact(text)
+    assert "| a-fresh-idea | a fresh idea |" in text
+
+
+def test_untouched_load_save_is_byte_identical(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio-backlog.md"
+    path.write_text(_HOST_DOC, encoding="utf-8")
+    b.Backlog.load(path, "paper").save(path)
+    assert path.read_text(encoding="utf-8") == _HOST_DOC
+
+
+def test_foreign_header_refuses_mutation_rather_than_blanking() -> None:
+    # The reproduction from defendable-science#94: a three-column hand-written
+    # table. Rows must survive parsing AND serialization, and a mutation that
+    # cannot be represented is refused loudly instead of writing blank cells.
+    text = (
+        "# Portfolio backlog\n\nSome prose.\n\n"
+        "| idea | origin | note |\n|---|---|---|\n"
+        "| some earlier idea | a resolved paper | keep me |\n"
+    )
+    board = b.Backlog.loads(text, "paper")
+    assert board.rows == [
+        {"idea": "some earlier idea", "origin": "a resolved paper", "note": "keep me"}
+    ]
+    assert board.dumps() == text  # nothing restructured, nothing blanked
+    with pytest.raises(b.BacklogError, match="cannot carry required column"):
+        board.park("a new idea", "own")
+
+
+def test_superset_header_keeps_extra_columns(tmp_path: Path) -> None:
+    # A consumer that added its own columns keeps them, and a new row leaves
+    # them empty for the author rather than shifting the layout.
+    path = tmp_path / "portfolio-backlog.md"
+    cols = [*b.PAPER_COLUMNS, "readiness"]
+    path.write_text(
+        "| " + " | ".join(cols) + " |\n"
+        "|" + "|".join("---" for _ in cols) + "|\n"
+        "| earlier | old | lens | src | med | high | parked | note | ready |\n",
+        encoding="utf-8",
+    )
+    board = b.Backlog.load(path, "paper")
+    assert board.columns == cols
+    board.park("a fresh idea", "own")
+    board.save(path)
+    text = path.read_text(encoding="utf-8")
+    assert "| readiness |" in text
+    assert "| earlier | old | lens | src | med | high | parked | note | ready |" in text
+    rows = b.Backlog.load(path, "paper").rows
+    assert rows[1]["readiness"] == ""  # extra column present but unset
+    assert len(rows[1]) == len(cols)  # not ragged
+
+
+def test_content_after_table_is_prose_not_rows() -> None:
+    # A pipe line separated from the table by prose belongs to the host
+    # document; absorbing it as a row would reformat text the tool does not own.
+    text = (
+        "| id | status |\n|---|---|\n| h1 | parked |\n"
+        "\nAside: cost | benefit\n| h2 | parked |\n"
+    )
+    board = b.Backlog.loads(text, "hypothesis")
+    assert board.rows == [{"id": "h1", "status": "parked"}]
+    assert board.dumps() == text
+
+
+def test_stray_separator_after_rows_ends_the_table() -> None:
+    text = "| id | status |\n|---|---|\n| h1 | parked |\n|---|---|\ntrailing\n"
+    board = b.Backlog.loads(text, "hypothesis")
+    assert board.rows == [{"id": "h1", "status": "parked"}]
+    assert board.postamble == "|---|---|\ntrailing\n"
+    assert board.dumps() == text
+
+
+def test_prose_only_document_gains_a_table_below_the_prose() -> None:
+    # No trailing newline: the table must not be spliced mid-line.
+    board = b.Backlog.loads("just prose, no table", "hypothesis")
+    board.park("an idea", "own")
+    out = board.dumps()
+    assert out.startswith("just prose, no table\n| id |")
+
+
+def test_drop_refuses_a_table_without_a_note_column() -> None:
+    # The drop reason has nowhere to go, so the transition is refused rather
+    # than recorded and then dropped on serialization (file-drawer discipline).
+    cols = [c for c in b.HYPOTHESIS_COLUMNS if c != "note"]
+    text = (
+        "| " + " | ".join(cols) + " |\n"
+        "|" + "|".join("---" for _ in cols) + "|\n"
+        "| h1 | claim | move | src | high | med | high | frame | ranked |\n"
+    )
+    board = b.Backlog.loads(text, "hypothesis")
+    with pytest.raises(b.BacklogError, match=r"required column\(s\) \['note'\]"):
+        board.drop("h1", "superseded")
+    assert board.dumps() == text
+
+
+@pytest.mark.parametrize(
+    ("one_line", "expected"),
+    [
+        (
+            "A survey of monotonicity methods in machine learning",
+            "a-survey-of-monotonicity-methods-in",
+        ),
+        ("short enough", "short-enough"),
+        ("!!! ???", "row"),
+        ("a" * 60, "a" * 40),  # a single word longer than the cap: hard cut
+    ],
+)
+def test_slug_truncates_on_a_word_boundary(one_line: str, expected: str) -> None:
+    assert b._slug(one_line) == expected
+
+
+def test_minted_id_is_not_cut_mid_word() -> None:
+    board = b.Backlog(level="paper")
+    row = board.park("A survey of monotonicity methods in machine learning", "own")
+    assert row["id"] == "a-survey-of-monotonicity-methods-in"
+
+
+# --- CLI verbs preserve the host document (#94) ------------------------------
+
+
+def test_cli_verbs_preserve_prose(tmp_path: Path) -> None:
+    path = tmp_path / "portfolio-backlog.md"
+    path.write_text(_HOST_DOC, encoding="utf-8")
+    common = ["--backlog", str(path), "--level", "paper"]
+
+    for args in (
+        ["backlog", "park", "an idea", "--provenance", "own", "--id", "x1", *common],
+        ["backlog", "add", "a claim", "--provenance", "own", "--id", "x2", *common],
+        ["backlog", "rank", "x1", "--feas", "high", "--interest", "med", *common],
+        ["backlog", "promote", "x1", *common],
+        ["backlog", "drop", "x2", "--reason", "superseded", *common],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, (args, result.stdout)
+        _assert_host_doc_intact(path.read_text(encoding="utf-8"))
+
+    rows = b.Backlog.load(path, "paper").rows
+    assert [r["id"] for r in rows] == ["earlier", "x1", "x2"]
+    assert rows[1]["status"] == "promoted"
+    assert rows[2]["status"] == "dropped"
+    assert rows[2]["note"] == "superseded"
+
+
+# --- papers registry splicing (#95) ------------------------------------------
+
+_REGISTRY_DOC = """# Papers
+
+The portfolio registry.
+
+| paper-id | root | backend |
+|---|---|---|
+| first | docs/research/first | bench |
+
+## Scope notes
+
+- **first** — the anchor paper.
+"""
+
+
+def test_registry_row_lands_inside_the_table(tmp_path: Path) -> None:
+    papers = tmp_path / "papers.md"
+    papers.write_text(_REGISTRY_DOC, encoding="utf-8")
+    b.append_papers_registry(papers, "second", "docs/research/second", "sim")
+    text = papers.read_text(encoding="utf-8")
+    assert "| first | docs/research/first | bench |\n" in text
+    assert "| second | docs/research/second | sim |\n\n## Scope notes" in text
+    assert text.endswith("- **first** — the anchor paper.\n")
+    # Still one table: the parser sees both rows.
+    doc = b._parse_document(text)
+    assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
+
+
+def test_registry_extra_columns_are_filled_empty(tmp_path: Path) -> None:
+    papers = tmp_path / "papers.md"
+    papers.write_text(
+        "| paper-id | root | backend | readiness | covers (thesis aims) |\n"
+        "|---|---|---|---|---|\n"
+        "| first | docs/research/first | bench | drafting | A1 |\n",
+        encoding="utf-8",
+    )
+    b.append_papers_registry(papers, "second", "docs/research/second", "sim")
+    doc = b._parse_document(papers.read_text(encoding="utf-8"))
+    assert doc.rows[1] == {
+        "paper-id": "second",
+        "root": "docs/research/second",
+        "backend": "sim",
+        "readiness": "",
+        "covers (thesis aims)": "",
+    }
+    assert doc.rows[0]["readiness"] == "drafting"  # untouched
+
+
+def test_registry_missing_required_column_raises(tmp_path: Path) -> None:
+    papers = tmp_path / "papers.md"
+    papers.write_text("| paper-id | root |\n|---|---|\n", encoding="utf-8")
+    before = papers.read_text(encoding="utf-8")
+    with pytest.raises(
+        b.BacklogError, match=r"missing required column\(s\) \['backend'\]"
+    ):
+        b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+    assert papers.read_text(encoding="utf-8") == before
+
+
+def test_registry_malformed_table_raises(tmp_path: Path) -> None:
+    papers = tmp_path / "papers.md"
+    papers.write_text(
+        "| paper-id | root | backend |\n| first | docs/research/first | bench |\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(b.BacklogError, match="malformed registry table"):
+        b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+
+
+def test_registry_absent_file_creates_three_column_table(tmp_path: Path) -> None:
+    papers = tmp_path / "nested" / "papers.md"
+    b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+    assert papers.read_text(encoding="utf-8") == (
+        "| paper-id | root | backend |\n|---|---|---|\n"
+        "| p1 | docs/research/p1 | bench |\n"
+    )
+
+
+def test_registry_duplicate_id_in_prose_is_not_a_duplicate(tmp_path: Path) -> None:
+    # The guard reads parsed rows, so a mention below the table is just prose.
+    papers = tmp_path / "papers.md"
+    papers.write_text(
+        "| paper-id | root | backend |\n|---|---|---|\n\nNotes on | p1 | below.\n",
+        encoding="utf-8",
+    )
+    b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+    assert "Notes on | p1 | below." in papers.read_text(encoding="utf-8")
+
+
+def test_scaffold_paper_row_is_inside_the_table(tmp_path: Path) -> None:
+    research = tmp_path / "docs" / "research"
+    research.mkdir(parents=True)
+    (research / "papers.md").write_text(_REGISTRY_DOC, encoding="utf-8")
+    b.scaffold_paper(research, "second", "a follow-up paper", backend="sim")
+    doc = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
+    assert doc.rows[1]["root"] == "docs/research/second"
+    assert doc.postamble.startswith("\n## Scope notes")
