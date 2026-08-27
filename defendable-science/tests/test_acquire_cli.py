@@ -80,16 +80,28 @@ def _fake_client(routes: dict[str, Any] | None = None, **kw: Any) -> http.HttpCl
 
 
 class _Proc:
-    def __init__(self, returncode: int = 0) -> None:
+    def __init__(self, returncode: int = 0, stderr: bytes | None = None) -> None:
         self.returncode = returncode
+        self.stderr = stderr
+
+
+#: rclone's "file not found" — the only kind of non-zero exit that means the key
+#: is genuinely absent rather than unaskable (``core.mirror.ABSENT_EXIT_CODES``).
+ABSENT = 4
 
 
 def _run_ok(_args: list[str], **_kw: Any) -> _Proc:
     return _Proc(0)
 
 
-def _run_fail(_args: list[str], **_kw: Any) -> _Proc:
-    return _Proc(1)
+def _run_absent(_args: list[str], **_kw: Any) -> _Proc:
+    """Rclone answered: the key is not there."""
+    return _Proc(ABSENT)
+
+
+def _run_unreachable(_args: list[str], **_kw: Any) -> _Proc:
+    """Rclone could not ask — an expired credential, say (exit 7, fatal)."""
+    return _Proc(7, b"SignatureDoesNotMatch: the token has expired")
 
 
 def _run_missing_rclone(_args: list[str], **_kw: Any) -> _Proc:
@@ -401,7 +413,7 @@ def test_mirror_check_absent_key_exits_1(
         tmp_path, {"registry": "references.json", "mirror": {"remote": "papers"}}
     )
     monkeypatch.setattr(
-        cli, "_lit_mirror", lambda _lit: Mirror(remote="papers", run=_run_fail)
+        cli, "_lit_mirror", lambda _lit: Mirror(remote="papers", run=_run_absent)
     )
 
     result = runner.invoke(app, ["literature", "mirror", "k1", "--check"])
@@ -425,7 +437,7 @@ def test_mirror_distinguishes_corrupt_from_missing(
         tmp_path, {"registry": "references.json", "mirror": {"remote": "papers"}}
     )
     monkeypatch.setattr(
-        cli, "_lit_mirror", lambda _lit: Mirror(remote="papers", run=_run_fail)
+        cli, "_lit_mirror", lambda _lit: Mirror(remote="papers", run=_run_absent)
     )
 
     result = runner.invoke(app, ["literature", "mirror", "k1"])
@@ -462,7 +474,7 @@ def _run_fail_then_ok() -> Any:
     """``lsf`` (check) fails, so the entry isn't already present; ``copyto`` succeeds."""
 
     def _run(args: list[str], **_kw: Any) -> _Proc:
-        return _Proc(1 if "lsf" in args else 0)
+        return _Proc(ABSENT if "lsf" in args else 0)
 
     return _run
 
@@ -534,6 +546,61 @@ def test_fetch_all_missing_rclone_exits_1_with_actionable_message(
 
     assert result.exit_code == 1
     assert "rclone not found on PATH" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+
+
+def test_fetch_an_unreachable_mirror_is_an_error_row_and_a_non_zero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a failing rclone cannot produce a `manual` worklist row.
+
+    The whole point of the fix, asserted where a researcher would see it: an
+    expired credential must not come back as ``complete: true``, exit 0, and a
+    line telling them to go and download the paper by hand.
+    """
+    monkeypatch.chdir(tmp_path)
+    # Recorded checksum, no local blob — the mirror is the only place to look.
+    _write_registry(tmp_path / "references.json", [_item("k1", spine=_spine(PDF_SHA))])
+    _write_config(
+        tmp_path, {"registry": "references.json", "mirror": {"remote": "papers"}}
+    )
+    monkeypatch.setattr(cli, "_lit_client", lambda: _fake_client())
+    monkeypatch.setattr(
+        cli,
+        "_lit_mirror",
+        lambda _lit: Mirror(remote="papers", run=_run_unreachable),
+    )
+
+    result = runner.invoke(app, ["literature", "fetch", "k1"])
+
+    assert result.exit_code == 1
+    report = json.loads(result.stdout)
+    assert report["manual"] == []
+    assert len(report["errors"]) == 1
+    error = report["errors"][0]["error"]
+    assert "could not be reached" in error
+    assert "the token has expired" in error
+    assert "Traceback" not in (result.stdout + result.stderr)
+
+
+def test_mirror_check_does_not_report_missing_for_an_unreachable_mirror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``literature mirror --check`` reports nothing rather than "not present"."""
+    monkeypatch.chdir(tmp_path)
+    _write_registry(tmp_path / "references.json", [_item("k1", spine=_spine(PDF_SHA))])
+    _write_config(
+        tmp_path, {"registry": "references.json", "mirror": {"remote": "papers"}}
+    )
+    monkeypatch.setattr(
+        cli, "_lit_mirror", lambda _lit: Mirror(remote="papers", run=_run_unreachable)
+    )
+
+    result = runner.invoke(app, ["literature", "mirror", "k1", "--check"])
+
+    assert result.exit_code == 1
+    assert "could not be reached" in result.stderr
+    assert result.stdout.strip() == ""
     assert "Traceback" not in (result.stdout + result.stderr)
 
 

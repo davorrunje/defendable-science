@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from defendable_science.core import fixity as fx
 from defendable_science.core import mirror as mirror_mod
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 class FakeProc:
-    def __init__(self, returncode: int) -> None:
+    def __init__(self, returncode: int, stderr: bytes | str | None = None) -> None:
         self.returncode = returncode
+        self.stderr = stderr
+
+
+#: What rclone exits with when the key genuinely is not there (file not found).
+ABSENT = 4
 
 
 class FakeRclone:
@@ -24,12 +34,12 @@ class FakeRclone:
         self.calls.append(args)
         verb = args[1] if args[1] != "--config" else args[3]
         if verb == "lsf":
-            return FakeProc(0 if self.present else 1)
+            return FakeProc(0 if self.present else ABSENT)
         if verb == "copyto":
             # A "get" (mirror -> local) only succeeds when present.
             src = args[-2]
             is_get = ":" in src
-            return FakeProc(0 if (not is_get or self.present) else 1)
+            return FakeProc(0 if (not is_get or self.present) else ABSENT)
         return FakeProc(0)
 
 
@@ -87,10 +97,104 @@ def test_mirror_without_env_passes_no_env_kwarg() -> None:
     assert "env" not in captured
 
 
-def test_mirror_put_failure_raises() -> None:
-    def _fail(args: list[str], **_kw: object) -> FakeProc:
-        return FakeProc(1)
+def test_mirror_put_of_a_missing_local_file_raises() -> None:
+    """Rclone's "not found" on a *push* means the local source is not there."""
 
-    mirror = mirror_mod.Mirror(remote="s", run=_fail)
+    def _absent(args: list[str], **_kw: object) -> FakeProc:
+        return FakeProc(ABSENT)
+
+    mirror = mirror_mod.Mirror(remote="s", run=_absent)
     with pytest.raises(fx.RetrievalError, match="copyto to mirror failed"):
-        mirror.put("/tmp/x", "a" * 64)
+        mirror.put("/tmp/x", "a" * 64)  # nosec B108 - never opened, rclone is a fake
+
+
+# --- the negative: an unreachable mirror is never reported as an absence ------
+#
+# The point of the module. Every one of these asserts what must *not* happen —
+# that a failing runner cannot talk `Mirror` into an "absent" verdict — because
+# a suite that only asserts the happy path is exactly how the same defect
+# survived at the byte layer (#107) until it was found by hand.
+
+#: Exit codes that are *not* an absence: syntax, unknown, temporary, less
+#: serious, fatal, transfer-limit. Auth failures, expired tokens, quota refusals
+#: and network outages all arrive as one of these.
+UNREACHABLE_CODES = (1, 2, 5, 6, 7, 8)
+
+
+def _runner(returncode: int, stderr: bytes | str | None = None) -> mirror_mod.Runner:
+    def _run(args: list[str], **_kw: object) -> FakeProc:
+        return FakeProc(returncode, stderr)
+
+    return _run
+
+
+@pytest.mark.parametrize("code", UNREACHABLE_CODES)
+def test_check_raises_rather_than_reporting_absent(code: int) -> None:
+    mirror = mirror_mod.Mirror(remote="s", run=_runner(code))
+    verdicts: list[bool] = []
+    with pytest.raises(mirror_mod.MirrorUnreachableError) as caught:
+        verdicts.append(mirror.check("a" * 64))
+    # Not merely "it did not say True" — it returned no verdict at all.
+    assert verdicts == []
+    assert caught.value.returncode == code
+
+
+@pytest.mark.parametrize("code", UNREACHABLE_CODES)
+def test_get_raises_rather_than_reporting_absent(code: int, tmp_path: Path) -> None:
+    mirror = mirror_mod.Mirror(remote="s", run=_runner(code))
+    verdicts: list[bool] = []
+    with pytest.raises(mirror_mod.MirrorUnreachableError) as caught:
+        verdicts.append(mirror.get("a" * 64, tmp_path / "blob"))
+    assert verdicts == []
+    assert caught.value.returncode == code
+
+
+@pytest.mark.parametrize("code", [3, 4])
+def test_only_not_found_exit_codes_mean_absent(code: int, tmp_path: Path) -> None:
+    """``3`` directory-not-found and ``4`` file-not-found — and nothing else."""
+    mirror = mirror_mod.Mirror(remote="s", run=_runner(code))
+    assert mirror.check("a" * 64) is False
+    assert mirror.get("a" * 64, tmp_path / "blob") is False
+
+
+def test_unreachable_is_a_retrieval_error_carrying_rclone_stderr() -> None:
+    """A caller that only knows `RetrievalError` still sees the failure."""
+    mirror = mirror_mod.Mirror(
+        remote="store", run=_runner(7, b"  Failed to lsf:  \n AccessDenied\n")
+    )
+    with pytest.raises(fx.RetrievalError) as caught:
+        mirror.check("a" * 64)
+    error = caught.value
+    assert isinstance(error, mirror_mod.MirrorUnreachableError)
+    assert error.stderr == "Failed to lsf: AccessDenied"
+    message = str(error)
+    assert "AccessDenied" in message
+    assert "exit 7" in message
+    assert "could not be reached" in message
+    # It must not read as a verdict about the key.
+    assert "not in the mirror" not in message
+
+
+def test_unreachable_put_reports_the_transport_not_a_missing_source() -> None:
+    mirror = mirror_mod.Mirror(remote="s", run=_runner(1, "quota exceeded"))
+    with pytest.raises(mirror_mod.MirrorUnreachableError, match="quota exceeded"):
+        mirror.put("/tmp/x", "a" * 64)  # nosec B108 - never opened, rclone is a fake
+
+
+def test_text_mode_and_uncaptured_stderr_both_degrade_cleanly() -> None:
+    """The runner is injectable, so stderr may be ``str`` or absent entirely."""
+    text = mirror_mod.Mirror(remote="s", run=_runner(7, "boom"))
+    with pytest.raises(mirror_mod.MirrorUnreachableError, match="boom"):
+        text.check("a" * 64)
+    silent = mirror_mod.Mirror(remote="s", run=_runner(7, None))
+    with pytest.raises(mirror_mod.MirrorUnreachableError) as caught:
+        silent.check("a" * 64)
+    assert caught.value.stderr == ""
+    assert "exit 7 — the mirror could not be reached" in str(caught.value)
+
+
+def test_a_long_rclone_dump_is_truncated_in_the_message() -> None:
+    mirror = mirror_mod.Mirror(remote="s", run=_runner(7, b"x" * 900))
+    with pytest.raises(mirror_mod.MirrorUnreachableError) as caught:
+        mirror.check("a" * 64)
+    assert caught.value.stderr == "x" * 400 + "…"

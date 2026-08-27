@@ -29,8 +29,11 @@ from defendable_science.core.fixity import bare_sha256 as bare_sha256
 from defendable_science.core.fixity import blob_path as blob_path
 from defendable_science.core.fixity import sha256_file as sha256_file
 from defendable_science.core.fixity import verified as verified
+
+# Runtime re-exports: callers reach these through this module (``r.Mirror``).
+from defendable_science.core.mirror import Mirror as Mirror
 from defendable_science.core.mirror import (
-    Mirror as Mirror,  # noqa: TC001 - runtime re-export, callers reach `r.Mirror`
+    MirrorUnreachableError as MirrorUnreachableError,
 )
 from defendable_science.dataset import manifest as manifest_mod
 
@@ -72,7 +75,14 @@ def _resolve_file(
 ) -> Path:
     """Resolve one file through the chain, verifying at every hop.
 
+    An **unreachable** mirror stops the chain rather than being read as "the
+    mirror does not have it": falling through to the Tier-B fetch (or, for a
+    Tier-C entry, to the gated-manual message) would answer a question the
+    mirror never got to answer, and for Tier C would tell a human to acquire by
+    hand bytes that may be sitting behind an expired credential.
+
     :raises RetrievalError: If the chain is exhausted without verified bytes.
+    :raises MirrorUnreachableError: If a configured mirror could not be reached.
     """
     # Tier A: the file is committed in-repo at its path; verify in place.
     if entry.tier == "A":
@@ -197,12 +207,14 @@ class AuditReport:
 
     :param validation: The manifest schema/tier validation report.
     :param fixity: Per-entry verification reports.
-    :param mirror_present: Per-entry mirror-presence flags (if a mirror is given).
+    :param mirror_present: Per-entry mirror-presence flags (if a mirror is
+        given). ``None`` — ``null`` in the JSON report — means **unknown**: the
+        mirror could not be reached, so its answer is not evidence of absence.
     """
 
     validation: manifest_mod.ValidationReport
     fixity: list[VerifyReport] = field(default_factory=list)
-    mirror_present: dict[str, bool] = field(default_factory=dict)
+    mirror_present: dict[str, bool | None] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -218,6 +230,12 @@ def audit(
     Folds in the manifest loader/validator (schema, license, datasheet,
     tier-consistency) alongside the byte-level fixity and mirror-presence checks.
 
+    A mirror that cannot be reached is reported as ``None`` (unknown) rather
+    than ``False``: an audit exists to say what is true, and "we could not ask"
+    is not "it is not there". The audit still completes — the fixity half of it
+    is entirely local and remains valid — so the failure narrows to the entries
+    it actually touched.
+
     :param manifest: The parsed manifest.
     :param cache_dir: The content-addressed cache directory.
     :param mirror: Optional mirror to probe for presence.
@@ -227,7 +245,20 @@ def audit(
     for entry in manifest.datasets:
         report.fixity.append(verify(entry, cache_dir=cache_dir))
         if mirror is not None:
-            report.mirror_present[entry.id] = all(
-                mirror.check(ref.sha256) for ref in entry.files
-            )
+            report.mirror_present[entry.id] = _mirror_presence(mirror, entry)
     return report
+
+
+def _mirror_presence(mirror: Mirror, entry: DatasetEntry) -> bool | None:
+    """Return whether the mirror holds every file of `entry`, or ``None``.
+
+    :param mirror: The mirror to probe.
+    :param entry: The manifest entry whose files to probe.
+    :returns: ``True`` when every file is present, ``False`` when the mirror
+        answered that at least one is not, and ``None`` when the mirror could
+        not be reached and the question therefore went unanswered.
+    """
+    try:
+        return all(mirror.check(ref.sha256) for ref in entry.files)
+    except MirrorUnreachableError:
+        return None

@@ -12,6 +12,7 @@ import pytest
 from defendable_science.core.download import DownloadError, FetchedBytes
 from defendable_science.core.fixity import RetrievalError
 from defendable_science.core.http import HttpError, RateLimitError
+from defendable_science.core.mirror import MirrorUnreachableError
 from defendable_science.literature import acquire as a
 from defendable_science.literature import registry as reg
 
@@ -878,11 +879,13 @@ class FakeMirror:
         body: bytes | None = None,
         put_error: Exception | None = None,
         check_error: Exception | None = None,
+        get_error: Exception | None = None,
         present: bool | None = None,
     ) -> None:
         self.body = body
         self.put_error = put_error
         self.check_error = check_error
+        self.get_error = get_error
         self.present = present
         self.puts: list[tuple[str, str]] = []
         self.checks: list[str] = []
@@ -895,6 +898,8 @@ class FakeMirror:
         self.puts.append((str(local), sha256))
 
     def get(self, sha256: str, dst: str | Path) -> bool:
+        if self.get_error is not None:
+            raise self.get_error
         if self.body is None:
             return False
         target = Path(dst)
@@ -1096,6 +1101,76 @@ def test_a_mirror_that_does_not_hold_the_key_is_manual(tmp_path: Path) -> None:
         entry, _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=FakeMirror())
     )
     assert outcome.bucket == a.BUCKET_MANUAL
+
+
+def _unreachable_mirror() -> FakeMirror:
+    return FakeMirror(
+        get_error=MirrorUnreachableError(
+            "rclone copyto on 'papers' failed with exit 7: SignatureDoesNotMatch — "
+            "the mirror could not be reached",
+            returncode=7,
+            stderr="SignatureDoesNotMatch",
+        )
+    )
+
+
+def test_a_mirror_that_could_not_be_reached_is_an_error_never_manual(
+    tmp_path: Path,
+) -> None:
+    """The negative that matters: no `manual` row for a mirror we never asked.
+
+    A ``manual`` row is a worklist item — it leaves the sweep ``complete`` and
+    exit 0 — so filing an expired credential there tells a researcher to
+    hand-download a paper that is very likely sitting in their own mirror.
+    """
+    _path, entry = _registry(tmp_path, spine=_spine())
+
+    outcome = a.acquire_one(
+        entry,
+        _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=_unreachable_mirror()),
+    )
+
+    assert outcome.bucket != a.BUCKET_MANUAL
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "could not be reached" in outcome.reason
+    assert "not in the mirror either" not in outcome.reason
+    # Serialized under ``error``, the key an ``errors[]`` reader looks at.
+    assert "could not be reached" in outcome.as_json()["error"]
+
+
+def test_an_unreachable_mirror_still_reports_a_corrupt_cache_blob(
+    tmp_path: Path,
+) -> None:
+    """Both faults are true at once, and the row says so."""
+    _path, entry = _registry(tmp_path, spine=_spine())
+    blob = tmp_path / "cache" / "sha256" / PDF_SHA
+    blob.parent.mkdir(parents=True, exist_ok=True)
+    blob.write_bytes(b"corrupt")
+
+    outcome = a.acquire_one(
+        entry,
+        _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=_unreachable_mirror()),
+    )
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "did not match the recorded checksum" in outcome.reason
+    assert "could not be reached" in outcome.reason
+
+
+def test_a_sweep_reports_an_unreachable_mirror_and_keeps_going(
+    tmp_path: Path,
+) -> None:
+    """Per-entry, not fatal: the row lands in ``errors`` and the sweep completes."""
+    _path, _entry_obj = _registry(tmp_path, spine=_spine())
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=_unreachable_mirror())
+
+    report = a.fetch_all(ctx)
+
+    assert report["manual"] == []
+    assert len(report["errors"]) == 1
+    assert "could not be reached" in report["errors"][0]["error"]
 
 
 def test_mirror_bytes_that_do_not_verify_are_treated_as_absent(
