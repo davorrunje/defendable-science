@@ -241,7 +241,7 @@ accepted or quarantined across an author mismatch.** Checked against both real c
 **Honest degradation on thin metadata.** If either side lacks a title, an author, or a year — or
 carries one that normalizes to the empty string, such as a title of pure punctuation — the gate
 cannot be evaluated, so search-derived rungs are **refused** with
-`reason: insufficient registry metadata to verify a search-derived candidate` — never accepted
+`reason: insufficient metadata to verify a search-derived candidate` — never accepted
 on a title match alone. Identity-derived rungs 1–3 still work, needing no gate.
 
 ### 5.3 Quarantine
@@ -267,7 +267,10 @@ removes `dataset`'s Tier-A/Tier-B path dichotomy from the literature side entire
 `license` records what was *observed*, not an assertion of rights: `{id, observed, source}` — an
 SPDX id when a rung reported one, the raw string, and which rung said so. `redistributable`
 defaults to `false` and is `true` only for an SPDX id on a shipped permissive allowlist
-(`cc-by`, `cc-by-sa`, `cc0`, and the other clearly-permissive SPDX ids). **Absent or unparsable
+(as shipped: `cc0-1.0`, `cc-by`, `cc-by-3.0`, `cc-by-4.0`, `cc-by-sa`, `cc-by-sa-3.0`,
+`cc-by-sa-4.0`, `mit`, `apache-2.0`, `bsd-2-clause`, `bsd-3-clause` — note **no** `-nc` or `-nd`
+variant is on it, because neither non-commercial nor no-derivatives is a redistribution grant for
+an in-repo copy). **Absent or unparsable
 license → `false`**, per #97's observation that 36 of 50 works in the real run carried no
 license field at all.
 
