@@ -1023,13 +1023,24 @@ def test_is_permissive(spdx: str | None, expected: bool) -> None:
         ({"locations": ["junk", {"license": None}, {"license": "  "}]}, None),
     ],
 )
-def test_license_from_work(work: dict[str, Any], expected: str | None) -> None:
-    assert a.license_from_work(work).id == expected
+def test_observed_license_scans_work_level_fallback_locations(
+    work: dict[str, Any], expected: str | None
+) -> None:
+    """``_observed_license`` with no location falls back to the work-level scan.
+
+    Exercised directly rather than through a shipped public wrapper: nothing
+    ships calls a work-level-only license lookup (rung 6's own use goes
+    through :func:`~defendable_science.literature.acquire.candidate_from_work`,
+    which is covered by the rung-6 tests below), so there is no
+    ``license_from_work`` to call here — only the private helpers this test
+    exists to pin down.
+    """
+    assert a._license_from_observed(a._observed_license(work)).id == expected
 
 
-def test_license_from_work_records_the_raw_string_and_its_source() -> None:
-    observed = a.license_from_work(
-        {"best_oa_location": {"license": "All-Rights-Reserved"}}
+def test_observed_license_records_the_raw_string_and_its_source() -> None:
+    observed = a._license_from_observed(
+        a._observed_license({"best_oa_location": {"license": "All-Rights-Reserved"}})
     )
     assert observed.observed == "All-Rights-Reserved"
     assert observed.id == "all-rights-reserved"
@@ -2069,3 +2080,175 @@ def test_error_rows_from_acquire_one_also_use_the_error_key(tmp_path: Path) -> N
     assert "reason" not in row
     assert row["error"] is not None
     assert "no DOI" in row["error"]
+
+
+# --- task 12: confirm — promote quarantine, or adopt a manual file -----------
+
+
+def _quarantine(
+    tmp_path: Path,
+    entry: reg.Entry,
+    ctx: a.Context,
+    *,
+    sha: str = PDF_SHA,
+    body: bytes = PDF,
+    **cand_kw: Any,
+) -> Path:
+    """Park a candidate in quarantine via the module's own writer.
+
+    Reuses :func:`a._write_quarantine` rather than hand-building the on-disk
+    shape, so these tests do not silently drift from whatever the ladder
+    actually writes.
+    """
+    candidate = _cand(rung=a.RUNG_SIBLING, url="http://x/sib.pdf", **cand_kw)
+    match = a.MatchRecord(
+        verdict=a.QUARANTINE,
+        title="exact",
+        author="exact",
+        year="within-5",
+        reason="plausibly a preprint, needs a human look",
+    )
+    src = tmp_path / "landed.part"
+    src.write_bytes(body)
+    return a._write_quarantine(ctx, entry, src, sha, candidate, match)
+
+
+def test_confirm_promotes_a_quarantined_blob(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    directory = parked.parent
+
+    outcome = a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.sha256 == PDF_SHA
+    assert outcome.rung == a.RUNG_SIBLING
+    assert outcome.url == "http://x/sib.pdf"
+    assert outcome.match is not None
+    assert outcome.match["verdict"] == a.QUARANTINE
+    assert (tmp_path / "cache" / "sha256" / PDF_SHA).read_bytes() == PDF
+    assert not (directory / f"{PDF_SHA}.pdf").exists()
+    assert not (directory / f"{PDF_SHA}.json").exists()
+    asset = _asset(path)
+    assert asset.acquisition is not None
+    assert asset.acquisition.rung == a.RUNG_SIBLING
+    assert asset.acquisition.match["verdict"] == a.QUARANTINE
+
+
+def test_confirm_accepts_a_prefixed_checksum(tmp_path: Path) -> None:
+    """``--sha256`` is a human-typed value; a ``sha256:`` prefix must work too."""
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    _quarantine(tmp_path, entry, ctx)
+
+    outcome = a.confirm_quarantined(entry, ctx, f"sha256:{PDF_SHA}")
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.sha256 == PDF_SHA
+
+
+def test_confirm_unknown_sha_is_an_actionable_error(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    _quarantine(tmp_path, entry, ctx)
+
+    with pytest.raises(RetrievalError, match=PDF_SHA):
+        a.confirm_quarantined(entry, ctx, OTHER_SHA)
+
+
+def test_confirm_with_nothing_in_quarantine_says_so(tmp_path: Path) -> None:
+    """No quarantine directory at all for this citekey is also an actionable error."""
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+
+    with pytest.raises(RetrievalError, match="quarantine is empty"):
+        a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+
+def test_confirm_rejects_a_corrupt_quarantine_blob(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    before = path.read_bytes()
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    parked.write_bytes(b"truncated")
+
+    outcome = a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "truncated or tampered" in outcome.reason
+    assert parked.read_bytes() == b"truncated"
+    assert (parked.parent / f"{PDF_SHA}.json").exists()
+    assert path.read_bytes() == before
+
+
+def test_confirm_populates_the_mirror(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    mirror = FakeMirror()
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher(), mirror=mirror)
+    _quarantine(tmp_path, entry, ctx)
+
+    outcome = a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert mirror.puts == [(str(tmp_path / "cache" / "sha256" / PDF_SHA), PDF_SHA)]
+
+
+def test_adopt_file_hashes_and_records_it(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    src = tmp_path / "downloads" / "paper.pdf"
+    src.parent.mkdir()
+    src.write_bytes(PDF)
+
+    outcome = a.adopt_file(entry, ctx, src)
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert outcome.sha256 == PDF_SHA
+    assert outcome.rung == a.RUNG_MANUAL
+    asset = _asset(path)
+    assert asset.acquisition is not None
+    assert asset.acquisition.rung == a.RUNG_MANUAL
+    assert asset.acquisition.match["verdict"] == a.IDENTITY
+    assert asset.license.id is None
+    assert asset.redistributable is False
+
+
+def test_adopt_file_rejects_a_non_pdf(tmp_path: Path) -> None:
+    path, entry = _registry(tmp_path)
+    before = path.read_bytes()
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    src = tmp_path / "notes.txt"
+    src.write_bytes(b"not a pdf")
+
+    outcome = a.adopt_file(entry, ctx, src)
+
+    assert outcome.bucket == a.BUCKET_ERROR
+    assert outcome.reason is not None
+    assert "does not look like a PDF" in outcome.reason
+    assert path.read_bytes() == before
+    assert src.exists()
+
+
+def test_adopt_file_missing_path_is_an_actionable_error(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    missing = tmp_path / "nope.pdf"
+
+    with pytest.raises(RetrievalError, match=r"nope\.pdf"):
+        a.adopt_file(entry, ctx, missing)
+
+
+def test_adopt_file_copies_rather_than_moves_the_humans_file(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    src = tmp_path / "downloads" / "paper.pdf"
+    src.parent.mkdir()
+    src.write_bytes(PDF)
+
+    outcome = a.adopt_file(entry, ctx, src)
+
+    assert outcome.bucket == a.BUCKET_FETCHED
+    assert src.is_file()
+    assert src.read_bytes() == PDF

@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import unicodedata
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from defendable_science.core.download import DownloadError
+from defendable_science.core.download import DownloadError, FetchedBytes
 from defendable_science.core.fixity import (
     RetrievalError,
     bare_sha256,
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
 
-    from defendable_science.core.download import BytesFetcher, FetchedBytes
+    from defendable_science.core.download import BytesFetcher
     from defendable_science.core.http import HttpClient
     from defendable_science.core.mirror import Mirror
     from defendable_science.literature.registry import Entry, Registry, TriageRow
@@ -431,16 +432,6 @@ def _observed_license(work: dict[str, Any], location: Any = None) -> str | None:
         if isinstance(raw, str) and raw.strip():
             return raw
     return None
-
-
-def license_from_work(work: dict[str, Any]) -> License:
-    """Return the license *observed* on an OpenAlex work — not an assertion of rights.
-
-    :param work: The OpenAlex work.
-    :returns: The observed license; all-``None`` when the record reports none,
-        which is the majority case and means "not redistributable".
-    """
-    return _license_from_observed(_observed_license(work))
 
 
 # --- identity-derived rungs (1-3) and PDF acceptance -------------------------
@@ -1402,6 +1393,103 @@ def _refetch_outcome(
     )
 
 
+def _bind(
+    entry: Entry,
+    ctx: Context,
+    fetched: FetchedBytes,
+    sha: str,
+    *,
+    rung: str,
+    url: str | None,
+    candidate: dict[str, Any] | None,
+    match: dict[str, Any],
+    license: License,
+    pid: str | None = None,
+    access: str | None = None,
+) -> Outcome:
+    """Write one asset spine: store the blob, mirror it, patch the registry.
+
+    The one place in the module that writes a spine. :func:`_accept` (an
+    accepted ladder candidate), :func:`confirm_quarantined` (a human-reviewed
+    quarantine blob) and :func:`adopt_file` (a human-supplied file) each land
+    bytes by a different route, but all three converge here rather than
+    repeating the "hash, store, mirror, patch" tail three times — a second
+    writer is how the recorded provenance and the actual bytes on disk drift
+    apart.
+
+    :param entry: The registry entry to bind the bytes to.
+    :param ctx: The acquisition context.
+    :param fetched: The bytes to bind. Moved into the content-addressed store
+        by this call — a caller wanting copy semantics (:func:`adopt_file`)
+        must already have copied the human's file before this runs.
+    :param sha: The bytes' bare checksum.
+    :param rung: The ladder rung recorded on the acquisition (``manual`` for
+        an adoption, the original rung for a promoted quarantine candidate).
+    :param url: Where the bytes came from, when they came from anywhere.
+    :param candidate: The candidate record for the audit trail, or ``None``
+        when there was no candidate (an adopted file).
+    :param match: The gate's per-axis record, JSON-ready.
+    :param license: The observed license.
+    :param pid: The persistent identifier to record, when one is known.
+    :param access: ``open`` | ``gated``, when known.
+    :returns: :data:`BUCKET_FETCHED`, or :data:`BUCKET_ERROR` if the registry
+        could not be patched — the bytes are cached either way, and saying so is
+        the difference between a recoverable state and a lost one.
+    """
+    blob = _store_blob(ctx, fetched.path, sha)
+    mirror_ref, mirror_note = _populate_mirror(ctx, blob, sha)
+    asset = Asset(
+        pid=pid,
+        files=[
+            AssetFile(
+                path=f"sha256/{sha}",
+                sha256=f"sha256:{sha}",
+                size=fetched.size,
+                media_type=fetched.media_type,
+            )
+        ],
+        license=license,
+        redistributable=is_permissive(license.id),
+        access=access,
+        mirror=mirror_ref,
+        acquisition=Acquisition(
+            rung=rung,
+            url=url,
+            candidate=candidate or {},
+            match=match,
+            fetched=ctx.today,
+        ),
+    )
+    try:
+        patch_asset(ctx.registry_path, entry.citekey, asset)
+    except RegistryError as exc:
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            sha256=sha,
+            rung=rung,
+            url=url,
+            path=str(blob),
+            reason=(
+                f"acquired {sha} but could not record it: {exc} — the bytes are "
+                "in the cache, so re-run once the registry is readable"
+            ),
+        )
+    return Outcome(
+        citekey=entry.citekey,
+        bucket=BUCKET_FETCHED,
+        sha256=sha,
+        rung=rung,
+        url=url,
+        candidate=candidate,
+        match=match,
+        reason=mirror_note,
+        committable=asset.redistributable,
+        path=str(blob),
+        license=license.id,
+    )
+
+
 def _accept(
     entry: Entry,
     ctx: Context,
@@ -1430,58 +1518,18 @@ def _accept(
         could not be patched — the bytes are cached either way, and saying so is
         the difference between a recoverable state and a lost one.
     """
-    blob = _store_blob(ctx, fetched.path, sha)
-    mirror_ref, mirror_note = _populate_mirror(ctx, blob, sha)
-    observed = _license_from_observed(candidate.license)
-    asset = Asset(
-        pid=f"openalex:{_short_id(work.get('id'))}",
-        files=[
-            AssetFile(
-                path=f"sha256/{sha}",
-                sha256=f"sha256:{sha}",
-                size=fetched.size,
-                media_type=fetched.media_type,
-            )
-        ],
-        license=observed,
-        redistributable=is_permissive(observed.id),
-        access=_access_from_work(work),
-        mirror=mirror_ref,
-        acquisition=Acquisition(
-            rung=candidate.rung,
-            url=candidate.url,
-            candidate=candidate.as_json(),
-            match=match.as_json(),
-            fetched=ctx.today,
-        ),
-    )
-    try:
-        patch_asset(ctx.registry_path, entry.citekey, asset)
-    except RegistryError as exc:
-        return Outcome(
-            citekey=entry.citekey,
-            bucket=BUCKET_ERROR,
-            sha256=sha,
-            rung=candidate.rung,
-            url=candidate.url,
-            path=str(blob),
-            reason=(
-                f"acquired {sha} but could not record it: {exc} — the bytes are "
-                "in the cache, so re-run once the registry is readable"
-            ),
-        )
-    return Outcome(
-        citekey=entry.citekey,
-        bucket=BUCKET_FETCHED,
-        sha256=sha,
+    return _bind(
+        entry,
+        ctx,
+        fetched,
+        sha,
         rung=candidate.rung,
         url=candidate.url,
         candidate=candidate.as_json(),
         match=match.as_json(),
-        reason=mirror_note,
-        committable=asset.redistributable,
-        path=str(blob),
-        license=observed.id,
+        license=_license_from_observed(candidate.license),
+        pid=f"openalex:{_short_id(work.get('id'))}",
+        access=_access_from_work(work),
     )
 
 
@@ -1614,6 +1662,159 @@ def acquire_one(
         if outcome is not None:
             return outcome
     return _exhausted(entry, work, state)
+
+
+# --- confirm: promote quarantine, or adopt a manual file ---------------------
+#
+# The two ways an entry that never got bound by `acquire_one` becomes bound
+# anyway, both requiring an explicit human act (spec §7). Neither re-resolves
+# the OpenAlex work: a quarantine promotion and a manual adoption record
+# nothing beyond what the human is vouching for right now, so `pid` and
+# `access` are left unset rather than reconstructed from a stale or absent
+# anchor work.
+
+
+def _quarantine_manifest(directory: Path) -> list[str]:
+    """Return the bare checksums currently parked in a quarantine directory.
+
+    :param directory: A citekey's quarantine directory (may not exist).
+    :returns: Sorted bare checksums, one per parked ``.pdf``.
+    """
+    if not directory.is_dir():
+        return []
+    return sorted(pdf.stem for pdf in directory.glob("*.pdf"))
+
+
+def confirm_quarantined(entry: Entry, ctx: Context, sha256: str) -> Outcome:
+    """Promote a quarantined candidate after a human has reviewed it.
+
+    The blob is verified against its own filename-hash before promotion — the
+    quarantine file is named by the hash of its contents, so re-hashing it is
+    a free integrity check, and it means a truncated or tampered quarantine
+    file cannot be blessed into the registry. Nothing else about the
+    candidate is re-examined: the gate already ran when the bytes were
+    quarantined, and the human's ``confirm`` *is* the re-examination spec
+    §5.3 asks for.
+
+    :param entry: The registry entry the quarantined candidate was proposed for.
+    :param ctx: The acquisition context.
+    :param sha256: The checksum naming the quarantined candidate, prefixed or
+        bare.
+    :returns: :data:`BUCKET_FETCHED` on success. :data:`BUCKET_ERROR`, with
+        quarantine left untouched, if the parked bytes no longer match their
+        own filename-hash.
+    :raises RetrievalError: If no quarantined candidate matches `sha256` for
+        this citekey, naming what is actually in quarantine so the human can
+        correct the checksum rather than read a lookup traceback.
+    """
+    bare = bare_sha256(sha256)
+    directory = _quarantine_dir(ctx.cache_dir, entry.citekey)
+    pdf = directory / f"{bare}.pdf"
+    sidecar = directory / f"{bare}.json"
+    if not pdf.is_file() or not sidecar.is_file():
+        present = _quarantine_manifest(directory)
+        available = (
+            f"quarantine holds {present} for {entry.citekey!r}"
+            if present
+            else f"quarantine is empty for {entry.citekey!r}"
+        )
+        raise RetrievalError(
+            f"no quarantined candidate {bare} for {entry.citekey!r} — {available}"
+        )
+    actual = sha256_file(pdf)
+    if actual != bare:
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            sha256=actual,
+            path=str(pdf),
+            reason=(
+                f"quarantined file {pdf.name} now hashes to {actual}, not {bare} "
+                "— truncated or tampered; refusing to promote it, quarantine "
+                "left untouched"
+            ),
+        )
+    data: dict[str, Any] = json.loads(sidecar.read_text(encoding="utf-8"))
+    candidate = cast("dict[str, Any]", data["candidate"])
+    match = cast("dict[str, Any]", data["match"])
+    rung = cast("str", data["rung"])
+    url = cast("str | None", data["url"])
+    license = _license_from_observed(cast("str | None", candidate.get("license")))
+    fetched = FetchedBytes(
+        path=pdf, media_type="application/pdf", size=pdf.stat().st_size
+    )
+    outcome = _bind(
+        entry,
+        ctx,
+        fetched,
+        bare,
+        rung=rung,
+        url=url,
+        candidate=candidate,
+        match=match,
+        license=license,
+    )
+    sidecar.unlink(missing_ok=True)
+    return outcome
+
+
+def adopt_file(entry: Entry, ctx: Context, path: Path) -> Outcome:
+    """Record a PDF the human downloaded and verified themselves.
+
+    This is what makes an exhausted ladder a workflow rather than a dead
+    end (spec §5, §7): a human works the ``manual`` worklist by hand — a
+    paywalled portal, an inter-library loan, a colleague's copy — and hands
+    the result back with ``confirm --file``.
+
+    **Copies, never moves.** `path` is the researcher's own file, most likely
+    sitting in a Downloads folder; it must still be there after this
+    returns, so the bytes are copied into a scratch location before anything
+    is hashed or stored.
+
+    The recorded license is all-``None`` and therefore non-redistributable:
+    the tool observed nothing about the rights on a file it did not fetch
+    from anywhere it could see, and an absent observation is never a grant
+    (spec §6) — the same default every other unlicensed acquisition in this
+    module gets.
+
+    :param entry: The registry entry to bind the file to.
+    :param ctx: The acquisition context.
+    :param path: The human-supplied PDF.
+    :returns: :data:`BUCKET_FETCHED` on success. A :data:`BUCKET_ERROR`
+        outcome, with the registry left unchanged, when the file is not a PDF.
+    :raises RetrievalError: If `path` does not exist — a plain, actionable
+        message rather than a raw ``FileNotFoundError`` traceback.
+    """
+    if not path.is_file():
+        raise RetrievalError(f"no file at {path} to adopt")
+    dest = ctx.cache_dir / "incoming" / f"{_safe_name(entry.citekey)}.manual.part"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, dest)
+    fetched = FetchedBytes(path=dest, media_type=None, size=dest.stat().st_size)
+    if not looks_like_pdf(fetched):
+        dest.unlink(missing_ok=True)
+        return Outcome(
+            citekey=entry.citekey,
+            bucket=BUCKET_ERROR,
+            reason=(
+                f"{path} does not look like a PDF (no %PDF- magic bytes and no "
+                "application/pdf content type) — refusing to adopt it, the "
+                "registry is unchanged"
+            ),
+        )
+    fetched.media_type = "application/pdf"
+    sha = sha256_file(dest)
+    return _bind(
+        entry,
+        ctx,
+        fetched,
+        sha,
+        rung=RUNG_MANUAL,
+        url=None,
+        candidate=None,
+        match=MatchRecord(verdict=IDENTITY).as_json(),
+        license=License(),
+    )
 
 
 # --- the sweep ----------------------------------------------------------------
