@@ -1743,3 +1743,289 @@ def test_a_venue_template_falls_back_to_the_work_level_license(
     outcome = a.acquire_one(entry, ctx)
     assert outcome.rung == a.RUNG_VENUE
     assert _asset(path).license.id == "cc-by"
+
+
+# --- task 11: the sweep and its report ---------------------------------------
+#
+# `_registry` (above) writes exactly one entry, so the multi-entry sweep tests
+# below use their own small helpers rather than stretching that one to fit.
+
+
+def _bib(
+    citekey: str, doi: str, *, title: str = "T", year: int = 2020, family: str = "A"
+) -> dict[str, Any]:
+    return {
+        "id": citekey,
+        "type": "article",
+        "title": title,
+        "author": [{"family": family, "given": "X"}],
+        "issued": {"date-parts": [[year]]},
+        "DOI": doi,
+    }
+
+
+def _write_bib(tmp_path: Path, items: list[dict[str, Any]]) -> Path:
+    path = tmp_path / "references.json"
+    path.write_text(json.dumps(items, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_triage(tmp_path: Path, rows: dict[str, str]) -> Path:
+    path = tmp_path / "triage.yml"
+    body = "".join(f"{key}:\n  disposition: {value}\n" for key, value in rows.items())
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_report_has_every_bucket_and_is_complete(tmp_path: Path) -> None:
+    _write_bib(
+        tmp_path,
+        [
+            _bib("fetches", "10.1000/fetches", family="Fa"),
+            _bib("refuses", "10.1000/refuses", family="Fb"),
+        ],
+    )
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/fetches": _oa(
+                wid="Wf", family="Fa", pdf="http://x/f.pdf"
+            ),
+            "/works/Wf": _oa(wid="Wf", family="Fa", pdf="http://x/f.pdf"),
+            "/works/doi:10.1000/refuses": _oa(wid="Wr", family="Fb", pdf=None),
+            "/works/Wr": _oa(wid="Wr", family="Fb", pdf=None),
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, FakeFetcher()))
+    assert set(report) == {
+        "complete",
+        "not_attempted",
+        "fetched",
+        "cached",
+        "quarantined",
+        "manual",
+        "committable",
+        "errors",
+    }
+    assert report["complete"] is True
+    assert report["not_attempted"] == 0
+
+
+def test_bucket_constants_match_report_keys(tmp_path: Path) -> None:
+    """Pins ``report[outcome.bucket]``: a rename desynchronizing them would KeyError."""
+    _write_bib(tmp_path, [])
+    report = a.fetch_all(_ctx(tmp_path, FakeClient({}), NeverFetcher()))
+    for constant in (
+        a.BUCKET_CACHED,
+        a.BUCKET_FETCHED,
+        a.BUCKET_QUARANTINED,
+        a.BUCKET_MANUAL,
+        a.BUCKET_ERROR,
+    ):
+        assert constant in report
+
+
+def test_disposition_filters_the_sweep(tmp_path: Path) -> None:
+    _write_bib(
+        tmp_path,
+        [
+            _bib("screened_entry", "10.1000/s", family="Sa"),
+            _bib("inbox_entry", "10.1000/i", family="Ib"),
+        ],
+    )
+    _write_triage(tmp_path, {"screened_entry": "screened", "inbox_entry": "inbox"})
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/s": _oa(wid="Ws", family="Sa", pdf="http://x/s.pdf"),
+            "/works/Ws": _oa(wid="Ws", family="Sa", pdf="http://x/s.pdf"),
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, FakeFetcher()), disposition="screened")
+    assert [row["citekey"] for row in report["fetched"]] == ["screened_entry"]
+
+
+def test_entries_without_a_triage_row_are_excluded_when_filtering(
+    tmp_path: Path,
+) -> None:
+    _write_bib(tmp_path, [_bib("solo", "10.1000/solo")])
+    report = a.fetch_all(
+        _ctx(tmp_path, FakeClient({}), NeverFetcher()), disposition="screened"
+    )
+    assert report["fetched"] == []
+
+
+def test_entries_without_a_triage_row_are_included_when_not_filtering(
+    tmp_path: Path,
+) -> None:
+    _write_bib(tmp_path, [_bib("solo", "10.1000/solo", family="So")])
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/solo": _oa(
+                wid="Wsolo", family="So", pdf="http://x/solo.pdf"
+            ),
+            "/works/Wsolo": _oa(wid="Wsolo", family="So", pdf="http://x/solo.pdf"),
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, FakeFetcher()))
+    assert [row["citekey"] for row in report["fetched"]] == ["solo"]
+
+
+def test_explicit_citekeys_override_the_registry_order(tmp_path: Path) -> None:
+    _write_bib(
+        tmp_path,
+        [_bib("a", "10.1000/a", family="Aa"), _bib("b", "10.1000/b", family="Bb")],
+    )
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/a": _oa(wid="Wa", family="Aa", pdf=None),
+            "/works/Wa": _oa(wid="Wa", family="Aa", pdf=None),
+            "/works/doi:10.1000/b": _oa(wid="Wb", family="Bb", pdf=None),
+            "/works/Wb": _oa(wid="Wb", family="Bb", pdf=None),
+            "/works": {"results": []},
+            "export.arxiv.org": "<feed/>",
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, NeverFetcher()), citekeys=["b", "a"])
+    assert [row["citekey"] for row in report["manual"]] == ["b", "a"]
+
+
+def test_unknown_citekey_is_an_error_row_not_a_crash(tmp_path: Path) -> None:
+    _write_bib(tmp_path, [_bib("known", "10.1000/known")])
+    report = a.fetch_all(
+        _ctx(tmp_path, FakeClient({}), NeverFetcher()), citekeys=["nope"]
+    )
+    assert report["complete"] is True
+    assert len(report["errors"]) == 1
+    assert "no entry" in report["errors"][0]["error"]
+
+
+def test_a_rate_limit_aborts_the_sweep_marked_incomplete(tmp_path: Path) -> None:
+    """The point of the test.
+
+    Nobody is told to download a paper by hand because OpenAlex throttled
+    us — the untried entries are not bucketed at all, least of all as
+    ``manual``.
+    """
+    _write_bib(
+        tmp_path,
+        [_bib("a1", "10.1000/a1"), _bib("a2", "10.1000/a2"), _bib("a3", "10.1000/a3")],
+    )
+    client = FakeClient({"/works/": RateLimitError("429 from OpenAlex")})
+    report = a.fetch_all(_ctx(tmp_path, client, NeverFetcher()))
+    assert report["complete"] is False
+    assert report["not_attempted"] == 2
+    assert "rate-limited" in report["errors"][0]["error"]
+    assert report["manual"] == []
+
+
+def test_a_transport_error_on_one_entry_does_not_stop_the_sweep(
+    tmp_path: Path,
+) -> None:
+    """An ``HttpError`` is per-entry; only a rate limit aborts the sweep."""
+    _write_bib(
+        tmp_path,
+        [
+            _bib("broken", "10.1000/broken", family="Br"),
+            _bib("ok", "10.1000/ok", family="Ok"),
+        ],
+    )
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/broken": _oa(
+                wid="Wbroken", family="Br", pdf="http://x/b.pdf"
+            ),
+            "/works/Wbroken": HttpError("502 from OpenAlex"),
+            "/works/doi:10.1000/ok": _oa(wid="Wok", family="Ok", pdf="http://x/ok.pdf"),
+            "/works/Wok": _oa(wid="Wok", family="Ok", pdf="http://x/ok.pdf"),
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, FakeFetcher()))
+    assert report["complete"] is True
+    assert len(report["errors"]) == 1
+    assert "502" in report["errors"][0]["error"]
+    assert [row["citekey"] for row in report["fetched"]] == ["ok"]
+
+
+def test_committable_lists_only_permissive_entries(tmp_path: Path) -> None:
+    """A cache-only success (no permissive license) is still a success."""
+    _write_bib(
+        tmp_path,
+        [
+            _bib("licensed", "10.1000/lic", family="La"),
+            _bib("unlicensed", "10.1000/unlic", family="Ua"),
+        ],
+    )
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/lic": _oa(
+                wid="Wlic", family="La", pdf="http://x/l.pdf", lic="cc-by"
+            ),
+            "/works/Wlic": _oa(
+                wid="Wlic", family="La", pdf="http://x/l.pdf", lic="cc-by"
+            ),
+            "/works/doi:10.1000/unlic": _oa(
+                wid="Wunlic", family="Ua", pdf="http://x/u.pdf"
+            ),
+            "/works/Wunlic": _oa(wid="Wunlic", family="Ua", pdf="http://x/u.pdf"),
+        }
+    )
+    report = a.fetch_all(_ctx(tmp_path, client, FakeFetcher()))
+    assert [row["citekey"] for row in report["committable"]] == ["licensed"]
+    assert {row["citekey"] for row in report["fetched"]} == {"licensed", "unlicensed"}
+
+
+# --- not in the brief: obligations the task handed forward from Task 10 -----
+
+
+def test_fetched_row_preserves_a_partial_mirror_failure_reason(tmp_path: Path) -> None:
+    """A fetched row must not go silent about a partial mirror failure.
+
+    Projecting it down to ``{citekey, sha256, rung, url}`` would make a
+    partial mirror-write failure invisible — exactly the silent degradation
+    spec §9 forbids. The report must carry the full outcome.
+    """
+    _write_bib(tmp_path, [_bib("mirrorfail", "10.1000/mf", family="Mf")])
+    client = FakeClient(
+        {
+            "/works/doi:10.1000/mf": _oa(wid="Wmf", family="Mf", pdf="http://x/mf.pdf"),
+            "/works/Wmf": _oa(wid="Wmf", family="Mf", pdf="http://x/mf.pdf"),
+        }
+    )
+    mirror = FakeMirror(put_error=RetrievalError("rclone copyto to mirror failed"))
+    ctx = _ctx(tmp_path, client, FakeFetcher(), mirror=mirror)
+    report = a.fetch_all(ctx)
+    assert len(report["fetched"]) == 1
+    assert report["fetched"][0]["reason"] is not None
+    assert "mirror write failed" in report["fetched"][0]["reason"]
+
+
+def test_error_bucket_as_json_uses_error_not_reason() -> None:
+    """Pins the key-spelling decision directly on ``Outcome.as_json()``."""
+    outcome = a.Outcome(citekey="k", bucket=a.BUCKET_ERROR, reason="boom")
+    payload = outcome.as_json()
+    assert payload["error"] == "boom"
+    assert "reason" not in payload
+
+
+def test_non_error_bucket_as_json_still_uses_reason() -> None:
+    outcome = a.Outcome(citekey="k", bucket=a.BUCKET_MANUAL, reason="boom")
+    payload = outcome.as_json()
+    assert payload["reason"] == "boom"
+    assert "error" not in payload
+
+
+def test_error_rows_from_acquire_one_also_use_the_error_key(tmp_path: Path) -> None:
+    """The rename applies to ``acquire_one``'s own error rows too.
+
+    Not just the sweep's synthesized ones (unknown citekey,
+    aborted-by-rate-limit) — a consumer reading ``errors[]`` should never
+    have to check two spellings.
+    """
+    _write_bib(tmp_path, [{"id": "noid", "type": "article", "title": "T"}])
+    report = a.fetch_all(_ctx(tmp_path, FakeClient({}), NeverFetcher()))
+    assert len(report["errors"]) == 1
+    row = report["errors"][0]
+    assert "reason" not in row
+    assert row["error"] is not None
+    assert "no DOI" in row["error"]

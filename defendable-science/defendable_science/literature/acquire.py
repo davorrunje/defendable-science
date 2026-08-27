@@ -34,6 +34,8 @@ from defendable_science.literature.registry import (
     License,
     MirrorRef,
     RegistryError,
+    load_registry,
+    load_triage,
     patch_asset,
 )
 
@@ -44,7 +46,7 @@ if TYPE_CHECKING:
     from defendable_science.core.download import BytesFetcher, FetchedBytes
     from defendable_science.core.http import HttpClient
     from defendable_science.core.mirror import Mirror
-    from defendable_science.literature.registry import Entry
+    from defendable_science.literature.registry import Entry, Registry, TriageRow
 
     class SearchClient(Protocol):
         """The subset of :class:`~defendable_science.core.http.HttpClient` rungs 4-6 need.
@@ -833,7 +835,9 @@ class Outcome:
         *refusal* that came closest, so a human can see which axis failed.
     :param reason: Why, on any outcome that is not a plain success. Also carries
         a partial-success note (a mirror write that failed after the bytes were
-        safely cached and recorded).
+        safely cached and recorded). Serialized as ``error`` rather than
+        ``reason`` for a :data:`BUCKET_ERROR` outcome (spec §7's report shape),
+        so a consumer reading ``errors[]`` never has to check two key spellings.
     :param tried: Rungs attempted, in order, each once.
     :param landing_urls: Somewhere for a human to click, on a ``manual`` outcome.
     :param committable: Whether the observed license permits an in-repo copy.
@@ -860,9 +864,15 @@ class Outcome:
     def as_json(self) -> dict[str, Any]:
         """Return the outcome as a JSON-ready report row.
 
+        The ``reason`` field is renamed to ``error`` for a :data:`BUCKET_ERROR`
+        outcome, matching the sweep's own synthesized error rows (unknown
+        citekey, aborted-by-rate-limit) and spec §7's example report — a
+        consumer reading ``errors[]`` should never have to check two key
+        spellings for the same information.
+
         :returns: The JSON-ready object.
         """
-        return {
+        payload: dict[str, Any] = {
             "citekey": self.citekey,
             "bucket": self.bucket,
             "sha256": self.sha256,
@@ -877,6 +887,9 @@ class Outcome:
             "path": self.path,
             "license": self.license,
         }
+        if self.bucket == BUCKET_ERROR:
+            payload["error"] = payload.pop("reason")
+        return payload
 
 
 @dataclass
@@ -1601,3 +1614,111 @@ def acquire_one(
         if outcome is not None:
             return outcome
     return _exhausted(entry, work, state)
+
+
+# --- the sweep ----------------------------------------------------------------
+
+
+def _select(
+    registry: Registry,
+    triage: dict[str, TriageRow],
+    citekeys: list[str] | None,
+    disposition: str | None,
+) -> list[tuple[str, Entry | None]]:
+    """Choose which citekeys to sweep, and in what order.
+
+    :param registry: The loaded registry.
+    :param triage: The loaded triage sidecar, by citekey.
+    :param citekeys: Explicit entries to attempt, in this order; the whole
+        registry, in file order, when ``None``.
+    :param disposition: Restrict to citekeys whose triage row carries this
+        disposition. A citekey with no triage row is excluded when this is
+        given and included when it is not.
+    :returns: ``(citekey, entry)`` pairs, in sweep order; ``entry`` is ``None``
+        for a citekey with no matching registry entry.
+    """
+    keys = (
+        citekeys
+        if citekeys is not None
+        else [entry.citekey for entry in registry.entries]
+    )
+    selected: list[tuple[str, Entry | None]] = []
+    for key in keys:
+        if disposition is not None:
+            row = triage.get(key)
+            if row is None or row.disposition != disposition:
+                continue
+        selected.append((key, registry.get(key)))
+    return selected
+
+
+def fetch_all(
+    ctx: Context,
+    *,
+    citekeys: list[str] | None = None,
+    disposition: str | None = None,
+    refetch: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Sweep the registry, bucketing every entry's outcome.
+
+    A rate limit **aborts** the sweep with ``complete: false`` and a
+    ``not_attempted`` count, because a throttle is not information about the
+    remaining papers: reporting them as ``manual`` would tell a human to
+    download by hand what the tool simply never asked for. Any other transport
+    failure is per-entry — it lands in ``errors`` and the sweep continues.
+
+    :param ctx: The acquisition context.
+    :param citekeys: Explicit entries to attempt, in this order; the whole
+        registry when ``None``. An entry named here that is not in the
+        registry becomes an ``errors[]`` row rather than a crash.
+    :param disposition: Restrict to entries whose ``triage.yml`` row carries
+        this disposition. An entry with no triage row is excluded when this is
+        given and included when it is not.
+    :param refetch: Re-run the ladder for entries that already have a
+        checksum.
+    :param dry_run: Report the rung that would yield bytes without
+        downloading.
+    :returns: The report — ``complete``, ``not_attempted``, and the
+        ``fetched`` / ``cached`` / ``quarantined`` / ``manual`` /
+        ``committable`` / ``errors`` buckets.
+    :raises RegistryError: If the registry or the triage sidecar cannot be
+        read.
+    """
+    from defendable_science.core.http import HttpError, RateLimitError
+
+    registry = load_registry(ctx.registry_path)
+    triage = load_triage(ctx.triage_path)
+    targets = _select(registry, triage, citekeys, disposition)
+    report: dict[str, Any] = {
+        "complete": True,
+        "not_attempted": 0,
+        "fetched": [],
+        "cached": [],
+        "quarantined": [],
+        "manual": [],
+        "committable": [],
+        "errors": [],
+    }
+    for index, (citekey, entry) in enumerate(targets):
+        if entry is None:
+            report["errors"].append(
+                {"citekey": citekey, "error": f"no entry {citekey!r} in the registry"}
+            )
+            continue
+        try:
+            outcome = acquire_one(entry, ctx, refetch=refetch, dry_run=dry_run)
+        except RateLimitError as exc:
+            report["errors"].append(
+                {"citekey": citekey, "error": f"rate-limited, sweep aborted: {exc}"}
+            )
+            report["complete"] = False
+            report["not_attempted"] = len(targets) - index - 1
+            break
+        except HttpError as exc:
+            report["errors"].append({"citekey": citekey, "error": str(exc)})
+            continue
+        report[outcome.bucket].append(outcome.as_json())
+        if outcome.committable:
+            report["committable"].append(outcome.as_json())
+    return report
