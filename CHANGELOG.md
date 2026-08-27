@@ -34,6 +34,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`docs/USER-GUIDE.md` restructured around the `Guides` nav group.** The single
+  page carried a paragraph per capability and nothing deeper; five new
+  per-capability guides now hold the depth it implied, following
+  `docs/guides/literature.md`'s conventions:
+  [`dataset`](docs/guides/dataset.md) (tiers as a license question, the
+  resolution chain, the mirror, what `audit` checks beyond fixity),
+  [`experiment-backend`](docs/guides/experiment-backend.md) (the four
+  capabilities, what a minimal implementation looks like, why the plugin ships
+  none), [`defend`](docs/guides/defend.md) (the three targets and what is
+  off-limits in each, the persona levers, the evidentiary record),
+  [`progress`](docs/guides/progress.md) (the four roll-ups and the Goodhart
+  argument), and [`keys`](docs/guides/keys.md) (precedence, relocation, the
+  plaintext-at-rest caveat). The user guide keeps onboarding plus the lifecycle
+  walkthrough and links out.
+  Every page now applies the literature guide's shell-block-vs-quote-block
+  convention: `progress status`, `defend claim`, `hypothesis-exploration park`
+  and `paper-exploration generate` were shown in bare code blocks that read as
+  shell commands but are skill modes, and are now quote blocks with the real
+  `defendable-science backlog …` invocation alongside where one exists. (#103)
 - **`backlog promote --scaffold` performs the handoff both exploration skills
   already documented.** The scaffolders existed and were tested, but no CLI
   command reached them — `backlog --help` listed only

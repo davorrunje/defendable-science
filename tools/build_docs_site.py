@@ -131,7 +131,28 @@ def plan() -> tuple[dict[str, str | None], dict[str, object]]:
     reg("index", "README.md")
     reg("get-started/user-guide", "docs/USER-GUIDE.md")
 
-    guide_pages = [reg("guides/literature", "docs/guides/literature.md")]
+    # Ordered as a learning path, not alphabetically: the two capability guides a
+    # reader needs first, then the part they have to implement, then the
+    # cross-cutting skills, then credentials. A glob would sort these wrongly.
+    # Ordered as a learning path, not alphabetically: the two capability guides a
+    # reader needs first, then the part they have to implement, then the
+    # cross-cutting skills, then credentials. A directory glob would sort these
+    # wrongly, so the list is explicit — and checked, so a renamed or deleted
+    # guide fails the build instead of shipping a dead nav entry.
+    guide_names = (
+        "literature",
+        "dataset",
+        "experiment-backend",
+        "defend",
+        "progress",
+        "keys",
+    )
+    missing = [
+        n for n in guide_names if not (REPO_ROOT / f"docs/guides/{n}.md").is_file()
+    ]
+    if missing:
+        raise BuildError(f"guide pages have no source markdown: {sorted(missing)}")
+    guide_pages = [reg(f"guides/{n}", f"docs/guides/{n}.md") for n in guide_names]
 
     skills_dir = REPO_ROOT / "skills"
     skills_pages = [
