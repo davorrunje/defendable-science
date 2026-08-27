@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: The four keys ``config.yml``'s ``layout:`` block accepts.
-LAYOUT_KEYS = ("research_root", "literature_dir", "datasets_manifest", "thesis_dir")
+LAYOUT_KEYS: tuple[str, ...] = (
+    "research_root",
+    "literature_dir",
+    "datasets_manifest",
+    "thesis_dir",
+)
 
 #: Fixed, deliberately: it holds ``config.yml`` itself, so it cannot be
 #: relocated by ``config.yml``.
@@ -24,7 +29,7 @@ DEFAULT_DATASETS_MANIFEST = Path("datasets.yml")
 
 #: Staged-document filenames that must carry a status block, and their level.
 #: One list, read by ``init``, ``check`` and the template drift guard.
-STAGED_DOCUMENTS = {
+STAGED_DOCUMENTS: dict[str, str] = {
     "hypothesis.md": "hypothesis",
     "strategy.md": "hypothesis",
     "findings.md": "hypothesis",
