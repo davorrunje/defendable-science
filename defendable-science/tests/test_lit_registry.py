@@ -696,6 +696,30 @@ def test_patch_triage_refuses_a_row_aliased_inside_a_list(tmp_path: Path) -> Non
     assert path.read_bytes() == before
 
 
+def test_patch_triage_refuses_a_self_referential_anchor_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """A row aliased into its own nested value makes the node graph cyclic.
+
+    ``&anchor`` inside the row it names, aliased back into itself
+    (``a2020: &shared {..., self: *shared}``), is a legitimate composed shape
+    — a plausible typo, not malformed YAML — and must be refused like any
+    other anchor reuse, not crash with a ``RecursionError``.
+    """
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020: &shared\n  disposition: screened\n  self: *shared\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    assert "a2020" in str(caught.value)
+    assert path.read_bytes() == before
+
+
 def test_patch_triage_refuses_a_merge_key_reuse(tmp_path: Path) -> None:
     """A merge key (`<<: *base`) is refused by name, not silently expanded."""
     path = tmp_path / "t.yml"

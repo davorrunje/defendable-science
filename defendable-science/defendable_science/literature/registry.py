@@ -555,22 +555,39 @@ def _has_comments(text: str) -> bool:
     return any(line.lstrip().startswith("#") for line in text.splitlines())
 
 
-def _walk_node(node: yaml.Node, owner: str, visits: dict[int, list[str]]) -> None:
+def _walk_node(
+    node: yaml.Node, owner: str, visits: dict[int, list[str]], stack: set[int]
+) -> None:
     """Record that ``node`` (and everything reachable from it) belongs to ``owner``.
+
+    A self-referential anchor (``a: &s {self: *s}``) makes the composed node
+    graph cyclic — a legitimate YAML shape, not malformed input — so this
+    tracks the node ids currently on the recursion path (``stack``) and stops
+    descending once it returns to one of them, rather than recursing forever.
+    The owner is still recorded for that revisit: reaching a node a second
+    time, even via its own cycle, is exactly what "aliased" means here.
 
     :param node: The composed node to visit.
     :param owner: The top-level citekey whose subtree this node was reached from.
     :param visits: Accumulator, mutated in place: node id → the owners that
         reached it, one entry per visit (so a node reached twice from the same
         owner still shows a duplicate, meaning "aliased").
+    :param stack: Node ids currently being descended into, on this call path;
+        mutated in place and restored before returning.
     """
     visits.setdefault(id(node), []).append(owner)
+    if id(node) in stack:
+        return
     if isinstance(node, yaml.MappingNode):
+        stack.add(id(node))
         for _, value_node in node.value:
-            _walk_node(value_node, owner, visits)
+            _walk_node(value_node, owner, visits, stack)
+        stack.discard(id(node))
     elif isinstance(node, yaml.SequenceNode):
+        stack.add(id(node))
         for item_node in node.value:
-            _walk_node(item_node, owner, visits)
+            _walk_node(item_node, owner, visits, stack)
+        stack.discard(id(node))
 
 
 def _compose_row_visits(
@@ -586,10 +603,11 @@ def _compose_row_visits(
     """
     row_nodes: dict[str, yaml.Node] = {}
     visits: dict[int, list[str]] = {}
+    stack: set[int] = set()
     for key_node, value_node in root.value:
         citekey = str(key_node.value)
         row_nodes[citekey] = value_node
-        _walk_node(value_node, citekey, visits)
+        _walk_node(value_node, citekey, visits, stack)
     return row_nodes, visits
 
 
