@@ -1023,7 +1023,13 @@ def test_config_check_flags_an_unknown_layout_key() -> None:
 
     findings = c.check_config(LAYOUT, FakeProbe(files))
 
-    assert any("papers_dir" in f.message and f.severity == "invalid" for f in findings)
+    # Exactly one finding for the unknown key
+    invalid_layout = [
+        f for f in findings if "papers_dir" in f.message and f.severity == "invalid"
+    ]
+    assert len(invalid_layout) == 1
+    # No duplicate findings with the same message
+    assert len({(f.severity, f.message) for f in findings}) == len(findings)
 
 
 def test_config_check_flags_a_cache_dir_that_is_not_gitignored() -> None:
@@ -1032,11 +1038,15 @@ def test_config_check_flags_a_cache_dir_that_is_not_gitignored() -> None:
 
     findings = c.check_config(LAYOUT, FakeProbe(files))
 
-    assert any(
-        ".defendable-science/cache/" in f.message and f.severity == "invalid"
+    cache_not_ignored = [
+        f
         for f in findings
-    )
-    assert any(".gitignore" in f.remedy for f in findings)
+        if ".defendable-science/cache" in f.message and f.severity == "invalid"
+    ]
+    assert len(cache_not_ignored) == 1
+    assert ".gitignore" in cache_not_ignored[0].remedy
+    # No duplicate findings with the same message
+    assert len({(f.severity, f.message) for f in findings}) == len(findings)
 
 
 def test_config_check_flags_a_missing_gitignore() -> None:
@@ -1092,3 +1102,66 @@ def test_config_check_flags_an_unreadable_gitignore() -> None:
     findings = c.check_config(LAYOUT, probe)
 
     assert any(f.severity == "unreadable" and ".gitignore" in f.file for f in findings)
+
+
+def test_config_check_accepts_cache_dir_with_trailing_slash_in_config_matching_without_in_gitignore() -> (
+    None
+):
+    """Trailing-slash differences should not cause false failures."""
+    files = _scaffolded()
+    files[LAYOUT.config_file] = (
+        "cache_dir: .defendable-science/cache\nexperiment_backend: bench\n"
+    )
+    files[ROOT / ".gitignore"] = ".defendable-science/cache/\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    # Should be silent (config without trailing slash matches .gitignore entry with one)
+    assert not any("cache" in f.message for f in findings)
+
+
+def test_config_check_accepts_cache_dir_without_trailing_slash_in_config_matching_with_in_gitignore() -> (
+    None
+):
+    """Trailing-slash differences should not cause false failures."""
+    files = _scaffolded()
+    files[LAYOUT.config_file] = (
+        "cache_dir: .defendable-science/cache/\nexperiment_backend: bench\n"
+    )
+    files[ROOT / ".gitignore"] = ".defendable-science/cache\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    # Should be silent (config with trailing slash matches .gitignore entry without one)
+    assert not any("cache" in f.message for f in findings)
+
+
+def test_config_check_accepts_a_parent_directory_line_in_gitignore() -> None:
+    """A parent directory rule covers the cache_dir."""
+    files = _scaffolded()
+    files[LAYOUT.config_file] = (
+        "cache_dir: .defendable-science/cache/\nexperiment_backend: bench\n"
+    )
+    files[ROOT / ".gitignore"] = ".defendable-science/\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    # Should be silent (parent directory covers cache_dir)
+    assert not any("cache" in f.message for f in findings)
+
+
+def test_config_check_ignores_commented_out_gitignore_entries() -> None:
+    """A commented-out entry does not count as covering the cache_dir."""
+    files = _scaffolded()
+    files[LAYOUT.config_file] = (
+        f"cache_dir: {r.DEFAULT_CACHE_DIR}\nexperiment_backend: bench\n"
+    )
+    files[ROOT / ".gitignore"] = f"# {r.DEFAULT_CACHE_DIR}\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    # Should flag the missing entry
+    cache_missing = [
+        f for f in findings if "cache" in f.message and f.severity == "invalid"
+    ]
+    assert len(cache_missing) == 1

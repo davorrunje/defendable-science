@@ -26,11 +26,10 @@ are successful science, not findings.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-import yaml
+from typing import TYPE_CHECKING
 
 from defendable_science.check.model import Finding
+from defendable_science.core.config import load_config_text
 from defendable_science.dataset import manifest as mf
 from defendable_science.exploration.backlog import (
     REGISTRY_COLUMNS,
@@ -906,23 +905,46 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
 CONFIG_CHECK = "config"
 
 
-def _load_config_text(text: str) -> dict[str, Any]:
-    """Parse config YAML from text, matching load_config's validation rules.
+def _cache_dir_in_gitignore(cache_dir: str, gitignore_text: str) -> bool:
+    """Check if a cache_dir entry is covered by .gitignore rules.
 
-    :param text: The config file contents.
-    :returns: The parsed configuration mapping (empty if blank).
-    :raises ValueError: If the text is not valid YAML, or does not contain a
-        YAML mapping.
+    Handles three covering cases:
+    1. Exact match after normalizing trailing slashes.
+    2. A parent directory (e.g., ``.defendable-science/`` covers
+       ``.defendable-science/cache/``).
+
+    Skips blank lines and comment lines (first non-space character is ``#``).
+    Does NOT evaluate gitignore glob or wildcard patterns — only literal
+    matches and parent-directory containment.
+
+    :param cache_dir: The configured cache directory (e.g.,
+        ``.defendable-science/cache/``).
+    :param gitignore_text: The ``.gitignore`` file contents.
+    :returns: ``True`` if the cache_dir is covered by an active rule, else
+        ``False``.
     """
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"invalid YAML: {exc}") from exc
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise ValueError(f"expected a YAML mapping, got {type(data).__name__}")
-    return data
+    # Normalize cache_dir by removing trailing slash for comparison
+    normalized_cache = cache_dir.rstrip("/")
+
+    for line in gitignore_text.splitlines():
+        stripped = line.strip()
+        # Skip blank lines and comments
+        if not stripped or stripped[0] == "#":
+            continue
+
+        # Normalize the gitignore line by removing trailing slash
+        normalized_line = stripped.rstrip("/")
+
+        # Check exact match
+        if normalized_cache == normalized_line:
+            return True
+
+        # Check parent directory covering
+        # e.g., ".defendable-science/" covers ".defendable-science/cache/"
+        if normalized_cache.startswith(normalized_line + "/"):
+            return True
+
+    return False
 
 
 def check_config(layout: Layout, probe: Probe) -> list[Finding]:
@@ -950,9 +972,9 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     if isinstance(text, Finding):
         return [text]
 
-    # Parse config using same rules as load_config
+    # Parse config using same rules as load_config_text
     try:
-        config = _load_config_text(text)
+        config = load_config_text(text)
     except ValueError as exc:
         return [
             Finding(
@@ -989,9 +1011,8 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
         if isinstance(gitignore_text, Finding):
             findings.append(gitignore_text)
         else:
-            # Check if cache_dir is in .gitignore
-            gitignore_lines = {line.strip() for line in gitignore_text.splitlines()}
-            if cache_dir_config not in gitignore_lines:
+            # Check if cache_dir is covered by .gitignore
+            if not _cache_dir_in_gitignore(cache_dir_config, gitignore_text):
                 findings.append(
                     Finding(
                         severity="invalid",
