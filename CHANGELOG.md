@@ -107,6 +107,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a scaffolded `readiness: <synthesis | defensible>` used to reach `progress` as
   a real readiness. The dashboard stub says plainly that no generator has run
   rather than projecting a fabricated state.
+- **`defendable-science check [--root PATH] [--text]`** — validates every
+  defendable-science-owned file in a repo, reports each problem with its file,
+  what is wrong and how to fix it, and exits non-zero when anything is invalid.
+  Nothing could previously tell an author whether their repo was in a valid
+  state: validation existed per-artifact and only for datasets, so a corrupted
+  or hand-mangled file surfaced when some unrelated command tripped over it, or
+  never.
+  Findings carry one of three severities, and **the exit code is keyed to
+  severity, not count**: `invalid` (the file violates a shape the package owns)
+  and `unreadable` (it could not be read or parsed, so its validity is *unknown*)
+  exit 1; `gap` exits 0. `unreadable` is separate so that "failed to read
+  `references.json`" can never render as "0 references, all fine". `gap` exists
+  so an unsigned verdict, empty evidence or an unbound `experiment_backend` are
+  reported **without failing the run** — the exit code tracks invalid *files*,
+  never incomplete *science*. A `refuted` hypothesis and a `no-go` paper are
+  successful science and are never findings at all.
+  Six families run: layout, tables, frontmatter, registries, config and
+  cross-artifact. Every finding carries a copy-pasteable remedy, and `check`
+  reimplements no validator — where one took a path while `check` reads through
+  its filesystem seam, the validator's own module gained a text-level entry
+  point and its path-based function became a delegate, so each rule still has
+  exactly one implementation.
+
 - **`defendable-science check` reports a path that exists as the wrong type.**
   `init` probes with `path.exists()`, which is true for a file *and* for a
   directory, so a directory sitting where `papers.md` belongs was reported
