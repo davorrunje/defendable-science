@@ -1,6 +1,6 @@
 # ADR-0043: Pydantic is permitted at the parsing boundary, and nowhere else
 
-- Status: accepted · Date: 2026-08-29 · Deciders: Davor Runje (with Claude)
+- Status: accepted · Date: 2026-08-29 · Deciders: Davor Runje
 
 ## Context
 
