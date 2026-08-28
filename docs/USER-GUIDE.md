@@ -354,8 +354,10 @@ coherent through-line. Never a paper count.
 
 ## 7. Cross-cutting: progress and defend
 
-Both are skill modes — there is no `defendable-science progress` command group,
-and the examination half of `defend` is a conversation, not a command.
+Both are mostly skill modes: the roll-up you ask for in conversation has no CLI
+verb, and the examination half of `defend` is a conversation, not a command. The
+one exception is the dashboard, which `defendable-science progress dashboard`
+generates so the file's "never hand-edited" banner is true.
 
 - [`progress`](../skills/progress/SKILL.md) is **read-only reporting**. Roll-up is
   **semantic, not arithmetic**: it surfaces coverage and blockers, never a

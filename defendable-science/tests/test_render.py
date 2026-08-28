@@ -155,15 +155,24 @@ def test_rendered_milestones_matches_the_shipped_template() -> None:
     )
 
 
-def test_rendered_dashboard_says_it_has_no_generator_yet() -> None:
+def test_rendered_dashboard_stub_names_the_command_that_generates_it() -> None:
     text = r.render_dashboard()
 
     assert "GENERATED" in text
-    assert "progress" in text
     assert "0" not in text.split("\n")[0]  # never a fabricated count
-    # `progress` is a skill; there is no `progress dashboard` command. A shipped
-    # file naming one sends the reader straight to a shell error.
-    assert "progress dashboard" not in text
+    # `init` cannot project a real dashboard — it never walks the tree — so it
+    # still writes a stub. What it must not do is leave the reader without a
+    # next action: the command exists now (#130), so the stub names it.
+    assert "defendable-science progress dashboard" in text
+    assert r.is_ungenerated_dashboard(text) is True
+
+
+def test_a_generated_dashboard_is_not_mistaken_for_the_stub() -> None:
+    """`check` holds its tongue only about a repo never yet projected."""
+    from defendable_science.progress.model import Projection
+    from defendable_science.progress.render import render_dashboard
+
+    assert r.is_ungenerated_dashboard(render_dashboard(Projection())) is False
 
 
 def test_rendered_rclone_example_carries_no_credentials() -> None:

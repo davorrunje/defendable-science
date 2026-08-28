@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`progress dashboard` — the dashboard finally has a generator** (#130).
+  `dashboard.md` has always carried a GENERATED, never-hand-edited banner, but
+  nothing generated it: an agent retyped the file on every `progress`
+  invocation, so the rule had no mechanism behind it and model-authored prose
+  landed in the research record. `defendable-science progress dashboard
+  [--root PATH] [--dry-run]` now projects it from the `status:` frontmatter of
+  every hypothesis, paper and thesis artifact, and the `progress` skill calls
+  the command *instead of* projecting — one writer, so two projections can no
+  longer disagree. A table per level plus an indented detail line only where
+  there is something to say: coverage, named blockers, uncovered aims,
+  unresolved understanding. **No totals, no scores, no percentages**, `refuted`
+  and `no-go` render exactly as `confirmed` and `publish` do, an unsigned
+  verdict reads `(unsigned)` rather than decided, and an unset field reads `—`
+  rather than zero. There is deliberately **no timestamp in the file**: two runs
+  over an unchanged repo are byte-identical, which is what makes `check`'s
+  stale-dashboard comparison enforceable — `check` now reads the ids through the
+  same module that writes them, and its remedy names the command. The thesis
+  gate list is read from `thesis/milestones.yml` verbatim, never assumed from
+  the packaged starting list. A document that cannot be read keeps its row,
+  visibly `unknown`, and exits `1`: a projection that silently dropped an
+  artifact would be a projection that lies.
 - **`digest` gains an extraction mode — breadth reading for a survey**
   (`digest extract axes | record | sample | render`;
   [ADR-0040](decisions/0040-digest-extraction-mode.md)). Depth mode costs an hour

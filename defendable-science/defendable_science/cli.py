@@ -544,6 +544,129 @@ def check(
     raise typer.Exit(code=report.exit_code)
 
 
+# --- progress (defendable-science#130) --------------------------------------------
+progress = typer.Typer(
+    help="Read-only reporting: regenerate the dashboard projection.",
+    no_args_is_help=True,
+)
+app.add_typer(progress, name="progress")
+
+
+def _write_dashboard(layout: Layout, text: str, *, dry_run: bool) -> bool:
+    """Write the dashboard unless it already says exactly this, and say whether it did.
+
+    Comparing before writing is what keeps a no-op regeneration out of ``git
+    status``: the renderer is deterministic, so an unchanged repo must leave an
+    unchanged file.
+
+    :param layout: The resolved layout, which owns where the dashboard lives.
+    :param text: The rendered dashboard.
+    :param dry_run: Report what a real run would do, writing nothing.
+    :returns: Whether the file's contents differ from `text`.
+    :raises typer.Exit: Code 1 if the file cannot be written, with the reason
+        and no traceback. A failed write must never be reported as a
+        regenerated dashboard.
+    """
+    path = layout.dashboard
+    try:
+        existing: str | None = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Unreadable or absent: either way it is not `text`, so it is replaced.
+        existing = None
+    if existing == text:
+        return False
+    if not dry_run:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            typer.echo(
+                f"could not write {layout.rel(path)}: {exc}; the dashboard was not "
+                "regenerated and still shows the previous projection",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+    return True
+
+
+@progress.command("dashboard")
+def progress_dashboard(
+    root: Annotated[
+        str | None,
+        typer.Option(
+            "--root",
+            help=(
+                "Repository root to project; must be an existing directory. "
+                "Discovered from the current directory if omitted."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would be written; write nothing."),
+    ] = False,
+) -> None:
+    """Regenerate the dashboard from every artifact's status frontmatter.
+
+    The dashboard is a **pure projection**: this command is its only writer, and
+    it rewrites the file wholesale from the frontmatter, so a hand-edit is
+    (correctly) discarded — status belongs in the artifacts, not in the
+    projection. Nothing is adjudicated, and nothing is scored: the output
+    carries state, coverage and named gaps, never a total or a percentage
+    (meta-spec §3.6).
+
+    Deterministic by construction — no timestamp in the file, and a total sort
+    order on rows — so two runs over an unchanged repo leave the file byte for
+    byte the same and ``check``'s stale-dashboard comparison stays meaningful.
+
+    :param root: The repository root to project, which **must already exist as
+        a directory**. Discovered from the cwd when omitted.
+    :param dry_run: Render and report, writing nothing.
+    :raises typer.Exit: Code 0 when every artifact was read. Code 1 when
+        ``--root`` is not an existing directory, when the layout block is
+        invalid, when the dashboard cannot be written, or when any artifact
+        could not be read or parsed — the file is still written, with those rows
+        visibly ``unknown``, because a projection that silently dropped an
+        artifact would be one that lies; but the run is not a clean one and must
+        not exit as though it were.
+    """
+    from defendable_science.check.model import Report
+    from defendable_science.check.probe import FsProbe
+    from defendable_science.progress.collect import collect
+    from defendable_science.progress.render import render_dashboard
+
+    _config, layout = _layout_or_exit(_explicit_root_or_exit(root))
+    projection = collect(layout, FsProbe())
+    report = Report(findings=list(projection.findings))
+    changed = _write_dashboard(layout, render_dashboard(projection), dry_run=dry_run)
+    typer.echo(
+        json.dumps(
+            {
+                **report.to_json(),
+                "dashboard_path": layout.rel(layout.dashboard).as_posix(),
+                "dry_run": dry_run,
+                "changed": changed,
+                "generated_on": date_cls.today().isoformat(),
+                "artifact_count": len(projection.artifacts),
+                # `link` is relative to the dashboard, exactly as written into
+                # it, so a consumer resolves it against `dashboard_path`'s
+                # directory. `id` is `null` when the artifact has not been given
+                # one — absent, never an empty string standing in for it.
+                "artifacts": [
+                    {
+                        "level": artifact.level,
+                        "id": artifact.artifact_id,
+                        "link": artifact.link,
+                    }
+                    for artifact in projection.artifacts
+                ],
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=report.exit_code)
+
+
 # --- literature (defendable-science#1) ------------------------------------------------
 literature = typer.Typer(
     help="Citation-graph and metadata tools.", no_args_is_help=True

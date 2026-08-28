@@ -45,6 +45,18 @@ STAGED_DOCUMENTS: dict[str, str] = {
     "kappa.md": "thesis",
 }
 
+#: The one staged document per level that carries the *authoritative* verdict /
+#: readiness / sign-off block. The others may carry their own lighter
+#: ``understanding`` and ``last-updated`` (written by ``defend``), which
+#: ``progress`` surfaces but never treats as the verdict source. Not derivable
+#: from :data:`STAGED_DOCUMENTS`' order — a thesis is adjudicated by ``aims.md``,
+#: which precedes ``kappa.md`` — so it is written once, here.
+AUTHORITATIVE_DOCUMENTS: dict[str, str] = {
+    "hypothesis": "findings.md",
+    "paper": "decision.md",
+    "thesis": "aims.md",
+}
+
 
 class LayoutError(ValueError):
     """Raised on an invalid ``layout:`` block."""

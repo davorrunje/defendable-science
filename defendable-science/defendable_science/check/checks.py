@@ -14,7 +14,7 @@ whatever a host header carries beyond the profile (``Backlog.columns``,
 ``append_papers_registry``), so flagging a column an author added would make
 ``check`` nag about a documented extension point.
 
-Every read goes through :func:`_read`, so a file that could not be read is
+Every read goes through :func:`read_or_finding`, so a file that could not be read is
 reported as ``unreadable`` — validity *unknown* — and never as a valid empty
 one. Every column judgement is made against the profile its writer enforces
 (:func:`columns_for`, :data:`REGISTRY_COLUMNS`), so a table these checks call
@@ -26,6 +26,7 @@ are successful science, not findings.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from defendable_science.check.model import Finding, Report
@@ -68,8 +69,8 @@ _THESIS_REMEDY = (
 )
 
 
-def _is_file(probe: Probe, path: Path) -> bool:
-    """Whether `path` is a file another check family may read.
+def is_file(probe: Probe, path: Path) -> bool:
+    """Whether `path` is a file a check family — or ``progress`` — may read.
 
     :func:`check_layout` owns every fact about a required path's presence and
     type — that it is missing, and that it is a directory where a file belongs
@@ -89,12 +90,18 @@ def _header(columns: list[str]) -> str:
     return "| " + " | ".join(columns) + " |"
 
 
-def _read(path: Path, layout: Layout, probe: Probe, check: str) -> str | Finding:
+def read_or_finding(
+    path: Path, layout: Layout, probe: Probe, check: str
+) -> str | Finding:
     """Read `path`, or return the ``unreadable`` finding describing why.
 
     Never conflates a read failure with an empty file: "0 references" and
     "could not read references.json" are different facts, and only one of them
     means the repo is fine.
+
+    Public because ``progress`` reads the same tree and must degrade the same
+    way: two readers with two messages would be two definitions of what a
+    failed read means.
 
     :param path: The absolute path to read.
     :param layout: The layout, used to render `path` repo-relative.
@@ -317,7 +324,7 @@ def _check_backlog(
         portfolio backlog.
     :returns: At most one finding — unreadable, unparsable, or missing columns.
     """
-    text = _read(path, layout, probe, TABLES_CHECK)
+    text = read_or_finding(path, layout, probe, TABLES_CHECK)
     if isinstance(text, Finding):
         return [text]
     profile = columns_for(level)
@@ -398,9 +405,9 @@ def registry_rows(layout: Layout, probe: Probe) -> tuple[list[Row], list[Finding
         at all, because :func:`check_layout` owns both.
     """
     path = layout.papers_registry
-    if not _is_file(probe, path):
+    if not is_file(probe, path):
         return [], []
-    text = _read(path, layout, probe, TABLES_CHECK)
+    text = read_or_finding(path, layout, probe, TABLES_CHECK)
     if isinstance(text, Finding):
         return [], [text]
     table = _parse_table(path, text, layout, "paper", list(REGISTRY_COLUMNS))
@@ -542,7 +549,7 @@ def check_tables(layout: Layout, probe: Probe) -> list[Finding]:
         registered paper at a time.
     """
     rows, findings = registry_rows(layout, probe)
-    if _is_file(probe, layout.portfolio_backlog):
+    if is_file(probe, layout.portfolio_backlog):
         findings.extend(
             _check_backlog(layout, probe, layout.portfolio_backlog, "paper")
         )
@@ -659,7 +666,7 @@ def _check_frontmatter_document(
     findings: list[Finding] = []
 
     # Read the document
-    text = _read(path, layout, probe, FRONTMATTER_CHECK)
+    text = read_or_finding(path, layout, probe, FRONTMATTER_CHECK)
     if isinstance(text, Finding):
         return [text]
 
@@ -822,10 +829,10 @@ def _check_references(layout: Layout, probe: Probe) -> list[Finding]:
     path = layout.references
     rel = str(layout.rel(path))
 
-    if not _is_file(probe, path):
+    if not is_file(probe, path):
         return []
 
-    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    text = read_or_finding(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
         return [text]
 
@@ -858,10 +865,10 @@ def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
     path = layout.triage
     rel = str(layout.rel(path))
 
-    if not _is_file(probe, path):
+    if not is_file(probe, path):
         return []
 
-    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    text = read_or_finding(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
         return [text]
 
@@ -904,7 +911,7 @@ def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
     # Get the set of valid ids from references.json
     ref_path = layout.references
     ref_rel = str(layout.rel(ref_path))
-    ref_text = _read(ref_path, layout, probe, REGISTRIES_CHECK)
+    ref_text = read_or_finding(ref_path, layout, probe, REGISTRIES_CHECK)
     valid_ids: set[str] = set()
     if not isinstance(ref_text, Finding):
         try:
@@ -949,10 +956,10 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
     path = layout.datasets_manifest
     rel = str(layout.rel(path))
 
-    if not _is_file(probe, path):
+    if not is_file(probe, path):
         return []
 
-    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    text = read_or_finding(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
         return [text]
 
@@ -1016,52 +1023,21 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
 CROSS_ARTIFACT_CHECK = "cross-artifact"
 
 
-def _extract_aim_ids(text: str) -> set[str]:
-    r"""Extract aim ids from aims.md content.
+def aim_ids(text: str) -> set[str]:
+    r"""Extract the aim ids ``aims.md`` declares.
 
-    Parses declared aim ids as the `aim-\d+` tokens appearing in the text;
+    Parses declared aim ids as the ``aim-\d+`` tokens appearing in the text;
     a loose match is right because the gap is advisory and a false negative
     costs less than nagging about a legitimately-formatted aims file.
 
+    Public because ``progress`` reports uncovered aims from the same file: one
+    reader, so ``check`` and the dashboard can never disagree about which aims
+    a thesis declares.
+
     :param text: The aims.md file contents.
-    :returns: Set of aid ids like "aim-1", "aim-2", etc.
+    :returns: Set of aim ids like ``aim-1``, ``aim-2``.
     """
-    import re
-
     return set(re.findall(r"aim-\d+", text))
-
-
-def _extract_artifact_ids_from_dashboard(text: str) -> set[str]:
-    r"""Extract artifact ids from dashboard.md.
-
-    Looks for backtick-quoted ids in lines matching the dashboard pattern
-    (e.g., `dc` in `- paper `dc` — drafting`). Only extracts from lines with
-    the artifact listing pattern.
-
-    :param text: The dashboard.md file contents.
-    :returns: Set of artifact ids found.
-    """
-    import re
-
-    ids: set[str] = set()
-    # Match lines like "- paper `dc` — status" or "- hypothesis `2026-03-04-x` — status"
-    for line in text.splitlines():
-        # Look for the pattern: "- [type] `[id]` — [status]"
-        match = re.search(r"- (?:paper|hypothesis|thesis) `([^`]+)`", line)
-        if match:
-            ids.add(match.group(1))
-    return ids
-
-
-def _is_ungenerated_stub(text: str) -> bool:
-    """Check if the dashboard is the ungenerated stub.
-
-    The stub carries the marker "Not yet generated".
-
-    :param text: The dashboard.md file contents.
-    :returns: True if this is the ungenerated stub.
-    """
-    return "Not yet generated" in text
 
 
 def _check_dashboard_consistency(
@@ -1069,37 +1045,52 @@ def _check_dashboard_consistency(
 ) -> list[Finding]:
     """Check dashboard for stale or orphaned artifact ids.
 
+    Which ids a dashboard claims is read by
+    :func:`defendable_science.progress.render.artifact_ids` — the module that
+    writes them. A second reader here would drift from the writer and report a
+    current dashboard as stale, which is why this rule was unenforceable until
+    a generator existed (#130).
+
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
     :param artifact_ids: Set of artifact ids from staged documents.
     :returns: List of ``gap`` findings for dashboard consistency.
     """
+    # Imported here, not at module scope: `progress.collect` reads this module,
+    # so a top-level import would make the pair a cycle the moment `progress`
+    # grows the re-exporting `__init__` that `check` already has.
+    from defendable_science.progress.render import artifact_ids as dashboard_claims
+
     findings: list[Finding] = []
 
-    if not _is_file(probe, layout.dashboard):
+    if not is_file(probe, layout.dashboard):
         return findings
 
-    dashboard_text = _read(layout.dashboard, layout, probe, CROSS_ARTIFACT_CHECK)
+    dashboard_text = read_or_finding(
+        layout.dashboard, layout, probe, CROSS_ARTIFACT_CHECK
+    )
     if isinstance(dashboard_text, Finding):
         findings.append(dashboard_text)
         return findings
 
     # Skip if it's the ungenerated stub and no artifact ids exist
-    if _is_ungenerated_stub(dashboard_text) and not artifact_ids:
+    if r.is_ungenerated_dashboard(dashboard_text) and not artifact_ids:
         return findings
 
-    dashboard_ids = _extract_artifact_ids_from_dashboard(dashboard_text)
+    rel = str(layout.rel(layout.dashboard))
+    dashboard_ids = dashboard_claims(dashboard_text)
+    remedy = "run `defendable-science progress dashboard` to regenerate the dashboard"
 
     # Check for ids on disk but not in dashboard
     findings.extend(
         Finding(
             severity="gap",
             check=CROSS_ARTIFACT_CHECK,
-            file="docs/research/dashboard.md",
+            file=rel,
             message=f"artifact {aid!r} exists but is not mentioned in the dashboard",
-            remedy="run the `progress` skill to regenerate the dashboard",
+            remedy=remedy,
         )
-        for aid in artifact_ids
+        for aid in sorted(artifact_ids)
         if aid not in dashboard_ids
     )
 
@@ -1108,11 +1099,11 @@ def _check_dashboard_consistency(
         Finding(
             severity="gap",
             check=CROSS_ARTIFACT_CHECK,
-            file="docs/research/dashboard.md",
+            file=rel,
             message=f"dashboard mentions artifact {did!r}, which does not exist",
-            remedy="run the `progress` skill to regenerate the dashboard",
+            remedy=remedy,
         )
-        for did in dashboard_ids
+        for did in sorted(dashboard_ids)
         if did not in artifact_ids
     )
 
@@ -1140,10 +1131,10 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
     # Prepare for rule 3: extract declared aims if they exist
     declared_aims: set[str] = set()
     check_covers = False
-    if _is_file(probe, layout.aims):
-        aims_text = _read(layout.aims, layout, probe, CROSS_ARTIFACT_CHECK)
+    if is_file(probe, layout.aims):
+        aims_text = read_or_finding(layout.aims, layout, probe, CROSS_ARTIFACT_CHECK)
         if not isinstance(aims_text, Finding):
-            declared_aims = _extract_aim_ids(aims_text)
+            declared_aims = aim_ids(aims_text)
             check_covers = True
 
     # Collect artifact ids for rule 4
@@ -1152,7 +1143,7 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
     # Process each document for rules 1-3 and collect artifact ids
     for path in docs:
         rel = str(layout.rel(path))
-        text = _read(path, layout, probe, CROSS_ARTIFACT_CHECK)
+        text = read_or_finding(path, layout, probe, CROSS_ARTIFACT_CHECK)
         if isinstance(text, Finding):
             findings.append(text)
             continue
@@ -1295,9 +1286,9 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     # Read config file
     config_path = layout.config_file
     rel_config = str(layout.rel(config_path))
-    if not _is_file(probe, config_path):
+    if not is_file(probe, config_path):
         return []
-    text = _read(config_path, layout, probe, CONFIG_CHECK)
+    text = read_or_finding(config_path, layout, probe, CONFIG_CHECK)
     if isinstance(text, Finding):
         return [text]
 
@@ -1336,7 +1327,7 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
 
     # Read .gitignore
     if probe.exists(gitignore_path):
-        gitignore_text = _read(gitignore_path, layout, probe, CONFIG_CHECK)
+        gitignore_text = read_or_finding(gitignore_path, layout, probe, CONFIG_CHECK)
         if isinstance(gitignore_text, Finding):
             findings.append(gitignore_text)
         else:
