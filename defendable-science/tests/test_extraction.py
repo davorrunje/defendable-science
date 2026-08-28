@@ -163,3 +163,203 @@ def test_a_ragged_matrix_refuses_as_an_extraction_error(tmp_path: Path) -> None:
     with pytest.raises(ex.ExtractionError, match="ragged concept-matrix row") as caught:
         ex.axes_from_positioning(_write(tmp_path, text))
     assert "positioning.md" in str(caught.value)
+
+
+# --- cells, locators, validation --------------------------------------------
+
+AXES = ["guarantee type", "scope"]
+
+
+def _cell(**kw: object) -> ex.Cell:
+    base: dict[str, object] = {
+        "citekey": "sill1997",
+        "axis": "guarantee type",
+        "value": "architectural",
+        "locator": "§2, Eq. (3)",
+    }
+    base.update(kw)
+    return ex.Cell(**base)  # type: ignore[arg-type]
+
+
+def _full(citekey: str = "sill1997") -> list[ex.Cell]:
+    return [
+        _cell(citekey=citekey, axis="guarantee type"),
+        _cell(citekey=citekey, axis="scope", locator="p. 4"),
+    ]
+
+
+PATTERNS = ex.compile_locator_patterns()
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        "§3",
+        "§3.2",
+        "§3.2.1",
+        "Section 3",
+        "Sec. 3",
+        "p. 7",
+        "pp. 7-9",
+        "pp. 7–9",  # noqa: RUF001 — an en dash is what a PDF page range pastes as
+        "page 7",
+        "Eq. (4)",
+        "Equation 4",
+        "Table 2",
+        "Fig. 5",
+        "Figure 5",
+        "Alg. 1",
+        "Thm. 2",
+        "Theorem 2",
+        "Lemma 3",
+        "Def. 1",
+        "§3, Eq. (4)",
+        "p. 7, Table 2",
+    ],
+)
+def test_well_formed_locators_are_accepted(locator: str) -> None:
+    assert ex.is_valid_locator(locator, PATTERNS)
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        "see paper",
+        "somewhere in §3",
+        "the introduction",
+        "passim",
+        "",
+        "   ",
+        "throughout",
+        "as discussed",
+    ],
+)
+def test_vague_locators_are_refused(locator: str) -> None:
+    assert not ex.is_valid_locator(locator, PATTERNS)
+
+
+def test_extra_patterns_extend_the_default_set() -> None:
+    patterns = ex.compile_locator_patterns([r"cl\. \d+"])
+    assert ex.is_valid_locator("cl. 14", patterns)
+    assert ex.is_valid_locator("§3", patterns)
+
+
+def test_an_invalid_configured_pattern_refuses_by_name() -> None:
+    """A broken config regex must name itself, not surface as a raw `re.error`."""
+    with pytest.raises(ex.ExtractionError, match=r"invalid locator pattern"):
+        ex.compile_locator_patterns(["cl\\. (\\d+"])
+
+
+def test_a_complete_paper_is_accepted() -> None:
+    accepted, rejections = ex.validate(_full(), AXES, PATTERNS)
+    assert rejections == []
+    assert sorted(c.axis for c in accepted["sill1997"]) == ["guarantee type", "scope"]
+
+
+def test_a_missing_axis_rejects_the_whole_paper() -> None:
+    accepted, rejections = ex.validate(_full()[:1], AXES, PATTERNS)
+    assert accepted == {}
+    assert any("scope" in r.reason and "missing" in r.reason for r in rejections)
+
+
+def test_an_invented_axis_rejects_the_whole_paper() -> None:
+    cells = [*_full(), _cell(axis="made up", locator="§9")]
+    accepted, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert accepted == {}
+    assert any("not a matrix axis" in r.reason for r in rejections)
+
+
+def test_a_bad_locator_rejects_the_whole_paper_not_just_the_cell() -> None:
+    cells = [_cell(), _cell(axis="scope", locator="see paper")]
+    accepted, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert accepted == {}
+    assert any("see paper" in r.reason for r in rejections)
+
+
+def test_one_bad_paper_does_not_reject_a_good_one() -> None:
+    cells = [*_full("good"), *_full("bad")[:1]]
+    accepted, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert set(accepted) == {"good"}
+    assert {r.citekey for r in rejections} == {"bad"}
+
+
+def test_not_addressed_needs_a_justification_not_a_locator() -> None:
+    cells = [
+        _cell(),
+        _cell(
+            axis="scope",
+            value=ex.NOT_ADDRESSED,
+            locator=None,
+            justification="scoped to full monotonicity in §1",
+        ),
+    ]
+    accepted, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert rejections == []
+    assert len(accepted["sill1997"]) == 2
+
+
+def test_not_addressed_without_a_justification_is_rejected() -> None:
+    cells = [_cell(), _cell(axis="scope", value=ex.NOT_ADDRESSED, locator=None)]
+    _, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert any("justification" in r.reason for r in rejections)
+
+
+def test_not_addressed_with_a_blank_justification_is_rejected() -> None:
+    cells = [
+        _cell(),
+        _cell(
+            axis="scope",
+            value=ex.NOT_ADDRESSED,
+            locator=None,
+            justification="   ",
+        ),
+    ]
+    _, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert any("justification" in r.reason for r in rejections)
+
+
+def test_a_normal_cell_with_no_locator_is_rejected() -> None:
+    cells = [_cell(), _cell(axis="scope", locator=None)]
+    _, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert any("locator" in r.reason for r in rejections)
+
+
+def test_a_duplicated_axis_for_one_paper_is_rejected() -> None:
+    cells = [*_full(), _cell(axis="scope", locator="p. 9")]
+    _, rejections = ex.validate(cells, AXES, PATTERNS)
+    assert any("twice" in r.reason for r in rejections)
+
+
+def test_a_rejection_names_the_axis_it_is_about() -> None:
+    """A count sends the reader hunting; the named cell does not (spec §7.4)."""
+    _, rejections = ex.validate(
+        [_cell(), _cell(axis="scope", locator="see paper")], AXES, PATTERNS
+    )
+    assert [(r.citekey, r.axis) for r in rejections] == [("sill1997", "scope")]
+
+
+def test_a_missing_axis_rejection_carries_the_axis_not_none() -> None:
+    _, rejections = ex.validate(_full()[:1], AXES, PATTERNS)
+    assert [r.axis for r in rejections] == ["scope"]
+
+
+def test_cell_from_mapping_builds_a_cell() -> None:
+    cell = ex.cell_from_mapping(
+        {"citekey": "k", "axis": "a", "value": "v", "locator": "§3"}
+    )
+    assert cell == ex.Cell(citekey="k", axis="a", value="v", locator="§3")
+
+
+def test_cell_from_mapping_rejects_a_non_string_field() -> None:
+    with pytest.raises(ex.ExtractionError, match="citekey"):
+        ex.cell_from_mapping({"citekey": 7, "axis": "a", "value": "v"})
+
+
+def test_cell_from_mapping_rejects_an_unknown_field() -> None:
+    with pytest.raises(ex.ExtractionError, match="unknown"):
+        ex.cell_from_mapping({"citekey": "k", "axis": "a", "value": "v", "bogus": "x"})
+
+
+def test_cell_from_mapping_rejects_a_missing_required_field() -> None:
+    with pytest.raises(ex.ExtractionError, match="malformed"):
+        ex.cell_from_mapping({"citekey": "k", "axis": "a"})
