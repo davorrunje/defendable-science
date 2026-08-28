@@ -979,3 +979,116 @@ def test_registries_check_handles_manifest_with_mirror() -> None:
     # Should not have errors about the manifest structure itself
     # (may have other validation issues, but not about mirror being invalid)
     assert not any("mirror" in f.message and f.severity == "invalid" for f in findings)
+
+
+# --- config checks ---
+
+
+def _scaffolded_with_backend(backend: str | None) -> dict[Path, str]:
+    files = _scaffolded()
+    value = "null" if backend is None else backend
+    files[LAYOUT.config_file] = (
+        f"cache_dir: {r.DEFAULT_CACHE_DIR}\nexperiment_backend: {value}\n"
+    )
+    return files
+
+
+def test_config_check_is_silent_on_a_scaffolded_repo_with_a_bound_backend() -> None:
+    assert c.check_config(LAYOUT, FakeProbe(_scaffolded_with_backend("bench"))) == []
+
+
+def test_config_check_flags_unparseable_yaml_without_a_traceback() -> None:
+    files = _scaffolded()
+    files[LAYOUT.config_file] = "cache_dir: [unclosed\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "invalid YAML" in findings[0].message
+    assert "Traceback" not in findings[0].message
+
+
+def test_config_check_flags_a_non_mapping_config() -> None:
+    files = _scaffolded()
+    files[LAYOUT.config_file] = "- a\n- b\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+
+
+def test_config_check_flags_an_unknown_layout_key() -> None:
+    files = _scaffolded()
+    files[LAYOUT.config_file] = "layout:\n  papers_dir: x/\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert any("papers_dir" in f.message and f.severity == "invalid" for f in findings)
+
+
+def test_config_check_flags_a_cache_dir_that_is_not_gitignored() -> None:
+    files = _scaffolded()
+    files[ROOT / ".gitignore"] = "__pycache__/\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert any(
+        ".defendable-science/cache/" in f.message and f.severity == "invalid"
+        for f in findings
+    )
+    assert any(".gitignore" in f.remedy for f in findings)
+
+
+def test_config_check_flags_a_missing_gitignore() -> None:
+    files = _scaffolded()
+    del files[ROOT / ".gitignore"]
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert any(f.file == ".gitignore" for f in findings)
+
+
+def test_config_check_surfaces_a_null_experiment_backend_as_a_gap() -> None:
+    """A repo that cannot produce run-refs is incomplete, not invalid."""
+    findings = c.check_config(LAYOUT, FakeProbe(_scaffolded_with_backend(None)))
+
+    backend = [f for f in findings if "experiment_backend" in f.message]
+    assert [f.severity for f in backend] == ["gap"]
+
+
+def test_config_check_is_silent_once_a_backend_is_bound() -> None:
+    findings = c.check_config(LAYOUT, FakeProbe(_scaffolded_with_backend("bench")))
+
+    assert [f for f in findings if "experiment_backend" in f.message] == []
+
+
+def test_config_check_reports_an_unreadable_config() -> None:
+    probe = FakeProbe(_scaffolded(), unreadable={LAYOUT.config_file})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    assert [f.severity for f in findings] == ["unreadable"]
+
+
+def test_config_check_handles_an_empty_config_file() -> None:
+    """An empty or null config is valid; it just uses all defaults."""
+    files = _scaffolded()
+    files[LAYOUT.config_file] = ""
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    # Empty config should still have the experiment_backend gap but no other issues
+    backend_gaps = [f for f in findings if "experiment_backend" in f.message]
+    assert [f.severity for f in backend_gaps] == ["gap"]
+
+
+def test_config_check_flags_an_unreadable_gitignore() -> None:
+    files = _scaffolded()
+    files[LAYOUT.config_file] = (
+        f"cache_dir: {r.DEFAULT_CACHE_DIR}\nexperiment_backend: bench\n"
+    )
+    probe = FakeProbe(files, unreadable={ROOT / ".gitignore"})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    assert any(f.severity == "unreadable" and ".gitignore" in f.file for f in findings)

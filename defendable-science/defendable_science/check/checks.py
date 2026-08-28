@@ -26,7 +26,9 @@ are successful science, not findings.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from defendable_science.check.model import Finding
 from defendable_science.dataset import manifest as mf
@@ -37,8 +39,13 @@ from defendable_science.exploration.backlog import (
     columns_for,
 )
 from defendable_science.literature import registry as reg
+from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status as st
-from defendable_science.scaffold.layout import STAGED_DOCUMENTS
+from defendable_science.scaffold.layout import (
+    STAGED_DOCUMENTS,
+    LayoutError,
+    resolve_layout,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -890,5 +897,145 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
         )
         for warning_msg in report.warnings
     )
+
+    return findings
+
+
+# --- config checks ---------------------------------------------------------------
+
+CONFIG_CHECK = "config"
+
+
+def _load_config_text(text: str) -> dict[str, Any]:
+    """Parse config YAML from text, matching load_config's validation rules.
+
+    :param text: The config file contents.
+    :returns: The parsed configuration mapping (empty if blank).
+    :raises ValueError: If the text is not valid YAML, or does not contain a
+        YAML mapping.
+    """
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML: {exc}") from exc
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"expected a YAML mapping, got {type(data).__name__}")
+    return data
+
+
+def check_config(layout: Layout, probe: Probe) -> list[Finding]:
+    """Report problems with the project configuration.
+
+    Checks:
+    1. The config file is readable.
+    2. The file is valid YAML and contains a mapping.
+    3. The ``layout:`` block (if present) contains only valid keys.
+    4. The ``cache_dir`` is gitignored.
+    5. The ``.gitignore`` file exists.
+    6. The ``experiment_backend`` is bound (a null backend is a gap).
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Findings for each issue: ``invalid`` for structural errors,
+        ``unreadable`` for read failures, and ``gap`` for an unbound backend.
+    """
+    findings: list[Finding] = []
+
+    # Read config file
+    config_path = layout.config_file
+    rel_config = str(layout.rel(config_path))
+    text = _read(config_path, layout, probe, CONFIG_CHECK)
+    if isinstance(text, Finding):
+        return [text]
+
+    # Parse config using same rules as load_config
+    try:
+        config = _load_config_text(text)
+    except ValueError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=CONFIG_CHECK,
+                file=rel_config,
+                message=str(exc),
+                remedy="fix the YAML syntax in the config file",
+            )
+        ]
+
+    # Validate layout block
+    try:
+        resolve_layout(config, layout.repo_root)
+    except LayoutError as exc:
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=CONFIG_CHECK,
+                file=rel_config,
+                message=str(exc),
+                remedy="correct the layout block in the config file to match a valid layout key",
+            )
+        )
+
+    # Check cache_dir is gitignored
+    cache_dir_config = config.get("cache_dir", r.DEFAULT_CACHE_DIR)
+    gitignore_path = layout.repo_root / ".gitignore"
+    rel_gitignore = str(layout.rel(gitignore_path))
+
+    # Read .gitignore
+    if probe.exists(gitignore_path):
+        gitignore_text = _read(gitignore_path, layout, probe, CONFIG_CHECK)
+        if isinstance(gitignore_text, Finding):
+            findings.append(gitignore_text)
+        else:
+            # Check if cache_dir is in .gitignore
+            gitignore_lines = {line.strip() for line in gitignore_text.splitlines()}
+            if cache_dir_config not in gitignore_lines:
+                findings.append(
+                    Finding(
+                        severity="invalid",
+                        check=CONFIG_CHECK,
+                        file=rel_config,
+                        message=(
+                            f"cache_dir is set to {cache_dir_config!r}, "
+                            f"but it is not in .gitignore"
+                        ),
+                        remedy=(f"add this line to .gitignore:\n{cache_dir_config}"),
+                    )
+                )
+    else:
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=CONFIG_CHECK,
+                file=rel_gitignore,
+                message=".gitignore is missing",
+                remedy=(
+                    "create .gitignore at the repository root and add:\n"
+                    f"{cache_dir_config}"
+                ),
+            )
+        )
+
+    # Check experiment_backend
+    experiment_backend = config.get("experiment_backend")
+    if experiment_backend is None:
+        findings.append(
+            Finding(
+                severity="gap",
+                check=CONFIG_CHECK,
+                file=rel_config,
+                message=(
+                    "experiment_backend is not bound; the repo cannot produce "
+                    "the run-refs that evidence: requires"
+                ),
+                remedy=(
+                    "set experiment_backend to the repo-local harness implementing "
+                    "the experiment-backend contract (see "
+                    "resources/contracts/experiment-backend.md)"
+                ),
+            )
+        )
 
     return findings
