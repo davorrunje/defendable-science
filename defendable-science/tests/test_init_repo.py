@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from pathlib import Path
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
+from defendable_science.cli import app
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status
 from defendable_science.scaffold.init_repo import init_repo
 from defendable_science.scaffold.layout import Layout
 
-if TYPE_CHECKING:
-    from pathlib import Path
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -194,3 +196,87 @@ def test_init_uses_the_configured_cache_dir_for_the_gitignore_entry(
     init_repo(Layout.default(repo), cache_dir=".cache/ds/")
 
     assert ".cache/ds/" in (repo / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_a_fresh_scaffold_survives_the_whole_backlog_flow(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#120/#121: on a scaffold from prose, `park` failed on the column profile.
+
+    Every invocation below deliberately passes **no path option**: the layout
+    resolves them, from the repo root and from inside the promoted paper alike.
+    That is what makes a fresh repo usable without the author knowing where
+    anything lives — the scaffold `init` writes must be the shape the commands
+    that read it expect, at both levels and in the registry.
+    """
+    monkeypatch.chdir(repo)
+    initialized = runner.invoke(app, ["init"])
+    assert initialized.exit_code == 0, initialized.output
+
+    parked = runner.invoke(
+        app,
+        [
+            "backlog",
+            "park",
+            "Depth collapse explains the OOD gap",
+            "--provenance",
+            "smoke",
+            "--level",
+            "paper",
+        ],
+    )
+    assert parked.exit_code == 0, parked.output
+    paper_id = json.loads(parked.stdout)["id"]
+
+    ranked = runner.invoke(
+        app,
+        ["backlog", "rank", paper_id, "--level", "paper", "--feas", "high"],
+    )
+    assert ranked.exit_code == 0, ranked.output
+
+    promoted = runner.invoke(
+        app,
+        [
+            "backlog",
+            "promote",
+            paper_id,
+            "--level",
+            "paper",
+            "--scaffold",
+            "--backend",
+            "bench",
+        ],
+    )
+    assert promoted.exit_code == 0, promoted.output
+    artifacts = json.loads(promoted.stdout)["artifacts"]
+    assert Path(artifacts["pitch"]).is_file()
+
+    registry = (repo / "docs" / "research" / "papers.md").read_text(encoding="utf-8")
+    assert f"| {paper_id} | docs/research/{paper_id} | bench |" in registry
+
+    # The hypothesis level, from inside the paper the promotion just created:
+    # no --backlog, no --paper-root — the cwd names the paper.
+    monkeypatch.chdir(repo / "docs" / "research" / paper_id)
+    parked_h = runner.invoke(
+        app,
+        ["backlog", "park", "Monotone depth drives it", "--provenance", "smoke"],
+    )
+    assert parked_h.exit_code == 0, parked_h.output
+    hypothesis_id = json.loads(parked_h.stdout)["id"]
+
+    ranked_h = runner.invoke(
+        app, ["backlog", "rank", hypothesis_id, "--eig", "high", "--feas", "med"]
+    )
+    assert ranked_h.exit_code == 0, ranked_h.output
+
+    promoted_h = runner.invoke(app, ["backlog", "promote", hypothesis_id, "--scaffold"])
+    assert promoted_h.exit_code == 0, promoted_h.output
+    scaffolded = Path(json.loads(promoted_h.stdout)["artifacts"]["hypothesis"])
+    assert scaffolded.is_file()
+    hypotheses = (repo / "docs" / "research" / paper_id / "hypotheses").resolve()
+    assert scaffolded.parent.parent.resolve() == hypotheses
+
+    monkeypatch.chdir(repo)
+    validated = runner.invoke(app, ["dataset", "validate"])
+    assert validated.exit_code == 0, validated.output
+    assert json.loads(validated.stdout)["ok"] is True
