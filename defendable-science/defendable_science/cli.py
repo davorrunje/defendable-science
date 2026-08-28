@@ -30,6 +30,8 @@ from defendable_science.core.mirror import Mirror
 from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.dataset import retrieval as retrieval_mod
 from defendable_science.defend import record as record_mod
+from defendable_science.digest import artifact as artifact_mod
+from defendable_science.digest import extraction as extraction_mod
 from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
@@ -38,6 +40,7 @@ from defendable_science.scaffold.init_repo import init_repo
 from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Iterator
 
     from defendable_science.core.http import HttpClient
@@ -2124,6 +2127,263 @@ def path() -> None:
     """Print the resolved key-store path."""
     typer.echo(str(keys_mod.store_path()))
     raise typer.Exit(code=0)
+
+
+# --- digest extract (defendable-science#100, spec §3.1) -------------------------------
+digest = typer.Typer(help="Reading-record helpers (digest).", no_args_is_help=True)
+app.add_typer(digest, name="digest")
+extract = typer.Typer(
+    help="Extraction mode: breadth reading into located matrix cells.",
+    no_args_is_help=True,
+)
+digest.add_typer(extract, name="extract")
+
+_PaperOpt = Annotated[
+    str | None,
+    typer.Option("--paper", help="Paper id; inferred from the cwd if omitted."),
+]
+_PositioningOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--positioning", help="Positioning document; from the layout if omitted."
+    ),
+]
+
+
+def _positioning_context(
+    paper: str | None, positioning: str | None
+) -> tuple[dict[str, Any], Layout, Path]:
+    """Resolve the config, the layout, and the positioning document to read.
+
+    An explicit ``--positioning`` wins and is taken as given (a path typed on the
+    command line means what it says relative to the cwd); otherwise the layout
+    supplies it from the paper id, the same order :func:`_lit_registry_paths`
+    uses. Resolution lives here rather than in
+    :mod:`defendable_science.digest.extraction`, which only ever sees a path.
+
+    :param paper: The paper id, or ``None`` to infer it from the cwd.
+    :param positioning: An explicit positioning path, which always wins.
+    :returns: The config mapping, the resolved layout, and the document path.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block; code 2 when
+        ``--paper`` is omitted and the cwd is outside every paper.
+    """
+    config, layout = _layout_or_exit()
+    if positioning is not None:
+        return config, layout, Path(positioning)
+    paper_id = paper or _paper_dir_or_exit(layout, "--paper").name
+    return config, layout, layout.positioning(paper_id)
+
+
+def _locator_patterns(lit: dict[str, Any] | None) -> list[re.Pattern[str]]:
+    """Compile the locator pattern set, extended by config (spec §7.3).
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :returns: The compiled matchers for :func:`~.extraction.is_valid_locator`.
+    :raises typer.Exit: Code 1 if ``literature.extraction`` is not a mapping, if
+        ``locator_patterns`` is not a list of strings, or if a configured
+        pattern is invalid or cannot be combined with the rest.
+    """
+    raw = lit.get("extraction") if lit is not None else None
+    if raw is not None and not isinstance(raw, dict):
+        typer.echo(
+            "invalid .defendable-science/config.yml: 'literature.extraction' "
+            "must be a mapping",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    configured = raw.get("locator_patterns") if raw is not None else None
+    if configured is not None and (
+        not isinstance(configured, list)
+        or not all(isinstance(p, str) for p in configured)
+    ):
+        typer.echo(
+            "invalid .defendable-science/config.yml: "
+            "'literature.extraction.locator_patterns' must be a list of "
+            "regular-expression strings",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        return extraction_mod.compile_locator_patterns(configured)
+    except extraction_mod.ExtractionError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@extract.command(name="axes")
+def extract_axes(paper: _PaperOpt = None, positioning: _PositioningOpt = None) -> None:
+    """Print the extraction question set — the concept matrix's axes (spec §6.1).
+
+    Run before reading anything: it is what tells the agent which cells the
+    matrix expects, and it refuses a matrix that is not ready to be extracted
+    against rather than letting 40 papers be read against ``<attr 1>``.
+
+    :param paper: The paper id whose positioning document holds the matrix;
+        inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :raises typer.Exit: Code 0 with the axes as JSON; code 1 if the document is
+        missing or its matrix cannot yield axes; code 2 if the paper cannot be
+        resolved.
+    """
+    _config, _layout, path = _positioning_context(paper, positioning)
+    try:
+        axes = extraction_mod.axes_from_positioning(path)
+    except extraction_mod.ExtractionError as exc:
+        typer.echo(f"digest extract axes failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({"positioning": str(path), "axes": axes}, indent=2))
+    raise typer.Exit(code=0)
+
+
+def _parse_cells(raw: str) -> list[extraction_mod.Cell]:
+    """Parse the ``--cells`` JSON array into `Cell`s (spec §7.1).
+
+    An empty array is refused rather than treated as "nothing to do": a run that
+    recorded no cells and exited 0 would report a failed extraction as a
+    completed one.
+
+    :param raw: The JSON text read from the file or stdin.
+    :returns: The parsed cells, in file order.
+    :raises extraction_mod.ExtractionError: If the text is not a non-empty JSON
+        array of well-formed cell objects.
+    """
+    if not raw.strip():
+        raise extraction_mod.ExtractionError(
+            "--cells is empty; expected a JSON array of cell objects"
+        )
+    try:
+        data: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise extraction_mod.ExtractionError(
+            f"--cells is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(data, list):
+        raise extraction_mod.ExtractionError("--cells must be a JSON array")
+    if not data:
+        raise extraction_mod.ExtractionError(
+            "--cells is an empty array; there is nothing to record"
+        )
+    cells: list[extraction_mod.Cell] = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise extraction_mod.ExtractionError(
+                f"--cells item {index} must be a JSON object, got {type(item).__name__}"
+            )
+        try:
+            cells.append(extraction_mod.cell_from_mapping(item))
+        except extraction_mod.ExtractionError as exc:
+            raise extraction_mod.ExtractionError(
+                f"--cells item {index}: {exc}"
+            ) from exc
+    return cells
+
+
+@extract.command(name="record")
+def extract_record(
+    cells: Annotated[
+        str,
+        typer.Option(
+            "--cells", help="Extracted cells: a JSON-array file path, or '-' for stdin."
+        ),
+    ],
+    paper: _PaperOpt = None,
+    positioning: _PositioningOpt = None,
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Validate extracted cells and record them — one inseparable action (§3.3).
+
+    Validation is not a separate step this command *calls first*; it is the only
+    source of the cells it writes. A paper is accepted whole or not at all, so a
+    rejected paper leaves no artifact, no log entry and no partial row, while the
+    rest of the batch is still recorded (spec §7.2 rule 4).
+
+    Writes ``status.extraction`` — never ``status.understanding``: extraction
+    certifies located cells checked by sample, which is a weaker claim than
+    verified comprehension, and the two must not share a field (spec §3.2).
+
+    :param cells: The cells to record — a JSON-array file path, or ``-`` for
+        stdin.
+    :param paper: The paper id whose concept matrix the cells are validated
+        against; inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted. Not a cwd-relative default: this command is
+        meant to be run from inside a paper directory, where one would put the
+        run's evidence somewhere no reviewer would look for it.
+    :raises typer.Exit: Code 0 when every paper was recorded; code 1 when
+        anything was rejected or the input, matrix or config is unusable; code 2
+        if the paper cannot be resolved.
+    """
+    config, layout, path = _positioning_context(paper, positioning)
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
+    )
+    patterns = _locator_patterns(_lit_block(config))
+    try:
+        axes = extraction_mod.axes_from_positioning(path)
+        raw = sys.stdin.read() if cells == "-" else Path(cells).read_text("utf-8")
+        parsed = _parse_cells(raw)
+    except (extraction_mod.ExtractionError, OSError) as exc:
+        typer.echo(f"digest extract record failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    accepted, rejections = extraction_mod.validate(parsed, axes, patterns)
+    date = date_cls.today().isoformat()
+    recorded: list[dict[str, Any]] = []
+    try:
+        for citekey, paper_cells in sorted(accepted.items()):
+            artifact = layout.digest(citekey)
+            # `init` does not scaffold literature/digests/ — the first recorded
+            # paper creates it.
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            log_entry = artifact_mod.write_extraction(
+                artifact,
+                paper_cells,
+                in_sample=False,
+                batch_check="pending",
+                log_dir=log_root,
+                date=date,
+            )
+            recorded.append(
+                {
+                    "citekey": citekey,
+                    "artifact": str(artifact),
+                    "cells": len(paper_cells),
+                    "not_addressed": sum(
+                        1
+                        for c in paper_cells
+                        if c.value == extraction_mod.NOT_ADDRESSED
+                    ),
+                    "log_entry": str(log_entry),
+                }
+            )
+    except (extraction_mod.ExtractionError, OSError) as exc:
+        typer.echo(f"digest extract record failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    for rejection in rejections:
+        typer.echo(extraction_mod.render_rejection(rejection), err=True)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": not rejections,
+                "positioning": str(path),
+                "axes": axes,
+                "recorded": recorded,
+                "rejected": [dataclasses.asdict(r) for r in rejections],
+                "not_addressed": sum(r["not_addressed"] for r in recorded),
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=1 if rejections else 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

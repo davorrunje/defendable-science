@@ -2,7 +2,8 @@
 
 Extraction and depth reading share one file per paper (for illustration, the
 default layout's ``docs/research/literature/digests/<citekey>.md``; the real
-path comes from :meth:`Layout.digest`), because they are two claims of
+path comes from :meth:`defendable_science.scaffold.layout.Layout.digest`),
+because they are two claims of
 different strength about the same paper and both belong in its reading record
 (spec §5). They do **not** share a frontmatter key:
 
