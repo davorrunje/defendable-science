@@ -32,6 +32,7 @@ from defendable_science.dataset import retrieval as retrieval_mod
 from defendable_science.defend import record as record_mod
 from defendable_science.digest import artifact as artifact_mod
 from defendable_science.digest import extraction as extraction_mod
+from defendable_science.digest import render as render_mod
 from defendable_science.digest import sampling as sampling_mod
 from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
@@ -2450,7 +2451,9 @@ def extract_record(
 _SAMPLE_VERDICTS = ("verified", "failed")
 
 
-def _extraction_batch(layout: Layout) -> tuple[list[str], list[dict[str, str]]]:
+def _extraction_batch(
+    layout: Layout, command: str
+) -> tuple[list[str], list[dict[str, str]]]:
     """Collect every digest artifact that records an extraction (ruling AL).
 
     A digest with no ``status.extraction`` block was never extracted — a
@@ -2460,6 +2463,8 @@ def _extraction_batch(layout: Layout) -> tuple[list[str], list[dict[str, str]]]:
     shrink the population the sample is drawn from.
 
     :param layout: The resolved layout, which owns the digests directory.
+    :param command: The calling command, for the diagnostic — a reader must not
+        be told ``sample`` failed when they ran ``render``.
     :returns: The batch's citekeys, and one error entry per unreadable artifact.
     """
     members: list[str] = []
@@ -2469,7 +2474,7 @@ def _extraction_batch(layout: Layout) -> tuple[list[str], list[dict[str, str]]]:
             if artifact_mod.has_extraction(path):
                 members.append(path.stem)
         except (extraction_mod.ExtractionError, OSError) as exc:
-            typer.echo(f"digest extract sample failed for {path.stem}: {exc}", err=True)
+            typer.echo(f"{command} failed for {path.stem}: {exc}", err=True)
             errors.append(
                 {"citekey": path.stem, "artifact": str(path), "reason": str(exc)}
             )
@@ -2727,7 +2732,7 @@ def extract_sample(
 
     _config, layout = _layout_or_exit()
     if all_papers:
-        members, errors = _extraction_batch(layout)
+        members, errors = _extraction_batch(layout, "digest extract sample")
     else:
         members, errors = sorted(set(citekey or [])), []
     log_root = (
@@ -2806,6 +2811,121 @@ def extract_sample(
         log_entries=log_entries,
         errors=errors,
     )
+
+
+def _cells_to_render(
+    layout: Layout, batch: list[str], errors: list[dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """Read each paper's recorded cells into the merge's ``rows`` argument.
+
+    A paper whose artifact cannot be read contributes **no** row rather than an
+    empty one: an empty row would overwrite the author's matrix line with
+    blanks on the strength of a file this run could not read.
+
+    :param layout: The resolved layout, which owns the artifact paths.
+    :param batch: The citekeys to render.
+    :param errors: The run's error list, appended to in place.
+    :returns: citekey → axis → value, for the papers that could be read.
+    """
+    rows: dict[str, dict[str, str]] = {}
+    for citekey in batch:
+        target = layout.digest(citekey)
+        try:
+            cells = artifact_mod.read_cells(target)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"digest extract render failed for {citekey}: {exc}", err=True)
+            errors.append(
+                {"citekey": citekey, "artifact": str(target), "reason": str(exc)}
+            )
+            continue
+        rows[citekey] = {cell.axis: cell.value for cell in cells}
+    return rows
+
+
+@extract.command(name="render")
+def extract_render(
+    citekey: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--citekey",
+            help="Render only these papers; repeatable. Every extracted paper "
+            "by default.",
+        ),
+    ] = None,
+    paper: _PaperOpt = None,
+    positioning: _PositioningOpt = None,
+) -> None:
+    """Merge the extracted cells into ``positioning.md``'s concept matrix (§9).
+
+    A merge, not a rewrite. The author's taxonomy prose, PRISMA log, per-branch
+    delta and section comments survive by construction, because only the
+    matrix table's own lines are re-emitted.
+
+    **Nothing is ever deleted.** A row in the file that this run has no cells
+    for is left exactly as it is, and a paper leaving the survey is removed by
+    hand — automatic deletion is the one operation here with no safe failure
+    mode. ``**This paper**`` is likewise never touched: it is the author's own
+    delta. Rows are keyed by citekey in the matrix's first column, so a
+    hand-edited row *label* is what a re-render overwrites; that is the price
+    of the row being a projection of the cells (spec §5).
+
+    A paper whose artifact cannot be read is reported and its row left alone —
+    the rest of the batch still lands, because skipping it changes nothing on
+    disk while refusing the whole merge would strand every other paper's cells.
+    A matrix that cannot be located unambiguously is a refusal instead: the
+    file is left byte-identical rather than written at a guess.
+
+    :param citekey: A paper to render; repeatable. Defaults to every digest
+        artifact carrying a ``status.extraction`` block.
+    :param paper: The paper id whose positioning document holds the matrix;
+        inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :raises typer.Exit: Code 0 when every named paper was merged; code 1 when
+        the batch is empty, a paper's cells could not be read, the matrix is
+        not renderable, or the document could not be written; code 2 if the
+        paper cannot be resolved.
+    """
+    _config, layout, path = _positioning_context(paper, positioning)
+    errors: list[dict[str, str]] = []
+    if citekey:
+        batch = sorted(set(citekey))
+    else:
+        batch, errors = _extraction_batch(layout, "digest extract render")
+    if not batch:
+        # Not "rendered zero rows": no paper was extracted, and the matrix is
+        # left alone rather than rewritten to say so.
+        typer.echo(
+            f"digest extract render failed: no extracted papers under "
+            f"{layout.digests_dir} — nothing was rendered and {path} was not "
+            "touched; run `digest extract record` first",
+            err=True,
+        )
+    rows = _cells_to_render(layout, batch, errors)
+    changed = False
+    if rows:
+        try:
+            before = path.read_text(encoding="utf-8")
+            merged = render_mod.render_matrix(path, rows)
+            if merged != before:
+                path.write_text(merged, encoding="utf-8")
+                changed = True
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"digest extract render failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "ok": bool(batch) and not errors,
+                "positioning": str(path.resolve()),
+                "batch": batch,
+                "rendered": sorted(rows),
+                "changed": changed,
+                "errors": errors,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if batch and not errors else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

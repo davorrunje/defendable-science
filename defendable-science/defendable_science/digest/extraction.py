@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from defendable_science.core.mdtable import TableError, parse_document
+from defendable_science.core.mdtable import Row, TableError, parse_document
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -43,11 +43,37 @@ class ExtractionError(ValueError):
     """Raised when extraction cannot proceed and must not guess."""
 
 
-def axes_from_positioning(path: str | Path) -> list[str]:
-    """Read the comparison axes from a positioning document's concept matrix.
+@dataclass(frozen=True)
+class Matrix:
+    """A positioning document's concept-matrix table, located in its host.
 
-    The axes are the matrix header minus its first column, which labels the
-    row rather than naming an attribute.
+    Carries enough to write the table back without touching a byte the table
+    does not own, so the merge in :mod:`defendable_science.digest.render` reads
+    and validates the matrix exactly once.
+
+    :param header: The file's own column order — the row label, then the axes.
+        Never ``None``: every "there is no table" case is a refusal.
+    :param rows: The matrix's data rows, keyed by `header`.
+    :param axes: The comparison axes, i.e. `header` minus its first column,
+        stripped and checked.
+    :param preamble: Host text before the table, verbatim.
+    :param postamble: Host text after the table, verbatim.
+    """
+
+    header: list[str]
+    rows: list[Row]
+    axes: list[str]
+    preamble: str
+    postamble: str
+
+    @property
+    def label_column(self) -> str:
+        """The first column, which labels the row rather than naming an axis."""
+        return self.header[0]
+
+
+def read_matrix(path: str | Path) -> Matrix:
+    """Read and validate a positioning document's concept matrix.
 
     Every refusal below names the offending file and says what to do about it:
     this function's whole job is to stop a survey that would otherwise produce
@@ -55,7 +81,7 @@ def axes_from_positioning(path: str | Path) -> list[str]:
     would only move the dead end one step later.
 
     :param path: The positioning document.
-    :returns: The axes, in the matrix's own column order.
+    :returns: The located matrix, its axes in the matrix's own column order.
     :raises ExtractionError: If the file is missing; if it has no
         ``Concept matrix`` section, or that section has no table, or its table
         is missing its GFM separator, or is ragged; if the header carries
@@ -116,7 +142,28 @@ def axes_from_positioning(path: str | Path) -> list[str]:
             f"{target}: duplicate axis names {duplicates} in the concept matrix "
             "— rename them so each axis is distinct, or drop the repeat"
         )
-    return axes
+    return Matrix(
+        header=doc.header,
+        rows=doc.rows,
+        axes=axes,
+        preamble=doc.preamble,
+        postamble=doc.postamble,
+    )
+
+
+def axes_from_positioning(path: str | Path) -> list[str]:
+    """Read the comparison axes from a positioning document's concept matrix.
+
+    The axes are the matrix header minus its first column, which labels the row
+    rather than naming an attribute. Thin over :func:`read_matrix`, which is
+    what the writer and the renderer use: the axes are the only part of the
+    matrix the *question set* (spec §6.1) is about.
+
+    :param path: The positioning document.
+    :returns: The axes, in the matrix's own column order.
+    :raises ExtractionError: As :func:`read_matrix`.
+    """
+    return read_matrix(path).axes
 
 
 # --- cells --------------------------------------------------------------------
