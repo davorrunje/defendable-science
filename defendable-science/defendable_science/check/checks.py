@@ -35,6 +35,8 @@ from defendable_science.exploration.backlog import (
     BacklogError,
     columns_for,
 )
+from defendable_science.scaffold import status as st
+from defendable_science.scaffold.layout import STAGED_DOCUMENTS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,6 +48,7 @@ if TYPE_CHECKING:
 #: The check family names carried on every finding these two emit.
 LAYOUT_CHECK = "layout"
 TABLES_CHECK = "tables"
+FRONTMATTER_CHECK = "frontmatter"
 
 _INIT_REMEDY = (
     "run `defendable-science init` — it creates the missing files and never "
@@ -442,4 +445,194 @@ def check_tables(layout: Layout, probe: Probe) -> list[Finding]:
         )
     for row in rows:
         findings.extend(_check_registered_paper(layout, probe, row))
+    return findings
+
+
+# --- frontmatter checks -------------------------------------------------------
+
+
+def staged_documents(layout: Layout, probe: Probe) -> list[Path]:
+    """Return every staged document that exists in the layout's research tree.
+
+    Staged documents are those listed in ``STAGED_DOCUMENTS``. The thesis tree
+    lives under ``research_root`` by default; if ``thesis_dir`` is elsewhere,
+    both locations are globbed and results are de-duplicated.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Sorted absolute paths to staged documents.
+    """
+    documents: dict[Path, None] = {}
+
+    # Glob for staged documents under research_root
+    for path in probe.glob(layout.research_root, "**/*.md"):
+        basename = path.name
+        if basename in STAGED_DOCUMENTS:
+            documents[path] = None
+
+    # If thesis_dir is outside research_root, glob it too and de-duplicate
+    try:
+        layout.thesis_dir.relative_to(layout.research_root)
+        # thesis_dir is under research_root, so we already found it above
+    except ValueError:
+        # thesis_dir is outside research_root, glob it too
+        for path in probe.glob(layout.thesis_dir, "**/*.md"):
+            basename = path.name
+            if basename in STAGED_DOCUMENTS:  # pragma: no branch
+                documents[path] = None
+
+    return sorted(documents.keys())
+
+
+def _check_frontmatter_document(
+    path: Path, rel: str, expected_level: str, layout: Layout, probe: Probe
+) -> list[Finding]:
+    """Check one staged document's frontmatter. Return all findings for it."""
+    findings: list[Finding] = []
+
+    # Read the document
+    text = _read(path, layout, probe, FRONTMATTER_CHECK)
+    if isinstance(text, Finding):
+        return [text]
+
+    # Parse the frontmatter
+    try:
+        status_block = st.parse(text)
+    except st.StatusError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=str(exc),
+                remedy=(
+                    f"fix the YAML in {rel}'s frontmatter block, "
+                    "or remove the status block if the document doesn't belong in a discoverable location"
+                ),
+            )
+        ]
+
+    # Check for missing status block
+    if status_block is None:
+        return [
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=f"{rel} has no `status:` block",
+                remedy=(
+                    f"add a status block to {rel}'s frontmatter: "
+                    "`---\\nstatus:\\n  level: ...\\n---`"
+                ),
+            )
+        ]
+
+    # Check for unknown fields
+    unknown_fields = sorted(k for k in status_block if k not in st.FIELD_ORDER)
+    findings.extend(
+        Finding(
+            severity="invalid",
+            check=FRONTMATTER_CHECK,
+            file=rel,
+            message=f"{rel} has unknown status field {field!r}",
+            remedy=f"remove {field!r} from the status block; valid fields are {list(st.FIELD_ORDER)}",
+        )
+        for field in unknown_fields
+    )
+
+    # Check for unreplaced placeholders
+    for field, value in status_block.items():
+        if isinstance(value, str) and value.startswith("<"):
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=FRONTMATTER_CHECK,
+                    file=rel,
+                    message=f"{rel} has placeholder in `{field}`: {value!r}",
+                    remedy=(
+                        f"set `{field}` to `null` until it is real, "
+                        "and keep the guidance in a comment"
+                    ),
+                )
+            )
+
+    # Check that level matches the filename
+    level = status_block.get("level")
+    if level != expected_level:
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=f"{rel} declares `level: {level!r}`, but {path.name!r} is a {expected_level!r} document",
+                remedy=f"change `level` to {expected_level!r}, or move the file to the correct document type",
+            )
+        )
+
+    # Check verdict enum (if present and not None)
+    verdict = status_block.get("verdict")
+    if (
+        verdict is not None
+        and expected_level in st.VERDICTS
+        and verdict not in st.VERDICTS[expected_level]
+    ):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=f"{rel} has `verdict: {verdict!r}`, which is not valid for {expected_level!r}; valid verdicts are {sorted(st.VERDICTS[expected_level])}",
+                remedy=f"set `verdict` to one of {sorted(st.VERDICTS[expected_level])}, or set it to `null` if the verdict is not yet determined",
+            )
+        )
+
+    # Check readiness enum (if present and not None)
+    readiness = status_block.get("readiness")
+    if (
+        readiness is not None
+        and expected_level in st.READINESS
+        and readiness not in st.READINESS[expected_level]
+    ):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=f"{rel} has `readiness: {readiness!r}`, which is not valid for {expected_level!r}; valid values are {sorted(st.READINESS[expected_level])}",
+                remedy=f"set `readiness` to one of {sorted(st.READINESS[expected_level])}, or set it to `null` if not yet set",
+            )
+        )
+
+    return findings
+
+
+def check_frontmatter(layout: Layout, probe: Probe) -> list[Finding]:
+    """Report every staged document's status frontmatter that is invalid.
+
+    Checks:
+    1. The document is readable.
+    2. The frontmatter block is present and parseable YAML.
+    3. No fields are unknown (not in ``FIELD_ORDER``).
+    4. No field values are unreplaced placeholders (starting with ``<``).
+    5. The ``level`` matches the filename's documented level.
+    6. ``verdict`` is in ``VERDICTS[level]`` or ``None``.
+    7. ``readiness`` is in ``READINESS[level]`` or ``None``.
+
+    Nothing here judges which verdict value a document carries; ``refuted``,
+    ``no-go``, etc. are valid and pass exactly as successful verdicts do.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Findings in document order, one finding per issue.
+    """
+    findings: list[Finding] = []
+
+    for path in staged_documents(layout, probe):
+        rel = str(layout.rel(path))
+        basename = path.name
+        expected_level = STAGED_DOCUMENTS[basename]
+        findings.extend(
+            _check_frontmatter_document(path, rel, expected_level, layout, probe)
+        )
+
     return findings

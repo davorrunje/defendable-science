@@ -11,6 +11,7 @@ from defendable_science.check import checks as c
 from defendable_science.check import model as m
 from defendable_science.check.probe import FsProbe
 from defendable_science.scaffold import render as r
+from defendable_science.scaffold import status as st
 from defendable_science.scaffold.layout import Layout
 
 
@@ -455,3 +456,201 @@ def test_tables_check_flags_a_backlog_that_holds_no_table() -> None:
     assert [f.severity for f in findings] == ["invalid"]
     assert "no markdown table" in findings[0].message
     assert "one-line" in findings[0].remedy
+
+
+# --- frontmatter checks (#121) --------------------------------------------------
+
+
+def _doc(level: str, **fields: str) -> str:
+    return "---\n" + st.render(level, fields) + "---\n\n# Doc\n"
+
+
+PITCH = LAYOUT.paper_docs_dir("dc") / "pitch.md"
+
+
+def test_frontmatter_check_is_silent_on_a_valid_document() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc", **{"last-updated": "2026-03-04"})
+
+    assert c.check_frontmatter(LAYOUT, FakeProbe(files)) == []
+
+
+def test_frontmatter_check_flags_a_missing_status_block() -> None:
+    files = _scaffolded()
+    files[PITCH] = "# Pitch\n\nno frontmatter\n"
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "status:" in findings[0].message
+    assert findings[0].file == "docs/research/dc/paper/pitch.md"
+
+
+def test_frontmatter_check_flags_an_out_of_enum_verdict() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc", verdict="maybe")
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert any("verdict" in f.message and "maybe" in f.message for f in findings)
+    assert all(f.severity == "invalid" for f in findings)
+
+
+def test_frontmatter_check_flags_an_out_of_enum_readiness() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc", readiness="nearly")
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert any("readiness" in f.message and "nearly" in f.message for f in findings)
+
+
+def test_frontmatter_check_flags_an_unreplaced_placeholder() -> None:
+    """`readiness: <synthesis | defensible>` parses as a real value (#121)."""
+    files = _scaffolded()
+    kappa = LAYOUT.kappa_dir / "kappa.md"
+    files[kappa] = (
+        "---\nstatus:\n  level: thesis\n  id: t\n"
+        "  readiness: <synthesis | defensible>\n---\n\n# Kappa\n"
+    )
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    placeholder = [f for f in findings if "placeholder" in f.message]
+    assert len(placeholder) == 1
+    assert placeholder[0].severity == "invalid"
+    assert "readiness" in placeholder[0].message
+    assert "null" in placeholder[0].remedy
+
+
+def test_frontmatter_check_flags_a_level_that_contradicts_the_filename() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("hypothesis", id="dc")
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert any("level" in f.message for f in findings)
+
+
+def test_frontmatter_check_flags_an_unknown_status_field() -> None:
+    files = _scaffolded()
+    files[PITCH] = "---\nstatus:\n  level: paper\n  priority: high\n---\n"
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert any("priority" in f.message for f in findings)
+
+
+def test_frontmatter_check_reports_invalid_yaml_without_a_traceback() -> None:
+    files = _scaffolded()
+    files[PITCH] = "---\nstatus: [unclosed\n---\n"
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "invalid YAML" in findings[0].message
+
+
+def test_frontmatter_check_reports_an_unreadable_document() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc")
+    probe = FakeProbe(files, unreadable={PITCH})
+
+    findings = c.check_frontmatter(LAYOUT, probe)
+
+    assert [f.severity for f in findings] == ["unreadable"]
+
+
+def test_frontmatter_check_ignores_a_file_that_is_not_a_staged_document() -> None:
+    files = _scaffolded()
+    files[LAYOUT.paper_dir("dc") / "notes.md"] = "# scratch notes, no frontmatter\n"
+
+    assert c.check_frontmatter(LAYOUT, FakeProbe(files)) == []
+
+
+def test_frontmatter_check_never_flags_a_refuted_hypothesis() -> None:
+    """`refuted` is successful science, not a failure (meta-spec §2.1)."""
+    files = _scaffolded()
+    findings_path = LAYOUT.hypothesis_dir("dc", "2026-03-04-x") / "findings.md"
+    files[findings_path] = _doc(
+        "hypothesis",
+        id="2026-03-04-x",
+        verdict="refuted",
+        readiness="resolved",
+        **{"signed-off-by": "D. Runje", "signed-off-date": "2026-03-04"},
+    )
+
+    assert c.check_frontmatter(LAYOUT, FakeProbe(files)) == []
+
+
+def test_frontmatter_check_accepts_a_freshly_rendered_document() -> None:
+    """A document rendered fresh from status.render passes cleanly.
+
+    This tests the critical behavior: VERDICTS and READINESS enums contain no
+    member for the unset state, but the renderer emits `null`. A validator
+    written as `value in VERDICTS[level]` would reject the renderer's own
+    output. The validator must special-case `None` as a valid unset state.
+    """
+    files = _scaffolded()
+
+    # Create a freshly rendered paper pitch (has no verdict, unset readiness)
+    pitch_path = LAYOUT.paper_docs_dir("dc") / "pitch.md"
+    files[pitch_path] = _doc("paper", id="dc")
+
+    # Create a freshly rendered hypothesis (has pending verdict and readiness)
+    hypothesis_path = LAYOUT.hypothesis_dir("dc", "2026-03-04-h") / "hypothesis.md"
+    files[hypothesis_path] = _doc("hypothesis", id="2026-03-04-h")
+
+    # Create a freshly rendered thesis (has n/a verdict, unset readiness)
+    kappa_path = LAYOUT.kappa_dir / "kappa.md"
+    files[kappa_path] = _doc("thesis")
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    # All three should pass cleanly; no findings about the unset/null fields
+    assert findings == []
+
+
+def test_staged_documents_globs_research_root() -> None:
+    """staged_documents finds all markdown files in research_root with STAGED_DOCUMENTS names."""
+    files = _scaffolded()
+    pitch_path = LAYOUT.paper_docs_dir("dc") / "pitch.md"
+    hypothesis_path = LAYOUT.hypothesis_dir("dc", "2026-03-04-h") / "hypothesis.md"
+    files[pitch_path] = _doc("paper", id="dc")
+    files[hypothesis_path] = _doc("hypothesis", id="2026-03-04-h")
+
+    docs = c.staged_documents(LAYOUT, FakeProbe(files))
+
+    assert pitch_path in docs
+    assert hypothesis_path in docs
+    # Should not include other markdown files
+    notes_path = LAYOUT.paper_dir("dc") / "notes.md"
+    files[notes_path] = "# Notes\n"
+    docs = c.staged_documents(LAYOUT, FakeProbe(files))
+    assert notes_path not in docs
+
+
+def test_staged_documents_handles_external_thesis_dir() -> None:
+    """If thesis_dir is outside research_root, it is also globbed."""
+    from defendable_science.scaffold.layout import Layout
+
+    external_thesis = Path("/other/thesis")
+    layout_ext = Layout(
+        repo_root=LAYOUT.repo_root,
+        research_root=LAYOUT.research_root,
+        literature_dir=LAYOUT.literature_dir,
+        datasets_manifest=LAYOUT.datasets_manifest,
+        thesis_dir=external_thesis,
+    )
+
+    files = {}
+    files[LAYOUT.paper_docs_dir("dc") / "pitch.md"] = _doc("paper", id="dc")
+    files[external_thesis / "kappa" / "kappa.md"] = _doc("thesis")
+    # Multiple thesis documents to ensure loop iteration is tested
+    files[external_thesis / "kappa" / "aims.md"] = _doc("thesis")
+
+    docs = c.staged_documents(layout_ext, FakeProbe(files))
+
+    assert LAYOUT.paper_docs_dir("dc") / "pitch.md" in docs
+    assert external_thesis / "kappa" / "kappa.md" in docs
+    assert external_thesis / "kappa" / "aims.md" in docs
