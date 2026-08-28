@@ -812,6 +812,37 @@ def digest_artifacts(layout: Layout, probe: Probe) -> list[Path]:
     return probe.glob(layout.digests_dir, "*.md")
 
 
+#: Sentinel distinguishing "key absent at some level" from a configured value
+#: of ``None`` (e.g. ``locator_patterns:`` with no value), which is itself a
+#: malformed shape rather than "not configured".
+_LOCATOR_PATTERNS_UNSET = object()
+
+
+def _raw_locator_patterns_config(config: dict[str, Any]) -> Any:
+    """Navigate to ``literature.extraction.locator_patterns``, raw.
+
+    Shared navigation logic for :func:`_extraction_locator_patterns` (which
+    silently falls back to defaults on any problem) and
+    :func:`_check_locator_patterns_config` (which reports the problem as a
+    finding) — both need to tell "the key is not configured at all" apart
+    from "the key is configured but malformed", so this returns a sentinel
+    rather than ``None`` for the "not configured" case.
+
+    :param config: The parsed config mapping.
+    :returns: The raw value of ``literature.extraction.locator_patterns`` if
+        ``literature`` and ``literature.extraction`` are both present and are
+        mappings; :data:`_LOCATOR_PATTERNS_UNSET` if any level along that path
+        is absent or not a mapping.
+    """
+    lit = config.get("literature")
+    if not isinstance(lit, dict):
+        return _LOCATOR_PATTERNS_UNSET
+    extraction_block = lit.get("extraction")
+    if not isinstance(extraction_block, dict):
+        return _LOCATOR_PATTERNS_UNSET
+    return extraction_block.get("locator_patterns", _LOCATOR_PATTERNS_UNSET)
+
+
 def _extraction_locator_patterns(layout: Layout, probe: Probe) -> list[re.Pattern[str]]:
     """Return the locator patterns cell locators are checked against.
 
@@ -819,7 +850,8 @@ def _extraction_locator_patterns(layout: Layout, probe: Probe) -> list[re.Patter
     same way ``cli.py``'s own extraction command does
     (``_lit_block``/``_locator_patterns``), but never raises or reports a
     finding of its own: a missing, unreadable, or malformed config is already
-    :func:`check_config`'s finding to make, and duplicating it here would
+    :func:`check_config`'s finding to make (via
+    :func:`_check_locator_patterns_config`), and duplicating it here would
     report one defect twice. Falling back to the default pattern set on any
     of those costs nothing but a slightly stricter locator-shape check — never
     a false pass — because a configured pattern set only ever *widens* what a
@@ -838,13 +870,7 @@ def _extraction_locator_patterns(layout: Layout, probe: Probe) -> list[re.Patter
         config = load_config_text(probe.read_text(layout.config_file))
     except (OSError, ValueError):
         return default
-    lit = config.get("literature")
-    if not isinstance(lit, dict):
-        return default
-    extraction_block = lit.get("extraction")
-    if not isinstance(extraction_block, dict):
-        return default
-    configured = extraction_block.get("locator_patterns")
+    configured = _raw_locator_patterns_config(config)
     if not isinstance(configured, list) or not all(
         isinstance(p, str) for p in configured
     ):
@@ -1660,6 +1686,62 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
 CONFIG_CHECK = "config"
 
 
+def _check_locator_patterns_config(
+    rel_config: str, config: dict[str, Any]
+) -> Finding | None:
+    """Validate ``literature.extraction.locator_patterns``'s own shape.
+
+    Independent of, and complementary to, :func:`_extraction_locator_patterns`
+    (which silently falls back to the default pattern set on any problem here
+    so that cell-locator checking never breaks): that fallback means a
+    misconfigured key produces no signal of its own, only individual cells
+    later being reported as having a locator that "matches no known form" —
+    which misdirects the user toward the config key they already (mis-)set.
+    This reports the config defect itself.
+
+    :param rel_config: The config file's repo-relative path, for the finding.
+    :param config: The parsed config mapping.
+    :returns: An ``invalid`` finding if the key is present but not a list of
+        strings, or is a list of strings that :func:`extraction_mod.compile_locator_patterns`
+        rejects (invalid regex, or a set that cannot be combined); ``None`` if
+        the key is absent at any level (nothing configured — not a defect) or
+        present and well-formed.
+    """
+    configured = _raw_locator_patterns_config(config)
+    if configured is _LOCATOR_PATTERNS_UNSET:
+        return None
+    if not isinstance(configured, list) or not all(
+        isinstance(p, str) for p in configured
+    ):
+        return Finding(
+            severity="invalid",
+            check=CONFIG_CHECK,
+            file=rel_config,
+            message=(
+                "literature.extraction.locator_patterns must be a list of "
+                f"strings, got {type(configured).__name__}"
+            ),
+            remedy=(
+                "set literature.extraction.locator_patterns in config.yml to "
+                "a list of regex strings"
+            ),
+        )
+    try:
+        extraction_mod.compile_locator_patterns(configured)
+    except extraction_mod.ExtractionError as exc:
+        return Finding(
+            severity="invalid",
+            check=CONFIG_CHECK,
+            file=rel_config,
+            message=str(exc),
+            remedy=(
+                "fix the regex pattern(s) in "
+                "literature.extraction.locator_patterns in config.yml"
+            ),
+        )
+    return None
+
+
 def _check_cache_dir_coverage(
     layout: Layout,
     probe: Probe,
@@ -1741,6 +1823,11 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
        reported as uncertain either.
     5. The ``.gitignore`` file exists.
     6. The ``experiment_backend`` is bound (a null backend is a gap).
+    7. ``literature.extraction.locator_patterns``, if present, is a list of
+       strings that compile to a usable pattern set (#161) — independent of
+       :func:`check_extraction`'s own use of that key, which silently falls
+       back to the default patterns on any problem here rather than
+       reporting it.
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
@@ -1840,6 +1927,11 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
                 ),
             )
         )
+
+    # Check literature.extraction.locator_patterns shape
+    locator_finding = _check_locator_patterns_config(rel_config, config)
+    if locator_finding is not None:
+        findings.append(locator_finding)
 
     return findings
 
