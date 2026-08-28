@@ -232,7 +232,7 @@ def test_resolve_miss_is_not_fatal() -> None:
 
 
 def test_enrich_work_reconstructs_abstract() -> None:
-    rec = graph.enrich_work(_WORK)
+    rec = graph.enrich_work(graph.parse_work(_WORK, source="test"))
     assert rec["abstract"] == "Hello world"
     assert rec["venue"] == "ICML"
     assert rec["authors"] == ["D. Runje"]
@@ -270,7 +270,7 @@ def test_refs_reads_referenced_works() -> None:
 def test_fetch_work_non_dict_raises() -> None:
     # A non-dict 200 body must not be coerced to a hollow {} work.
     client = _client({"https://api.openalex.org/works/W1": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not an OpenAlex work"):
+    with pytest.raises(http.HttpError, match="valid dictionary"):
         graph.refs("W1", client=client)
 
 
@@ -365,7 +365,7 @@ def test_helper_edges() -> None:
     assert graph._short_id(None) is None
     assert graph._strip_doi(None) is None
     assert graph._strip_doi("HTTPS://doi.org/10.1/x") == "10.1/x"
-    assert graph._abstract({}) is None  # no inverted index
+    assert graph._abstract(None) is None  # no inverted index
 
 
 def test_resolve_arxiv_builds_doi_lookup() -> None:
@@ -395,7 +395,7 @@ def test_resolve_empty_body_is_miss() -> None:
 
 def test_cites_non_dict_first_page_raises() -> None:
     client = _client({"https://api.openalex.org/works": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not a JSON object"):
+    with pytest.raises(http.HttpError, match="valid dictionary"):
         graph.cites("W1", client=client)
 
 
@@ -406,7 +406,7 @@ def test_cites_non_dict_page_mid_pagination_raises() -> None:
         "meta": {"next_cursor": "c2"},
     }
     client = _client({"https://api.openalex.org/works": [page1, "not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not a JSON object"):
+    with pytest.raises(http.HttpError, match="valid dictionary"):
         graph.cites("W1", client=client)
 
 
@@ -1128,3 +1128,83 @@ def test_lit_client_rejects_non_dict_literature_block(
     with pytest.raises(typer.Exit) as exc:
         cli._lit_client()
     assert exc.value.exit_code == 1
+
+
+# --- boundary-validation regressions (defendable-science#169) --------------------
+
+
+def test_cites_rejects_a_non_dict_result_row() -> None:
+    """Defect 1: a junk row raised AttributeError mid-pagination."""
+    from defendable_science.core.http import HttpError
+
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "results": [_WORK, "not-a-work"],
+                "meta": {"next_cursor": None},
+            }
+        }
+    )
+    with pytest.raises(HttpError, match=r"results\.1"):
+        graph.cites("W1", client=client)
+
+
+def test_enrich_work_rejects_a_non_mapping_inverted_index() -> None:
+    """Defect 2: `index.items()` raised AttributeError on a string."""
+    from defendable_science.core.http import HttpError
+
+    bad = {**_WORK, "abstract_inverted_index": "Hello world"}
+    with pytest.raises(HttpError, match=r"abstract_inverted_index"):
+        graph.parse_work(bad, source="test")
+
+
+def test_s2_edge_with_a_string_contexts_never_yields_one_character() -> None:
+    """Defect 3: `edge["contexts"][0]` on a bare string yielded its first char."""
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([{"contexts": "Hello", "intents": []}], out)
+    assert out["context_snippet"] != "H"
+    assert out["context_snippet"] is None
+    assert skipped == 1
+
+
+def test_enrich_marks_degraded_when_an_s2_edge_is_skipped() -> None:
+    """Defect 3, at the seam a consumer actually reads."""
+    oa = "https://api.openalex.org"
+    s2 = "https://api.semanticscholar.org/graph/v1"
+    client = _client(
+        {
+            f"{oa}/works/W1": _WORK,
+            f"{s2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 7}},
+            f"{s2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": "Hello", "intents": [], "isInfluential": False}]
+            },
+        },
+        s2_key="k",
+    )
+    (record,) = graph.enrich(["W1"], client=client, with_context=True)
+    assert record["context_snippet"] is None
+    assert record["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_enrich_work_rejects_a_string_publication_year() -> None:
+    """Defect 4: a string year propagated into the record and out through the CLI."""
+    from defendable_science.core.http import HttpError
+
+    bad = {**_WORK, "publication_year": "2023"}
+    with pytest.raises(HttpError, match=r"publication_year"):
+        graph.parse_work(bad, source="test")
+
+
+def test_resolve_malformed_200_body_is_transport_error_not_a_miss() -> None:
+    # A 200 body of the wrong shape is neither a genuine miss nor a clean
+    # fetch — it must carry transport_error, same as any other transport fault
+    # (ADR-0043 decision point 4).
+    client = _client({"https://api.openalex.org/works/W1": "not-a-work"})
+    rec = graph.resolve("W1", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True

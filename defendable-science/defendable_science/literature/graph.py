@@ -23,6 +23,10 @@ import re
 from collections import Counter
 from typing import TYPE_CHECKING, Any
 
+from pydantic import Field
+
+from defendable_science.core.models import ExternalModel, parse_each, parse_obj
+
 if TYPE_CHECKING:
     from defendable_science.core.http import HttpClient
 
@@ -32,6 +36,92 @@ S2 = "https://api.semanticscholar.org/graph/v1"
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _OPENALEX_RE = re.compile(r"^[Ww]\d+$")
 _ARXIV_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
+
+
+class _Source(ExternalModel):
+    display_name: str | None = None
+
+
+class _PrimaryLocation(ExternalModel):
+    source: _Source | None = None
+
+
+class _Author(ExternalModel):
+    display_name: str | None = None
+
+
+class _Authorship(ExternalModel):
+    author: _Author | None = None
+
+
+class _WorkIds(ExternalModel):
+    arxiv: str | None = None
+
+
+class OpenAlexWork(ExternalModel):
+    """An OpenAlex work object, as far as this package reads it."""
+
+    id: str | None = None
+    doi: str | None = None
+    ids: _WorkIds = Field(default_factory=_WorkIds)
+    display_name: str | None = None
+    title: str | None = None
+    publication_year: int | None = None
+    cited_by_count: int | None = None
+    primary_location: _PrimaryLocation | None = None
+    authorships: list[_Authorship] = Field(default_factory=list)
+    abstract_inverted_index: dict[str, list[int]] | None = None
+    referenced_works: list[str] = Field(default_factory=list)
+
+
+class _PageMeta(ExternalModel):
+    next_cursor: str | None = None
+
+
+class WorksPage(ExternalModel):
+    """One cursor-paginated page of the OpenAlex ``/works`` endpoint."""
+
+    results: list[OpenAlexWork] = Field(default_factory=list)
+    meta: _PageMeta = Field(default_factory=_PageMeta)
+
+
+class _ExternalIdBundle(ExternalModel):
+    doi: str | None = Field(default=None, alias="DOI")
+    arxiv: str | None = Field(default=None, alias="ArXiv")
+    corpus_id: int | str | None = Field(default=None, alias="CorpusId")
+
+
+class S2ExternalIds(ExternalModel):
+    """A Semantic Scholar paper's ``externalIds`` response."""
+
+    external_ids: _ExternalIdBundle = Field(
+        default_factory=_ExternalIdBundle, alias="externalIds"
+    )
+
+
+class S2CitationEdge(ExternalModel):
+    """One incoming citation edge from S2's ``/citations`` endpoint."""
+
+    contexts: list[str] = Field(default_factory=list)
+    intents: list[str] = Field(default_factory=list)
+    is_influential: bool = Field(default=False, alias="isInfluential")
+
+
+def parse_work(payload: object, *, source: str) -> OpenAlexWork:
+    """Validate an OpenAlex work payload, or fail the call.
+
+    A malformed work is a hard error rather than a skipped row: returning a
+    partial frontier as if it were complete is the failure this package exists
+    to prevent (ADR-0043 decision point 4).
+
+    :param payload: The raw work object.
+    :param source: The URL it came from, for the message.
+    :returns: The validated work.
+    :raises HttpError: If `payload` is not a well-formed OpenAlex work.
+    """
+    from defendable_science.core.http import HttpError
+
+    return parse_obj(OpenAlexWork, payload, source=source, error=HttpError)
 
 
 def _classify(identifier: str) -> tuple[str, str]:
@@ -76,9 +166,8 @@ def _strip_doi(doi: str | None) -> str | None:
     return re.sub(r"^https?://doi\.org/", "", doi, flags=re.IGNORECASE)
 
 
-def _abstract(work: dict[str, Any]) -> str | None:
+def _abstract(index: dict[str, list[int]] | None) -> str | None:
     """Reconstruct an abstract from OpenAlex's inverted index, if present."""
-    index = work.get("abstract_inverted_index")
     if not index:
         return None
     positions: list[tuple[int, str]] = []
@@ -87,48 +176,47 @@ def _abstract(work: dict[str, Any]) -> str | None:
     return " ".join(word for _, word in sorted(positions))
 
 
-def enrich_work(work: dict[str, Any]) -> dict[str, Any]:
-    """Project a raw OpenAlex work into the stable enrichment record shape.
+def enrich_work(work: OpenAlexWork) -> dict[str, Any]:
+    """Project a validated OpenAlex work into the stable enrichment record shape.
 
-    :param work: A raw OpenAlex work object.
+    :param work: A validated OpenAlex work object.
     :returns: ``{id{…}, title, year, venue, cited_by_count, authors, abstract}``.
     """
-    ids = work.get("ids", {})
-    source = (work.get("primary_location") or {}).get("source") or {}
+    source = work.primary_location.source if work.primary_location else None
     authors = [
-        (a.get("author") or {}).get("display_name")
-        for a in work.get("authorships", [])
-        if (a.get("author") or {}).get("display_name")
+        a.author.display_name
+        for a in work.authorships
+        if a.author and a.author.display_name
     ]
     return {
         "id": {
-            "openalex": _short_id(work.get("id")),
-            "doi": _strip_doi(work.get("doi")),
+            "openalex": _short_id(work.id),
+            "doi": _strip_doi(work.doi),
             "s2": None,
-            "arxiv": _short_id(ids.get("arxiv")) if ids.get("arxiv") else None,
+            "arxiv": _short_id(work.ids.arxiv) if work.ids.arxiv else None,
         },
-        "title": work.get("display_name") or work.get("title"),
-        "year": work.get("publication_year"),
-        "venue": source.get("display_name"),
-        "cited_by_count": work.get("cited_by_count"),
+        "title": work.display_name or work.title,
+        "year": work.publication_year,
+        "venue": source.display_name if source else None,
+        "cited_by_count": work.cited_by_count,
         "authors": authors,
-        "abstract": _abstract(work),
+        "abstract": _abstract(work.abstract_inverted_index),
     }
 
 
-def _fetch_work(client: HttpClient, openalex_id: str) -> dict[str, Any]:
+def _fetch_work(client: HttpClient, openalex_id: str) -> OpenAlexWork:
     """Fetch one OpenAlex work by its ``W…`` id.
 
-    :raises HttpError: If the 200 body is not a work object (non-dict or no
-        ``id``); a hollow ``{}`` is never returned in its place.
+    :raises HttpError: If the 200 body is not a well-formed work object (wrong
+        shape, or no ``id``); a hollow ``{}`` is never returned in its place.
     """
     from defendable_science.core.http import HttpError
 
     url = f"{OPENALEX}/works/{openalex_id}"
-    data = client.get_json(url)
-    if not isinstance(data, dict) or not data.get("id"):
+    work = parse_work(client.get_json(url), source=url)
+    if not work.id:
         raise HttpError(f"{url}: response is not an OpenAlex work object")
-    return data
+    return work
 
 
 def _arxiv_doi(arxiv_id: str) -> str:
@@ -171,11 +259,13 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
         raise
     except HttpError:
         return None
-    ext = (paper.get("externalIds") or {}) if isinstance(paper, dict) else {}
-    if ext.get("DOI"):
-        return "doi", str(ext["DOI"])
-    if ext.get("ArXiv"):
-        return "arxiv", str(ext["ArXiv"])
+    ids = parse_obj(
+        S2ExternalIds, paper, source=f"{S2}/paper/{s2_id}", error=HttpError
+    ).external_ids
+    if ids.doi:
+        return "doi", ids.doi
+    if ids.arxiv:
+        return "arxiv", ids.arxiv
     return None
 
 
@@ -208,24 +298,29 @@ def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
     if lookup is None:
         return {"resolved": False, "reason": f"unsupported identifier kind: {kind}"}
     try:
-        work = client.get_json(lookup)
+        payload = client.get_json(lookup)
     except RateLimitError:
         raise
     except HttpError as exc:
         if exc.status_code == 404:
             return {"resolved": False, "reason": str(exc)}
         return {"resolved": False, "reason": str(exc), "transport_error": True}
-    if not isinstance(work, dict) or not work.get("id"):
+    try:
+        work = parse_work(payload, source=lookup)
+    except HttpError as exc:
+        # A 200 body of the wrong shape is not a miss — a consumer must not
+        # record it as "no such paper" (ADR-0043 decision point 4).
+        return {"resolved": False, "reason": str(exc), "transport_error": True}
+    if not work.id:
         return {"resolved": False, "reason": "no work found"}
-    ids = work.get("ids", {})
     return {
         "resolved": True,
-        "openalex": _short_id(work.get("id")),
-        "doi": _strip_doi(work.get("doi")),
+        "openalex": _short_id(work.id),
+        "doi": _strip_doi(work.doi),
         "s2": None,
-        "arxiv": _short_id(ids.get("arxiv")) if ids.get("arxiv") else None,
-        "title": work.get("display_name") or work.get("title"),
-        "year": work.get("publication_year"),
+        "arxiv": _short_id(work.ids.arxiv) if work.ids.arxiv else None,
+        "title": work.display_name or work.title,
+        "year": work.publication_year,
     }
 
 
@@ -238,28 +333,28 @@ def cites(
     :param client: The HTTP client.
     :param max_results: Cap on rows returned (all citations if ``None``).
     :returns: One record per citing work with provenance ``{via: "openalex"}``.
-    :raises HttpError: If a page mid-pagination is not a JSON object. Stopping
-        silently here would return a truncated frontier as if complete, so it is
-        a hard error (mirroring :meth:`HttpClient.get_json`'s non-JSON path).
+    :raises HttpError: If a page mid-pagination is not a well-formed citation
+        page. Stopping silently here would return a truncated frontier as if
+        complete, so it is a hard error (mirroring :meth:`HttpClient.get_json`'s
+        non-JSON path).
     """
     from defendable_science.core.http import HttpError
 
     results: list[dict[str, Any]] = []
     cursor: str | None = "*"
     while cursor:
-        page = client.get_json(
+        raw = client.get_json(
             f"{OPENALEX}/works",
             {"filter": f"cites:{openalex_id}", "per-page": "200", "cursor": cursor},
         )
-        if not isinstance(page, dict):
-            raise HttpError(f"{OPENALEX}/works: citation page is not a JSON object")
-        for work in page.get("results", []):
+        page = parse_obj(WorksPage, raw, source=f"{OPENALEX}/works", error=HttpError)
+        for work in page.results:
             record = enrich_work(work)
             record["provenance"] = {"source_id": openalex_id, "via": "openalex"}
             results.append(record)
             if max_results is not None and len(results) >= max_results:
                 return results
-        cursor = (page.get("meta") or {}).get("next_cursor")
+        cursor = page.meta.next_cursor
     return results
 
 
@@ -271,7 +366,7 @@ def refs(openalex_id: str, *, client: HttpClient) -> list[str]:
     :returns: The ``referenced_works`` ids (bare ``W…`` form).
     """
     work = _fetch_work(client, openalex_id)
-    return [rid for ref in work.get("referenced_works", []) if (rid := _short_id(ref))]
+    return [rid for ref in work.referenced_works if (rid := _short_id(ref))]
 
 
 def _s2_paper_id(record: dict[str, Any]) -> str | None:
@@ -314,11 +409,11 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         raise
     except HttpError:
         meta = {}
-    corpus = (
-        (meta.get("externalIds") or {}).get("CorpusId")
-        if isinstance(meta, dict)
-        else None
-    )
+    corpus = None
+    if meta:
+        corpus = parse_obj(
+            S2ExternalIds, meta, source=f"{S2}/paper/{s2_paper_id}", error=HttpError
+        ).external_ids.corpus_id
     if corpus is not None:
         out["s2"] = f"CorpusId:{corpus}"
     try:
@@ -332,27 +427,32 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
     except HttpError:
         return out
     edges = page.get("data", []) if isinstance(page, dict) else []
-    _aggregate_s2_edges(edges, out)
+    out["edges_skipped"] = _aggregate_s2_edges(edges, out)
     return out
 
 
-def _aggregate_s2_edges(edges: list[Any], out: dict[str, Any]) -> None:
+def _aggregate_s2_edges(edges: list[Any], out: dict[str, Any]) -> int:
     """Fold S2 citation edges into `out` (representative snippet / intent / flag).
 
-    :param edges: The raw ``/citations`` edge list (non-dict entries are ignored).
+    Best effort by design: a malformed edge is skipped rather than failing an
+    optional enrichment, but the count is returned so the caller can mark the
+    loss instead of hiding it (ADR-0043 decision point 4).
+
+    :param edges: The raw ``/citations`` edge list.
     :param out: The context bundle mutated in place.
+    :returns: How many edges were skipped as malformed.
     """
-    for edge in edges:
-        if not isinstance(edge, dict):
-            continue
-        if out["context_snippet"] is None and edge.get("contexts"):
-            out["context_snippet"] = edge["contexts"][0]
-        if out["intent"] is None and edge.get("intents"):
-            out["intent"] = edge["intents"][0]
-        if edge.get("isInfluential"):
+    parsed, skipped = parse_each(S2CitationEdge, edges)
+    for edge in parsed:
+        if out["context_snippet"] is None and edge.contexts:
+            out["context_snippet"] = edge.contexts[0]
+        if out["intent"] is None and edge.intents:
+            out["intent"] = edge.intents[0]
+        if edge.is_influential:
             out["is_influential"] = True
-    if out["is_influential"] is None and edges:
+    if out["is_influential"] is None and parsed:
         out["is_influential"] = False
+    return skipped
 
 
 def enrich(
@@ -396,6 +496,8 @@ def enrich(
                 record["context_snippet"] = bundle["context_snippet"]
                 record["intent"] = bundle["intent"]
                 record["is_influential"] = bundle["is_influential"]
+                if bundle.get("edges_skipped"):
+                    record["degraded"] = ["context", "intent", "is_influential"]
         records.append(record)
     return records
 
