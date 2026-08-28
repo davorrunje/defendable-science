@@ -83,6 +83,21 @@ _CELLS_CAVEAT = (
     "comprehension — see `status.extraction`, not `status.understanding`.*"
 )
 
+#: The heading/caveat a depth-sourced cells block carries instead (#142). The
+#: surrounding markers (`CELLS_BEGIN`/`CELLS_END`) are shared verbatim with
+#: extraction's block — `read_cells` locates a block by those markers alone —
+#: but the prose *inside* it must not claim extraction's sampling regime for
+#: cells that regime never touched. Reusing `_CELLS_CAVEAT` here would put
+#: "checked by sample" on a block no sample ever ran over, on the artifact
+#: itself, where a later reader would take it at face value.
+_DEPTH_CELLS_HEADING = "## Depth-sourced cells"
+_DEPTH_CELLS_CAVEAT = (
+    "*Depth-sourced: located claims from a paper read at depth (see "
+    "`status.understanding`), held to the same locator and validation rules "
+    "as extraction's cells. Not extraction's sampling regime — deliberately "
+    "no `status.extraction` block; see ADR-0042.*"
+)
+
 
 @dataclass
 class ExtractionStatus:
@@ -148,8 +163,20 @@ def _cell_mapping(cell: Cell) -> dict[str, Any]:
     return item
 
 
-def _render_block(citekey: str, cells: list[Cell]) -> list[str]:
-    """Render the delimited cells block as body lines."""
+def _render_block(
+    citekey: str,
+    cells: list[Cell],
+    *,
+    heading: str = _CELLS_HEADING,
+    caveat: str = _CELLS_CAVEAT,
+) -> list[str]:
+    """Render the delimited cells block as body lines.
+
+    :param heading: The block's own heading; overridden by
+        :func:`write_depth_cells` so the artifact's prose does not claim
+        extraction's regime for cells it never wrote.
+    :param caveat: The italic caption under `heading`, same override.
+    """
     payload = yaml.safe_dump(
         {"citekey": citekey, "cells": [_cell_mapping(c) for c in cells]},
         sort_keys=False,
@@ -158,9 +185,9 @@ def _render_block(citekey: str, cells: list[Cell]) -> list[str]:
     return [
         CELLS_BEGIN,
         "",
-        _CELLS_HEADING,
+        heading,
         "",
-        _CELLS_CAVEAT,
+        caveat,
         "",
         "```yaml",
         *payload.splitlines(),
@@ -271,7 +298,9 @@ def cells_from_text(text: str, path: Path) -> list[Cell]:
     if span is None:
         raise ExtractionError(
             f"{path}: no extracted-cells block — this paper has not been "
-            "extracted; run `digest extract record` for it"
+            "extracted, and no depth-sourced cells have been recorded for it; "
+            "run `digest extract record` (extraction mode) or `digest depth "
+            "cells record` (depth mode) for it"
         )
     begin, end = span
     citekey, items = _load_payload(_fenced_payload(body[begin + 1 : end], path), path)
@@ -315,6 +344,23 @@ def _cell_from_item(item: Any, citekey: str, path: Path) -> Cell:
 # --- the frontmatter block ------------------------------------------------------
 
 
+def _parse_status(fm_lines: list[str], path: Path) -> dict[str, Any]:
+    """Parse the frontmatter and return its ``status`` mapping, or ``{}``.
+
+    The one place either cell writer's status-block reads (`_status_extraction`,
+    `_has_understanding`) touch YAML, so the "frontmatter will not parse" error
+    is raised in exactly one place rather than duplicated per reader.
+
+    :raises ExtractionError: If the frontmatter will not parse.
+    """
+    try:
+        data = yaml.safe_load("\n".join(fm_lines))
+    except yaml.YAMLError as exc:
+        raise ExtractionError(f"{path}: frontmatter is not valid YAML: {exc}") from exc
+    status = data.get("status") if isinstance(data, dict) else None
+    return status if isinstance(status, dict) else {}
+
+
 def _status_extraction(fm_lines: list[str], path: Path) -> dict[str, Any] | None:
     """Return the artifact's ``status.extraction`` mapping, or ``None``.
 
@@ -325,12 +371,7 @@ def _status_extraction(fm_lines: list[str], path: Path) -> dict[str, Any] | None
 
     :raises ExtractionError: If the frontmatter will not parse.
     """
-    try:
-        data = yaml.safe_load("\n".join(fm_lines))
-    except yaml.YAMLError as exc:
-        raise ExtractionError(f"{path}: frontmatter is not valid YAML: {exc}") from exc
-    status = data.get("status") if isinstance(data, dict) else None
-    block = status.get(EXTRACTION_KEY) if isinstance(status, dict) else None
+    block = _parse_status(fm_lines, path).get(EXTRACTION_KEY)
     return block if isinstance(block, dict) else None
 
 
@@ -471,17 +512,25 @@ def _refuse_unvalidated(cells: Iterable[Cell]) -> None:
             )
 
 
-def _log_body(artifact: Path, citekey: str, cells: list[Cell], date: str) -> str:
-    """Render the accountability-log entry for one paper's extraction.
+def _log_body(
+    artifact: Path, citekey: str, cells: list[Cell], date: str, *, kind: str
+) -> str:
+    """Render one paper's accountability-log entry (shared by both cell writers).
 
     Every cell goes in, `NOT_ADDRESSED` ones with their justifications: the
     count of absences is the anti-gaming signal (spec §6.5), and it is only
     auditable later if the absences are in the trail alongside the values.
+
+    :param kind: ``"extraction"`` for :func:`write_extraction`, ``"depth-cells"``
+        for :func:`write_depth_cells` — the log entry carries the same
+        provenance distinction as the artifact itself (defendable-science#142),
+        so an auditor reading the log alone can tell which standard produced
+        each entry without opening the artifact.
     """
     entry = {
         "date": date,
         "artifact": str(artifact),
-        "kind": "extraction",
+        "kind": kind,
         "citekey": citekey,
         "cells": [_cell_mapping(c) for c in cells],
         "not-addressed": sum(1 for c in cells if c.value == NOT_ADDRESSED),
@@ -547,8 +596,193 @@ def write_extraction(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(rebuild(fm_lines, body), encoding="utf-8")
     return append_log_entry(
-        Path(log_dir), date, citekey, _log_body(path, citekey, cells, date)
+        Path(log_dir),
+        date,
+        citekey,
+        _log_body(path, citekey, cells, date, kind="extraction"),
     )
+
+
+# --- depth-sourced cells (defendable-science#142) -------------------------------
+
+
+def _has_understanding(fm_lines: list[str], path: Path) -> bool:
+    """Whether the frontmatter carries a ``status.understanding`` block.
+
+    :raises ExtractionError: If the frontmatter will not parse.
+    """
+    return "understanding" in _parse_status(fm_lines, path)
+
+
+def write_depth_cells(
+    artifact: str | Path,
+    cells: list[Cell],
+    *,
+    log_dir: str | Path,
+    date: str,
+) -> Path:
+    """Record one paper's matrix cells sourced from its depth-mode reading.
+
+    A depth digest already establishes locatable claims about the paper — its
+    problem, method, key result, assumptions, limitations — at a *higher*
+    standard than extraction, but has no cells block to feed the concept
+    matrix. This writes one, in the exact shape :func:`write_extraction` does
+    (same `Cell` type, same mandatory locator, same delimited block that
+    :func:`read_cells` already understands), so ``digest extract render``
+    picks the row up with no change to the read side at all.
+
+    **Provenance, not a new field.** This never writes ``status.extraction`` —
+    that block describes extraction's own sampling regime (``in-sample`` /
+    ``batch-check``, ADR-0040), which never ran for a depth-read paper, and
+    writing it here would be a false claim about this paper. A cells block
+    with no ``status.extraction`` *is* the signal that the row is
+    depth-sourced; one with both is extraction-sourced, today's only case. See
+    ADR-0042 for the full reasoning and the rejected alternatives.
+
+    Requires the artifact to already exist and carry ``status.understanding``:
+    unlike :func:`write_extraction`, which may seed a fresh artifact for a
+    paper nothing has touched yet, depth-sourced cells restate claims a depth
+    digest already certified, so there is nothing honest to seed if that
+    certification never happened. Refuses an artifact that already carries
+    ``status.extraction`` for the same reason in the other direction — that
+    artifact's cells are extraction's, and overwriting them here would blur
+    which standard produced the row.
+
+    Leaves every other byte untouched: the ``status.understanding`` block, the
+    written body, and all surrounding prose survive byte-identical (verified
+    by a direct diff test) — only ``status.last-updated`` and the delimited
+    cells block change.
+
+    :param artifact: The per-paper digest artifact; must already exist.
+    :param cells: This paper's validated cells; must be non-empty and all
+        about the same paper.
+    :param log_dir: The accountability-log directory (`DEFAULT_LOG_DIR`).
+    :param date: ISO date, for ``status.last-updated`` and the log entry.
+    :returns: The accountability-log entry written, named from the paper's
+        citekey (mirroring :func:`write_extraction`).
+    :raises ExtractionError: If the artifact does not exist; if it has no
+        ``status.understanding`` block; if it already carries
+        ``status.extraction``; if the cells are empty, span more than one
+        paper, or would not survive validation; or if the artifact's
+        frontmatter is malformed.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(
+            f"{path}: digest artifact not found — depth-sourced cells can "
+            "only be recorded against an existing depth digest; run `digest` "
+            "on this paper first"
+        )
+    citekey = _one_citekey(cells)
+    _refuse_unvalidated(cells)
+
+    text = path.read_text(encoding="utf-8")
+    try:
+        fm_lines, body = split_frontmatter(text)
+        if _status_extraction(fm_lines, path) is not None:
+            raise ExtractionError(
+                f"{path}: already carries a 'status.extraction' block — its "
+                "cells are extraction's, not depth mode's; recording "
+                "depth-sourced cells over them would blur which standard "
+                "produced the row. Use `digest extract record` to update "
+                "extraction cells instead"
+            )
+        if not _has_understanding(fm_lines, path):
+            raise ExtractionError(
+                f"{path}: no 'status.understanding' block — depth-sourced "
+                "cells restate claims a depth digest already certified; run "
+                "`digest` (depth mode) on this paper first, or use `digest "
+                "extract record` if this is extraction-mode reading instead"
+            )
+        fm_lines = set_field(fm_lines, "last-updated", date)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+
+    block = _render_block(
+        citekey, cells, heading=_DEPTH_CELLS_HEADING, caveat=_DEPTH_CELLS_CAVEAT
+    )
+    body = _splice_block(body, block, path)
+    path.write_text(rebuild(fm_lines, body), encoding="utf-8")
+    return append_log_entry(
+        Path(log_dir),
+        date,
+        citekey,
+        _log_body(path, citekey, cells, date, kind="depth-cells"),
+    )
+
+
+def has_extraction_or_cells(artifact: str | Path) -> bool:
+    """Whether `artifact` is a candidate for ``digest extract render``'s default batch.
+
+    True if the artifact carries ``status.extraction`` (today's
+    extraction-sourced case — even one with a missing or malformed cells
+    block, so that inconsistency surfaces as a read error when the cells are
+    actually gathered, rather than silently vanishing from the batch) **or** a
+    delimited cells block with no ``status.extraction`` (a depth-sourced row,
+    defendable-science#142). :func:`has_extraction` alone would silently
+    exclude every depth-sourced row from a bulk render — the exact "silently
+    skipped inside a bulk render that still reports success" failure #142's
+    acceptance criteria forbid — so this is a separate, wider predicate.
+    :func:`digest extract sample`'s own batch stays `has_extraction`-only:
+    extraction's sampling regime never ran for a depth-sourced paper, and
+    folding it in there would let a bulk sample draw a paper that regime
+    never touched.
+
+    :param artifact: The per-paper digest artifact.
+    :returns: Whether the artifact is a render candidate.
+    :raises ExtractionError: If the artifact is missing, its frontmatter is
+        absent or unparsable, or the cells-block markers are malformed.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    text = path.read_text(encoding="utf-8")
+    try:
+        fm_lines, body = split_frontmatter(text)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    if _status_extraction(fm_lines, path) is not None:
+        return True
+    return _locate_block(body, path) is not None
+
+
+def has_understanding_without_cells(artifact: str | Path) -> bool:
+    """Whether `artifact` is a depth digest that could contribute a row, but hasn't.
+
+    True only for a depth digest (``status.understanding`` present) with
+    **no** delimited cells block at all and no ``status.extraction`` — a
+    paper a bulk ``digest extract render`` would otherwise pass over in
+    total silence, because :func:`has_extraction_or_cells` correctly excludes
+    it from the batch (it has no recorded cells to render) but nothing else
+    then says so. Left unsurfaced, a survey author who read a paper at depth
+    and forgot to run ``digest depth cells record`` would see a clean
+    ``ok: true`` bulk render with no indication that paper was ever a
+    candidate — the same silent-skip failure #142's acceptance criteria
+    forbid, just triggered by "no cells recorded yet" instead of "cells
+    block missing after being declared".
+
+    An artifact that already has cells (either provenance) or a
+    ``status.extraction`` block returns ``False`` here — this predicate is
+    about the "not yet recorded" state specifically, not about presence.
+
+    :param artifact: The per-paper digest artifact.
+    :returns: Whether the artifact is a depth digest with no cells recorded yet.
+    :raises ExtractionError: If the artifact is missing or its frontmatter is
+        absent or unparsable.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    text = path.read_text(encoding="utf-8")
+    try:
+        fm_lines, body = split_frontmatter(text)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    if _status_extraction(fm_lines, path) is not None:
+        return False
+    if _locate_block(body, path) is not None:
+        return False
+    return _has_understanding(fm_lines, path)
 
 
 def _set_extraction_key(

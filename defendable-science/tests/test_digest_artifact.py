@@ -104,6 +104,10 @@ def test_a_fresh_artifact_carries_the_cells_in_its_body(tmp_path: Path) -> None:
     assert art.CELLS_BEGIN in text
     assert art.CELLS_END in text
     assert "guarantee type" in text
+    # Extraction's own caveat, unchanged by #142's depth-sourced writer sharing
+    # the same block machinery under a different heading/caveat.
+    assert "## Extracted cells" in text
+    assert "checked by sample" in text
 
 
 # --- behaviour 2: an existing depth-mode artifact ------------------------------
@@ -908,3 +912,308 @@ def test_set_in_sample_never_invents_an_extraction_block(tmp_path: Path) -> None
     target.write_text("---\nstatus:\n---\n", encoding="utf-8")
     with pytest.raises(ex.ExtractionError, match="has not been extracted"):
         art.set_in_sample(target, in_sample=True)
+
+
+# --- write_depth_cells: matrix cells from a depth-mode reading (defendable-science#142) --
+
+
+def _write_depth(path: Path, log_dir: Path, cells: list[ex.Cell] | None = None) -> Path:
+    return art.write_depth_cells(
+        path, _cells() if cells is None else cells, log_dir=log_dir, date=DATE
+    )
+
+
+def test_write_depth_cells_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    """Unlike `write_extraction`, there is no seed: nothing was certified yet."""
+    with pytest.raises(ex.ExtractionError, match="digest artifact not found"):
+        _write_depth(tmp_path / "nope.md", tmp_path / "log")
+
+
+def test_write_depth_cells_requires_an_understanding_block(tmp_path: Path) -> None:
+    """Cells restate what depth mode certified; there is nothing to restate."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus:\n---\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match=r"no 'status\.understanding' block"):
+        _write_depth(target, tmp_path / "log")
+    assert target.read_text(encoding="utf-8") == "---\nstatus:\n---\n"
+
+
+def test_write_depth_cells_refuses_an_already_extracted_artifact(
+    tmp_path: Path,
+) -> None:
+    """Extraction's cells must not be overwritten by a different standard's."""
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+    before = target.read_text(encoding="utf-8")
+
+    with pytest.raises(
+        ex.ExtractionError, match=r"already carries a 'status\.extraction'"
+    ):
+        _write_depth(target, tmp_path / "log")
+
+    assert target.read_text(encoding="utf-8") == before
+
+
+def test_write_depth_cells_leaves_understanding_and_prose_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """A direct byte-level diff, not just "it still parses" (defendable-science#142)."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+
+    _write_depth(target, tmp_path / "log")
+
+    after = target.read_text(encoding="utf-8")
+    before_fm, before_body = split_frontmatter(DEPTH_ARTIFACT)
+    after_fm, after_body = split_frontmatter(after)
+
+    # Frontmatter: only `last-updated` changes. The `understanding` block and
+    # its trailing `# defend` comment, and every other line, are untouched.
+    assert [ln for ln in before_fm if "last-updated" not in ln] == [
+        ln for ln in after_fm if "last-updated" not in ln
+    ]
+    assert UNDERSTANDING_LINE in after_fm
+    assert f"  last-updated: {DATE}" in after_fm
+
+    # Body: every original line survives, in order; only the cells block is new.
+    begin = after_body.index(art.CELLS_BEGIN)
+    end = after_body.index(art.CELLS_END)
+    assert [ln for ln in after_body[:begin] if ln.strip()] == [
+        ln for ln in before_body if ln.strip()
+    ]
+    assert after_body[end + 1 :] == []
+
+
+def test_write_depth_cells_reports_a_status_block_it_cannot_patch(
+    tmp_path: Path,
+) -> None:
+    """A ``status`` that parses but cannot be patched.
+
+    `status` parses as a mapping (so `_has_understanding` is true), but it is
+    written as an inline flow mapping with no bare ``status:`` line — the shape
+    `set_field` requires to patch ``last-updated``.
+    """
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus: {understanding: {status: ok, unresolved: []}}\n---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ex.ExtractionError, match="no 'status:' block"):
+        _write_depth(target, tmp_path / "log")
+
+
+def test_write_depth_cells_never_writes_status_extraction(tmp_path: Path) -> None:
+    """The provenance signal is the *absence* of `status.extraction` (ADR-0042)."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+
+    _write_depth(target, tmp_path / "log")
+
+    assert "extraction" not in _status(target)
+    assert set(_status(target)) == {"understanding", "last-updated"}
+
+
+def test_write_depth_cells_round_trips_through_read_cells(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+
+    _write_depth(target, tmp_path / "log")
+
+    assert art.read_cells(target) == _cells()
+
+
+def test_write_depth_cells_never_claims_extractions_sampling_regime(
+    tmp_path: Path,
+) -> None:
+    """The block's own prose must not say "checked by sample" — nothing was."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+
+    _write_depth(target, tmp_path / "log")
+
+    text = target.read_text(encoding="utf-8")
+    assert "## Depth-sourced cells" in text
+    assert "## Extracted cells" not in text
+    assert "checked by sample" not in text
+    assert "Extraction mode" not in text
+
+
+def test_write_depth_cells_refuses_an_empty_cell_list(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="takes one paper's cells"):
+        _write_depth(target, tmp_path / "log", [])
+
+
+def test_write_depth_cells_refuses_a_value_cell_with_no_locator(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    cells = [ex.Cell(CITEKEY, "scope", "global", locator="   ")]
+    with pytest.raises(ex.ExtractionError, match="has no locator; refusing"):
+        _write_depth(target, tmp_path / "log", cells)
+
+
+def test_write_depth_cells_replaces_cells_rather_than_appending(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write_depth(target, tmp_path / "log")
+    second = [ex.Cell(CITEKEY, "guarantee type", "learned", locator="§4")]
+    _write_depth(target, tmp_path / "log", second)
+
+    text = target.read_text(encoding="utf-8")
+    assert text.count(art.CELLS_BEGIN) == 1
+    assert text.count(art.CELLS_END) == 1
+    assert art.read_cells(target) == second
+
+
+def test_write_depth_cells_appends_a_depth_cells_log_entry(tmp_path: Path) -> None:
+    """The log entry carries its own `kind`, distinct from extraction's."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    log_dir = tmp_path / "defend-log"
+
+    entry_path = _write_depth(target, log_dir)
+
+    assert entry_path == log_dir / f"{DATE}-{CITEKEY}.yml"
+    entry = yaml.safe_load(entry_path.read_text(encoding="utf-8"))[0]
+    assert entry["kind"] == "depth-cells"
+    assert entry["citekey"] == CITEKEY
+    assert entry["cells"] == [
+        {
+            "axis": "guarantee type",
+            "value": "architectural",
+            "locator": "§2, Eq. (3)",
+        },
+        {
+            "axis": "scope",
+            "value": ex.NOT_ADDRESSED,
+            "justification": ("scoped to fully-monotone inputs in §1; never revisited"),
+        },
+    ]
+
+
+def test_write_extraction_still_logs_kind_extraction(tmp_path: Path) -> None:
+    """Pins the shared `_log_body` helper's default for the older writer."""
+    entry_path = _write(tmp_path / f"{CITEKEY}.md", tmp_path / "log")
+    entry = yaml.safe_load(entry_path.read_text(encoding="utf-8"))[0]
+    assert entry["kind"] == "extraction"
+
+
+# --- has_extraction_or_cells: `extract render`'s default-batch membership -----
+
+
+def test_has_extraction_or_cells_is_true_for_an_extracted_artifact(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+    assert art.has_extraction_or_cells(target) is True
+
+
+def test_has_extraction_or_cells_is_true_for_a_depth_sourced_artifact(
+    tmp_path: Path,
+) -> None:
+    """The exact case #142 exists for: no `status.extraction`, but cells present."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write_depth(target, tmp_path / "log")
+    assert art.has_extraction(target) is False
+    assert art.has_extraction_or_cells(target) is True
+
+
+def test_has_extraction_or_cells_is_false_for_a_plain_depth_digest(
+    tmp_path: Path,
+) -> None:
+    """Neither block present: nothing to render, and this is not a finding."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    assert art.has_extraction_or_cells(target) is False
+
+
+def test_has_extraction_or_cells_is_true_for_extraction_status_with_no_cells_block(
+    tmp_path: Path,
+) -> None:
+    """Mirrors `has_extraction`: the inconsistency surfaces when cells are read."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus:\n  extraction: {}\n---\n\nno block\n", "utf-8")
+    assert art.has_extraction_or_cells(target) is True
+
+
+def test_has_extraction_or_cells_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    with pytest.raises(ex.ExtractionError, match="digest artifact not found"):
+        art.has_extraction_or_cells(tmp_path / "nope.md")
+
+
+def test_has_extraction_or_cells_refuses_unparseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("not a digest at all\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
+        art.has_extraction_or_cells(target)
+
+
+def test_has_extraction_or_cells_refuses_malformed_cells_markers(
+    tmp_path: Path,
+) -> None:
+    """No `status.extraction` to short-circuit on, and the cells markers are broken."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(f"---\nstatus:\n---\n\n{art.CELLS_BEGIN}\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="malformed"):
+        art.has_extraction_or_cells(target)
+
+
+def test_has_understanding_without_cells_is_true_for_a_plain_depth_digest(
+    tmp_path: Path,
+) -> None:
+    """The exact "not yet recorded" case #142's render-batch fix must surface."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    assert art.has_understanding_without_cells(target) is True
+
+
+def test_has_understanding_without_cells_is_false_once_cells_are_recorded(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write_depth(target, tmp_path / "log")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_is_false_for_an_extracted_artifact(
+    tmp_path: Path,
+) -> None:
+    """`status.extraction` present: extraction's population, not depth's."""
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_is_false_with_no_understanding_either(
+    tmp_path: Path,
+) -> None:
+    """Neither block present at all: not a depth digest, nothing pending."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus:\n---\n", encoding="utf-8")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_refuses_a_missing_artifact(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ex.ExtractionError, match="digest artifact not found"):
+        art.has_understanding_without_cells(tmp_path / "nope.md")
+
+
+def test_has_understanding_without_cells_refuses_unparseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("not a digest at all\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
+        art.has_understanding_without_cells(target)
