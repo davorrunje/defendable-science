@@ -73,6 +73,14 @@ def _block_value_extent(lines: list[str], start: int, child_indent: str) -> int:
     whatever more-indented lines follow it. Blank lines inside the block are
     consumed; blank lines *after* it are not, so a reader's spacing survives.
 
+    A **comment-only** line is not a dedent, whatever column it sits at: YAML
+    allows a comment anywhere, and aligning a note flush-left or with the
+    parent key is ordinary. Treating one as the end of the block would stop the
+    scan short and let :func:`set_field` replace only part of the value —
+    orphaning the rest, which is the corruption this function exists to
+    prevent. Skipping it instead carries the scan on and puts the comment
+    inside the span, where `set_field`'s refusal sees it.
+
     :param lines: The frontmatter lines.
     :param start: Index of the ``key:`` line.
     :param child_indent: The indentation of ``status:``'s own children.
@@ -82,7 +90,8 @@ def _block_value_extent(lines: list[str], start: int, child_indent: str) -> int:
     i = start + 1
     while i < len(lines):
         line = lines[i]
-        if line.strip():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
             if len(line) - len(line.lstrip()) <= len(child_indent):
                 break
             end = i + 1
@@ -106,10 +115,12 @@ def set_field(fm_lines: list[str], key: str, value: str) -> list[str]:
     :param value: The rendered YAML value.
     :returns: The updated frontmatter lines.
     :raises FrontmatterError: If there is no ``status:`` block, or if the block
-        mapping being replaced carries a comment. A comment on a value this
-        call is about to overwrite cannot be round-tripped, and destroying a
-        human's annotation silently is the failure `patch_triage` refuses for
-        the same reason.
+        mapping being replaced carries a line that reads as a comment. A
+        comment on a value this call is about to overwrite cannot be
+        round-tripped, and destroying a human's annotation silently is the
+        failure `patch_triage` refuses for the same reason. The test is
+        textual, so a nested scalar containing ``" #"`` is refused too — the
+        safe direction, and the message says which line and what to do.
     """
     lines = list(fm_lines)
     status_idx = next(
@@ -127,8 +138,16 @@ def set_field(fm_lines: list[str], key: str, value: str) -> list[str]:
     key_pat = re.compile(rf"^{re.escape(child_indent)}{re.escape(key)}:\s*(.*)$")
     for i in range(status_idx + 1, len(lines)):
         line = lines[i]
-        # Stop at a dedent back to top level (end of the status block).
-        if line.strip() and not line.startswith(child_indent):
+        stripped = line.strip()
+        # Stop at a dedent back to top level (end of the status block) — but a
+        # comment-only line is not a dedent at any column. Ending the search on
+        # one would miss a key that follows it and insert a second copy, and a
+        # duplicate key silently shadows the value just written.
+        if (
+            stripped
+            and not stripped.startswith("#")
+            and not line.startswith(child_indent)
+        ):
             break
         match = key_pat.match(line)
         if match:
@@ -137,10 +156,12 @@ def set_field(fm_lines: list[str], key: str, value: str) -> list[str]:
             annotated = [ln for ln in lines[i + 1 : end] if _split_comment(ln)[1]]
             if annotated:
                 raise FrontmatterError(
-                    f"'status.{key}' is a block mapping carrying a comment "
-                    f"({annotated[0].strip()!r}), and this write replaces the "
-                    "whole value — move the note onto the "
-                    f"'{key}:' line or remove it, then re-run"
+                    f"'status.{key}' is a block mapping and this write replaces "
+                    f"the whole value, but the line {annotated[0].strip()!r} "
+                    "reads as carrying a comment, which cannot be carried over. "
+                    f"Move the note onto the '{key}:' line or delete it; if that "
+                    "'#' is part of a value rather than a comment, quote the "
+                    "value. Then re-run"
                 )
             lines[i:end] = [f"{child_indent}{key}: {value}{comment}"]
             return lines

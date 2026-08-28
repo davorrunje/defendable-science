@@ -661,7 +661,7 @@ def test_a_comment_inside_the_replaced_block_is_refused_not_destroyed(
         "    batch-check: pending\n---\n"
     )
     target.write_text(original, encoding="utf-8")
-    with pytest.raises(ex.ExtractionError, match="carrying a comment"):
+    with pytest.raises(ex.ExtractionError, match="reads as carrying a comment"):
         _write(target, tmp_path / "log")
     assert target.read_text(encoding="utf-8") == original
 
@@ -692,3 +692,95 @@ def test_set_batch_check_reports_a_block_value_json_cannot_rewrite(
     )
     with pytest.raises(ex.ExtractionError, match="cannot be rewritten"):
         art.set_batch_check(target, "failed")
+
+
+# --- a comment is not a dedent, at any column ---------------------------------
+
+
+def _block_with_comment(comment_line: str) -> str:
+    return (
+        "---\nstatus:\n  extraction:\n"
+        f"{comment_line}\n"
+        "    cells: 8\n    batch-check: pending\n  last-updated: 2026-08-01\n---\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "comment_line",
+    [
+        "# flush-left note",  # column 0
+        "  # a note at the parent's indent",  # the key's own indent
+        "    # a note at the children's indent",  # inside the block
+    ],
+)
+def test_write_refuses_a_comment_anywhere_in_the_block_it_would_replace(
+    tmp_path: Path, comment_line: str
+) -> None:
+    """A comment at any column ends the block scan if it is read as a dedent.
+
+    That would leave the scan short of the block's tail, so the refusal never
+    fires and only part of the value is replaced — the orphaned-children
+    corruption again, one column to the left.
+    """
+    target = tmp_path / f"{CITEKEY}.md"
+    original = _block_with_comment(comment_line)
+    target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ex.ExtractionError, match="reads as carrying a comment"):
+        _write(target, tmp_path / "log")
+    assert target.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "comment_line",
+    ["# flush-left note", "  # a note at the parent's indent"],
+)
+def test_set_batch_check_refuses_the_same_rather_than_reporting_success(
+    tmp_path: Path, comment_line: str
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    original = _block_with_comment(comment_line)
+    target.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ex.ExtractionError, match="reads as carrying a comment"):
+        art.set_batch_check(target, "failed")
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_a_comment_before_the_key_does_not_hide_it_and_cause_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    """Ending the *key search* on a comment inserts a second `extraction:`.
+
+    A duplicate key silently shadows the value just written, so the write would
+    report success and change nothing a reader sees.
+    """
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n# a note about the block below\n"
+        '  extraction: {"cells": 8, "batch-check": "pending"}\n---\n',
+        encoding="utf-8",
+    )
+    art.set_batch_check(target, "verified")
+
+    text = target.read_text(encoding="utf-8")
+    assert text.count("extraction:") == 1
+    assert "# a note about the block below" in text
+    assert _status(target)["extraction"]["batch-check"] == "verified"
+
+
+def test_a_top_level_key_after_the_status_block_still_ends_the_search(
+    tmp_path: Path,
+) -> None:
+    """The dedent rule must still hold for anything that is not a comment."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  last-updated: 2026-08-01\nelsewhere:\n"
+        "  extraction: not-a-status-child\n---\n",
+        encoding="utf-8",
+    )
+    _write(target, tmp_path / "log")
+
+    fm, _ = split_frontmatter(target.read_text(encoding="utf-8"))
+    assert "  extraction: not-a-status-child" in fm
+    assert _status(target)["extraction"]["cells"] == 2
