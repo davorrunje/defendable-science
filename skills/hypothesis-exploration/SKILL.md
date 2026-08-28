@@ -53,7 +53,7 @@ Every row (a line in the paper's `backlog.md`, which the CLI resolves from the r
 carries provenance so any candidate can be traced to where it came from:
 
 ```
-| id | one-line hypothesis | move/type | provenance | EIG | feas | interest | frame | status | note |
+| id | one-line | move/type | provenance | EIG | feas | interest | frame | status | note |
 ```
 
 - **provenance** — the origin, mandatory:
