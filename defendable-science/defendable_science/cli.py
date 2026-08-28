@@ -34,11 +34,18 @@ from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
 from defendable_science.literature import registry as registry_mod
+from defendable_science.scaffold.init_repo import init_repo
+from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from defendable_science.core.http import HttpClient
+
+
+class CacheDirError(ValueError):
+    """Raised on an invalid ``cache_dir:`` configuration."""
+
 
 app = typer.Typer(
     name="defendable-science",
@@ -126,23 +133,94 @@ def doctor() -> None:
 _DEFAULT_CACHE_ROOT = Path(".defendable-science/cache")
 
 
-def _load_config_or_exit() -> dict[str, Any]:
+def _load_config_or_exit(root: Path | None = None) -> dict[str, Any]:
     """Load ``.defendable-science/config.yml``, exiting 1 on invalid YAML/mapping.
 
+    The file is looked up from the **repository root** rather than the cwd, so a
+    command run from inside a paper directory reads the same project config as
+    one run from the top — and never silently falls back to "all defaults"
+    because the author happened to be one directory down.
+
+    :param root: The repository root to read from; discovered from the cwd when
+        omitted. ``init --root`` passes it, so the repo named on the command
+        line is the one whose config is read.
     :returns: The parsed configuration mapping (empty if the file is absent).
     :raises typer.Exit: Code 1 if the file exists but is not a valid YAML
         mapping.
     """
-    from defendable_science.core.config import load_config
+    from defendable_science.core.config import (
+        DEFAULT_CONFIG_PATH,
+        find_repo_root,
+        load_config,
+    )
 
     try:
-        return load_config()
+        return load_config((root or find_repo_root()) / DEFAULT_CONFIG_PATH)
     except ValueError as exc:
         typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
 
-def _cache_root(config: dict[str, Any] | None = None) -> Path:
+def _layout_or_exit(root: Path | None = None) -> tuple[dict[str, Any], Layout]:
+    """Load the config and resolve the layout, exiting 1 on an invalid block.
+
+    :param root: The repository root to resolve against; discovered from the cwd
+        when omitted. Must be a canonical path (``resolve()``-d).
+    :returns: The config mapping and the resolved layout.
+    :raises typer.Exit: Code 1 if ``layout:`` is invalid.
+    """
+    from defendable_science.core.config import find_repo_root
+
+    config = _load_config_or_exit(root)
+    repo_root = (root or find_repo_root()).resolve()
+    try:
+        return config, resolve_layout(config, repo_root)
+    except LayoutError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _repo_relative(value: str | Path, root: Path | None = None) -> Path:
+    """Anchor a configured path to the repository root, confining relative values.
+
+    A path written in ``config.yml`` describes a location in the *repository*,
+    not one relative to wherever the author happens to be standing. Resolving it
+    against the cwd would make ``defendable-science`` read and write different
+    files depending on the directory it was invoked from — silently, and in the
+    cache's case into a directory ``research-init`` never gitignored. An
+    absolute value is honoured as given.
+
+    A **relative** path that escapes the repository (e.g. ``../../elsewhere``) is
+    confined: such a path is almost certainly a typo. An integrity tool must not
+    write outside the work tree by accident. An **absolute** path is honoured
+    without restriction: a deliberately shared cache on a large disk is a real
+    need, and that is exactly how it is expressed.
+
+    :param value: The configured path.
+    :param root: The repository root to anchor to; discovered from the cwd when
+        omitted.
+    :returns: The absolute path it names.
+    :raises CacheDirError: If a relative path escapes the repository.
+    """
+    from defendable_science.core.config import find_repo_root
+
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    repo_root = (root or find_repo_root()).resolve()
+    resolved = (repo_root / path).resolve()
+    # Same containment rule as `_relative` in scaffold/layout.py: a relative
+    # value must stay inside the repository.
+    if resolved != repo_root and repo_root not in resolved.parents:
+        msg = (
+            f"cache_dir must stay inside the repository: {value!r} escapes it. "
+            "Use an absolute path for a deliberately external cache."
+        )
+        raise CacheDirError(msg)
+    return resolved
+
+
+def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) -> Path:
     """Resolve the cache root from ``config.yml``'s ``cache_dir:`` key.
 
     Both the dataset content-addressed cache and the literature HTTP cache
@@ -150,24 +228,167 @@ def _cache_root(config: dict[str, Any] | None = None) -> Path:
     this path (see the SKILL.md scaffold). Sourcing it from config instead of
     hardcoding it in two places is what keeps the scaffolded ``.gitignore``
     and the runtime cache location from drifting apart (defendable-science#65).
+    A relative value is anchored to the repo root (see :func:`_repo_relative`),
+    so the cache does not move when a command is run from a subdirectory.
+    A relative value that escapes the repository is confined to prevent
+    accidental writes outside the work tree.
 
     :param config: A pre-loaded config mapping; loaded fresh when omitted.
-    :returns: The configured cache root, or :data:`_DEFAULT_CACHE_ROOT` when
-        ``cache_dir`` is unset.
-    :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string.
+    :param root: The repository root a relative ``cache_dir`` is anchored to;
+        discovered from the cwd when omitted.
+    :returns: The absolute cache root — the configured ``cache_dir``, or
+        :data:`_DEFAULT_CACHE_ROOT` when it is unset.
+    :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string,
+        or if a relative ``cache_dir`` escapes the repository.
     """
     if config is None:
-        config = _load_config_or_exit()
+        config = _load_config_or_exit(root)
     cache_dir = config.get("cache_dir")
     if cache_dir is None:
-        return _DEFAULT_CACHE_ROOT
+        return _repo_relative(_DEFAULT_CACHE_ROOT, root)
     if not isinstance(cache_dir, str):
         typer.echo(
             "invalid .defendable-science/config.yml: 'cache_dir' must be a string",
             err=True,
         )
         raise typer.Exit(code=1)
-    return Path(cache_dir)
+    try:
+        return _repo_relative(cache_dir, root)
+    except CacheDirError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+# --- init (defendable-science#123) ----------------------------------------------------
+
+
+@app.command()
+def init(
+    root: Annotated[
+        str | None,
+        typer.Option(
+            "--root", help="Repository root to scaffold; discovered if omitted."
+        ),
+    ] = None,
+    thesis: Annotated[
+        bool, typer.Option("--thesis", help="Also scaffold the optional thesis tree.")
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would be written; write nothing."),
+    ] = False,
+) -> None:
+    """Scaffold the consumer layout, and report every path considered as JSON.
+
+    Writes each machine-read file from the renderer that owns its shape, so a
+    scaffolded repo is immediately readable by the commands that consume it.
+    **Existing files are never overwritten** — a file already there is reported
+    ``exists`` and left exactly as the author wrote it, which is why there is no
+    ``--force``: re-running only fills the gaps. ``.gitignore`` is the single
+    exception and is merged append-only, so it is reported ``merged`` (not
+    ``created``) even on a brand-new repo.
+
+    The layout, and the ``cache_dir`` recorded in the config and ``.gitignore``,
+    come from ``.defendable-science/config.yml`` when this repo has one, so
+    re-running against a customised repo cannot re-scaffold the default tree
+    beside it.
+
+    :param root: The repository root to scaffold; discovered from the cwd when
+        omitted. Authoritative for the whole resolution chain — the config that
+        is read and the cache path that is ignored come from this root too.
+    :param thesis: Also scaffold the optional thesis tree (aims, milestones,
+        the kappa directory).
+    :param dry_run: Report exactly what a real run would do, touching nothing.
+    :raises typer.Exit: Code 1 on an invalid ``.defendable-science/config.yml``,
+        or if a path cannot be written (an unwritable tree, a parent that is a
+        file). A failed run prints no report: a partial scaffold must never read
+        as a completed one.
+    """
+    config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    # Repo-relative and directory-shaped, matching `render.DEFAULT_CACHE_DIR`:
+    # this string is written into both config.yml and .gitignore, and an
+    # absolute path in either would be wrong (.gitignore) or unportable (config).
+    cache_dir = f"{layout.rel(_cache_root(config, layout.repo_root)).as_posix()}/"
+    try:
+        actions = init_repo(layout, thesis=thesis, dry_run=dry_run, cache_dir=cache_dir)
+    except OSError as exc:
+        typer.echo(
+            f"init failed: {exc}; the scaffold is incomplete — fix that path and "
+            "re-run (init is idempotent and never overwrites an existing file)",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "root": str(layout.repo_root),
+                "thesis": thesis,
+                "dry_run": dry_run,
+                "actions": [
+                    {"path": layout.rel(a.path).as_posix(), "status": a.status}
+                    for a in actions
+                ],
+                "counts": {
+                    status: sum(1 for a in actions if a.status == status)
+                    for status in ("created", "exists", "merged")
+                },
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0)
+
+
+# --- check (defendable-science#121) -----------------------------------------------
+
+
+@app.command()
+def check(
+    root: Annotated[
+        str | None,
+        typer.Option("--root", help="Repository root to check; discovered if omitted."),
+    ] = None,
+    text: Annotated[
+        bool,
+        typer.Option("--text", help="Print a human-readable summary instead of JSON."),
+    ] = False,
+) -> None:
+    """Report the repo's validity state as JSON.
+
+    Runs six check families (layout, tables, frontmatter, registries, config,
+    cross-artifact) and emits findings grouped by severity. Exit code is keyed
+    to severity: ``invalid`` or ``unreadable`` → 1; ``gap`` or clean → 0.
+
+    A missing or invalid layout block is fatal — the checker cannot know where
+    anything is — so the check exits 1 with a message and no findings JSON.
+
+    :raises typer.Exit: Code 0 when the repo is valid (gaps alone are OK).
+        Code 1 when any file is invalid or unreadable.
+    """
+    from defendable_science.check import run_checks
+    from defendable_science.check.probe import FsProbe
+
+    _config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    probe = FsProbe()
+    report = run_checks(layout, probe)
+
+    if text:
+        # Human-readable summary
+        typer.echo("defendable-science check")
+        typer.echo(f"  invalid: {report.counts['invalid']}")
+        typer.echo(f"  unreadable: {report.counts['unreadable']}")
+        typer.echo(f"  gap: {report.counts['gap']}")
+        if report.findings:
+            typer.echo("")
+            for finding in report.findings:
+                typer.echo(f"{finding.severity:12}{finding.file} — {finding.message}")
+                for line in finding.remedy.splitlines():
+                    typer.echo(f"  {line}")
+    else:
+        # JSON output
+        typer.echo(json.dumps(report.to_json(), indent=2))
+
+    raise typer.Exit(code=report.exit_code)
 
 
 # --- literature (defendable-science#1) ------------------------------------------------
@@ -386,8 +607,6 @@ def neighbors(
 # All config is optional (spec §8.3): a missing 'literature' block, or a missing
 # sub-key within it, means the shipped default.
 
-_DEFAULT_REGISTRY_PATH = "docs/research/literature/references.json"
-_DEFAULT_TRIAGE_PATH = "docs/research/literature/triage.yml"
 _DEFAULT_MAX_BYTES = 52_428_800
 
 
@@ -430,16 +649,26 @@ def _lit_str(lit: dict[str, Any] | None, field_name: str, default: str) -> str:
     return raw
 
 
-def _lit_registry_paths(lit: dict[str, Any] | None) -> tuple[Path, Path]:
+def _lit_registry_paths(
+    lit: dict[str, Any] | None, layout: Layout
+) -> tuple[Path, Path]:
     """Resolve ``literature.registry`` / ``literature.triage`` (spec §8.3).
 
+    An explicit key wins; otherwise the paths come from the resolved layout, so
+    a repo that moved its ``research_root`` does not also have to restate where
+    its bibliography lives. Either way the result is absolute: a configured
+    relative path is anchored to the repo root, never to the cwd, so
+    ``literature verify`` finds the same registry from a paper directory as
+    from the top (see :func:`_repo_relative`).
+
     :param lit: The parsed ``literature:`` config block, or ``None``.
-    :returns: ``(registry_path, triage_path)``.
+    :param layout: The resolved layout, which supplies the defaults.
+    :returns: ``(registry_path, triage_path)``, both absolute.
     :raises typer.Exit: Code 1 if either key is present but not a string.
     """
-    registry = _lit_str(lit, "registry", _DEFAULT_REGISTRY_PATH)
-    triage = _lit_str(lit, "triage", _DEFAULT_TRIAGE_PATH)
-    return Path(registry), Path(triage)
+    registry = _lit_str(lit, "registry", str(layout.references))
+    triage = _lit_str(lit, "triage", str(layout.triage))
+    return _repo_relative(registry), _repo_relative(triage)
 
 
 def _lit_cache_dir(config: dict[str, Any]) -> Path:
@@ -543,9 +772,9 @@ def _lit_context() -> acquire_mod.Context:
         or a single-entry acquisition call.
     :raises typer.Exit: Code 1 on any malformed ``literature.*`` config key.
     """
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, triage_path = _lit_registry_paths(lit)
+    registry_path, triage_path = _lit_registry_paths(lit, layout)
     max_bytes, resolvers = _lit_acquisition(lit)
     return acquire_mod.Context(
         registry_path=registry_path,
@@ -769,9 +998,9 @@ def lit_verify(
         ``ok``.
     """
     citekeys = _one_of_citekey_or_all(citekey, verify_all)
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, _triage_path = _lit_registry_paths(lit)
+    registry_path, _triage_path = _lit_registry_paths(lit, layout)
     cache_dir = _lit_cache_dir(config)
     registry = _load_registry_or_exit(registry_path)
     if citekeys is not None:
@@ -818,9 +1047,9 @@ def lit_mirror(
         ``already_present``.
     """
     citekeys = _one_of_citekey_or_all(citekey, mirror_all)
-    config = _load_config_or_exit()
+    config, layout = _layout_or_exit()
     lit = _lit_block(config)
-    registry_path, _triage_path = _lit_registry_paths(lit)
+    registry_path, _triage_path = _lit_registry_paths(lit, layout)
     cache_dir = _lit_cache_dir(config)
     mir = _lit_mirror(lit)
     if mir is None:
@@ -856,23 +1085,52 @@ dataset = typer.Typer(
 )
 app.add_typer(dataset, name="dataset")
 
+_ManifestOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--manifest", help="Path to the manifest; from the layout if omitted."
+    ),
+]
+
+
+def _manifest_path(manifest: str | None) -> str:
+    """Resolve the manifest path, falling back to ``layout.datasets_manifest``.
+
+    An explicit value always wins, and is honoured exactly as typed: a path the
+    author writes on the command line is relative to the directory they typed
+    it in. A path *recorded* in ``config.yml`` is a different thing — it names a
+    location in the repository — so an omitted option resolves to the layout's
+    absolute path, and a repo that records ``datasets_manifest: data/datasets.yml``
+    is honoured from any directory instead of being silently ignored (#124).
+
+    :param manifest: The explicit ``--manifest``, which always wins.
+    :returns: The path to load; absolute when it came from the layout.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block.
+    """
+    if manifest:
+        return manifest
+    _config, layout = _layout_or_exit()
+    return str(layout.datasets_manifest)
+
 
 @dataset.command()
 def validate(
     manifest: Annotated[
-        str, typer.Argument(help="Path to the manifest to validate.")
-    ] = "datasets.yml",
+        str | None,
+        typer.Argument(help="Path to the manifest; from the layout if omitted."),
+    ] = None,
 ) -> None:
     """Validate a ``datasets.yml`` manifest (the register/audit gate).
 
     Prints a JSON report ``{ok, errors, warnings}`` and exits non-zero on any
     hard error.
 
-    :param manifest: Path to the manifest to validate.
+    :param manifest: Path to the manifest to validate; from the layout when
+        omitted.
     :raises typer.Exit: Code 1 on a malformed manifest or any validation error.
     """
     try:
-        parsed = manifest_mod.load(manifest)
+        parsed = manifest_mod.load(_manifest_path(manifest))
     except manifest_mod.ManifestError as exc:
         typer.echo(json.dumps({"ok": False, "errors": [str(exc)], "warnings": []}))
         raise typer.Exit(code=1) from exc
@@ -920,20 +1178,18 @@ def emit(
     emit_all: Annotated[
         bool, typer.Option("--all", help="Emit every entry as a JSON array.")
     ] = False,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest to read.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Emit a Croissant JSON-LD document for a manifest entry (or all entries).
 
     :param identifier: The dataset id to emit; omit when using ``--all``.
     :param emit_all: Emit every registry entry as a JSON array.
-    :param manifest: Path to the manifest to read.
+    :param manifest: Path to the manifest to read; from the layout when omitted.
     :raises typer.Exit: Code 1 if the manifest is malformed, no id/``--all`` is
         given, or the id is unknown.
     """
     try:
-        parsed = manifest_mod.load(manifest)
+        parsed = manifest_mod.load(_manifest_path(manifest))
     except manifest_mod.ManifestError as exc:
         typer.echo(f"emit failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -960,10 +1216,18 @@ def _dataset_cache_dir() -> Path:
     return _cache_root() / "datasets"
 
 
-def _load_manifest_or_exit(path: str) -> manifest_mod.Manifest:
-    """Load a manifest, exiting 1 on a malformed file."""
+def _load_manifest_or_exit(path: str | None) -> manifest_mod.Manifest:
+    """Resolve the manifest path and load it, exiting 1 on a malformed file.
+
+    :param path: An explicit ``--manifest``, which always wins; ``None``
+        resolves the path from the layout (see :func:`_manifest_path`).
+    :returns: The parsed manifest.
+    :raises typer.Exit: Code 1 if the file is missing or malformed — the
+        message names the path that was actually consulted, so a manifest that
+        is not where it was expected can never read as an empty registry.
+    """
     try:
-        return manifest_mod.load(path)
+        return manifest_mod.load(_manifest_path(path))
     except manifest_mod.ManifestError as exc:
         typer.echo(f"manifest error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -1002,21 +1266,24 @@ def _mirror_from(parsed: manifest_mod.Manifest) -> retrieval_mod.Mirror | None:
 @dataset.command()
 def fetch(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Fetch a registered dataset through the resolution chain (pooch/rclone).
 
     :param identifier: The dataset id to fetch.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or the chain is exhausted.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
     try:
         paths = retrieval_mod.fetch(
-            entry, cache_dir=_dataset_cache_dir(), mirror=_mirror_from(parsed)
+            entry,
+            cache_dir=_dataset_cache_dir(),
+            mirror=_mirror_from(parsed),
+            repo_root=find_repo_root(),
         )
     except retrieval_mod.RetrievalError as exc:
         typer.echo(f"fetch failed: {exc}", err=True)
@@ -1028,19 +1295,21 @@ def fetch(
 @dataset.command()
 def verify(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Verify on-disk bytes against the manifest SHA-256 (offline).
 
     :param identifier: The dataset id to verify.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or a file fails to verify.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
-    report = retrieval_mod.verify(entry, cache_dir=_dataset_cache_dir())
+    report = retrieval_mod.verify(
+        entry, cache_dir=_dataset_cache_dir(), repo_root=find_repo_root()
+    )
     typer.echo(json.dumps(dataclasses.asdict(report) | {"ok": report.ok}, indent=2))
     raise typer.Exit(code=0 if report.ok else 1)
 
@@ -1048,16 +1317,16 @@ def verify(
 @dataset.command()
 def mirror(
     identifier: str,
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Populate/refresh the private rclone mirror for a dataset.
 
     :param identifier: The dataset id to mirror.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if no mirror is configured or a hop fails.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
     mir = _mirror_from(parsed)
@@ -1065,7 +1334,12 @@ def mirror(
         typer.echo("no mirror configured in the manifest", err=True)
         raise typer.Exit(code=1)
     try:
-        paths = retrieval_mod.fetch(entry, cache_dir=_dataset_cache_dir(), mirror=mir)
+        paths = retrieval_mod.fetch(
+            entry,
+            cache_dir=_dataset_cache_dir(),
+            mirror=mir,
+            repo_root=find_repo_root(),
+        )
         for path, ref in zip(paths, entry.files, strict=True):
             mir.put(path, ref.sha256)
     except retrieval_mod.RetrievalError as exc:
@@ -1080,22 +1354,25 @@ def audit(
     identifier: Annotated[
         str, typer.Argument(help="Optional dataset id; whole manifest if omitted.")
     ] = "",
-    manifest: Annotated[
-        str, typer.Option(help="Path to the manifest.")
-    ] = "datasets.yml",
+    manifest: _ManifestOpt = None,
 ) -> None:
     """Audit fixity, mirror presence and manifest completeness.
 
     :param identifier: Optional dataset id; audits the whole manifest if omitted.
-    :param manifest: Path to the manifest.
+    :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if validation or any fixity check fails.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     if identifier:
         entry = _entry_or_exit(parsed, identifier)
         parsed = manifest_mod.Manifest(mirror=parsed.mirror, datasets=[entry])
     report = retrieval_mod.audit(
-        parsed, cache_dir=_dataset_cache_dir(), mirror=_mirror_from(parsed)
+        parsed,
+        cache_dir=_dataset_cache_dir(),
+        mirror=_mirror_from(parsed),
+        repo_root=find_repo_root(),
     )
     typer.echo(
         json.dumps(
@@ -1248,19 +1525,79 @@ def record(
 backlog = typer.Typer(help="Exploration backlog management.", no_args_is_help=True)
 app.add_typer(backlog, name="backlog")
 
-_BacklogPath = Annotated[str, typer.Option("--backlog", help="Path to the backlog.")]
+_BacklogPath = Annotated[
+    str | None,
+    typer.Option("--backlog", help="Path to the backlog; from the layout if omitted."),
+]
 _LevelOpt = Annotated[str, typer.Option("--level", help="hypothesis | paper.")]
 
 
-def _open_backlog(path: str, level: str) -> backlog_mod.Backlog:
-    """Validate `level` and load the backlog at `path`.
+def _paper_dir_or_exit(layout: Layout, option: str) -> Path:
+    """Return the paper directory the cwd sits in, exiting 2 if there is none.
 
-    :raises typer.Exit: Code 2 on an invalid level.
+    Walks up from the cwd to the first ancestor that is a direct child of
+    ``research_root`` — the paper a command run anywhere inside a paper tree is
+    about.
+
+    :param layout: The resolved layout.
+    :param option: The option to name in the error (``--backlog`` /
+        ``--paper-root``).
+    :returns: The paper's root directory.
+    :raises typer.Exit: Code 2 when the cwd is outside every paper. Guessing
+        (``./backlog.md``, say) would write the row into the wrong file and
+        report success, which an integrity tool must not do.
+    """
+    here = Path.cwd().resolve()
+    for candidate in (here, *here.parents):
+        if candidate.parent == layout.research_root:
+            return candidate
+    typer.echo(
+        f"cannot resolve {option}: the current directory is not inside a paper "
+        f"under {layout.research_root}; pass {option} explicitly",
+        err=True,
+    )
+    raise typer.Exit(code=2)
+
+
+def _resolve_backlog(level: str) -> str:
+    """Resolve an omitted ``--backlog`` from the layout.
+
+    :param level: The validated backlog level — the portfolio backlog at the
+        paper level, the cwd's paper backlog at the hypothesis level.
+    :returns: The backlog path to read and write.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block; code 2 when the
+        path cannot be located, or its directory does not exist yet.
+    """
+    _config, layout = _layout_or_exit()
+    if level == "paper":
+        target = layout.portfolio_backlog
+    else:
+        target = layout.backlog(_paper_dir_or_exit(layout, "--backlog").name)
+    if not target.parent.is_dir():
+        typer.echo(
+            f"cannot resolve --backlog: {layout.rel(target.parent)} does not "
+            "exist; run the research-init skill, or pass --backlog explicitly",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return str(target)
+
+
+def _open_backlog(path: str | None, level: str) -> tuple[str, backlog_mod.Backlog]:
+    """Validate `level`, resolve the backlog path, and load the table.
+
+    :param path: An explicit ``--backlog``, which always wins; ``None`` resolves
+        the path from the layout.
+    :param level: The requested backlog level.
+    :returns: The resolved path and the loaded backlog.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 on an
+        invalid level or an unresolvable path.
     """
     if level not in ("hypothesis", "paper"):
         typer.echo(f"--level must be 'hypothesis' or 'paper', got {level!r}", err=True)
         raise typer.Exit(code=2)
-    return backlog_mod.Backlog.load(path, level)  # type: ignore[arg-type]
+    resolved = path or _resolve_backlog(level)
+    return resolved, backlog_mod.Backlog.load(resolved, level)  # type: ignore[arg-type]
 
 
 def _emit_row(row: dict[str, str]) -> None:
@@ -1273,7 +1610,7 @@ def _emit_row(row: dict[str, str]) -> None:
 def park(
     one_line: str,
     provenance: Annotated[str, typer.Option("--provenance", help="Origin, verbatim.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     row_id: Annotated[str, typer.Option("--id", help="Explicit row id.")] = "",
 ) -> None:
@@ -1281,18 +1618,19 @@ def park(
 
     :param one_line: The one-line idea.
     :param provenance: Its origin (verbatim); required.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level (``hypothesis`` or ``paper``).
     :param row_id: Optional explicit id.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.park(one_line, provenance, row_id=row_id or None)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
@@ -1300,7 +1638,7 @@ def park(
 def add(
     one_line: str,
     provenance: Annotated[str, typer.Option("--provenance", help="Origin, verbatim.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     row_id: Annotated[str, typer.Option("--id", help="Explicit row id.")] = "",
 ) -> None:
@@ -1308,34 +1646,36 @@ def add(
 
     :param one_line: The one-line idea.
     :param provenance: Its origin (verbatim); required.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level (``hypothesis`` or ``paper``).
     :param row_id: Optional explicit id.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.add(one_line, provenance, row_id=row_id or None)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
 @backlog.command(name="list")
 def list_(
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     status: Annotated[str, typer.Option("--status", help="Filter by status.")] = "",
 ) -> None:
     """List backlog rows as JSON (read-only), optionally filtered by status.
 
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param status: Optional status filter.
     """
-    board = _open_backlog(backlog_path, level)
+    _target, board = _open_backlog(backlog_path, level)
     rows = board.listing(status=status or None)
     typer.echo(json.dumps(rows, indent=2))
     raise typer.Exit(code=0)
@@ -1344,7 +1684,7 @@ def list_(
 @backlog.command()
 def rank(
     row_id: str,
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     eig: Annotated[str, typer.Option("--eig")] = "",
     feas: Annotated[str, typer.Option("--feas")] = "",
@@ -1354,7 +1694,8 @@ def rank(
     """Score a row and set it ``ranked`` (advises; never selects).
 
     :param row_id: The row to rank.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param eig: Expected-information-gain score (hypothesis level).
     :param feas: Feasibility score.
@@ -1362,7 +1703,7 @@ def rank(
     :param frame: gap-spotting / problematization (hypothesis level).
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     scores = {
         k: v
         for k, v in (
@@ -1378,41 +1719,66 @@ def rank(
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
-def _check_scaffold_opts(
-    level: str, paper_root: str, research: str, backend: str
-) -> None:
+def _check_scaffold_opts(level: str, backend: str) -> None:
     """Validate the ``--scaffold`` option combination for `level`.
 
+    Only the backend is demanded: every path now falls back to the layout.
+
     :param level: The validated backlog level.
-    :param paper_root: ``--paper-root`` (hypothesis level).
-    :param research: ``--research-root`` (paper level).
     :param backend: ``--backend`` (paper level).
     :raises typer.Exit: Code 2 if an option this level requires is missing.
     """
-    if level == "hypothesis":
-        needed = {"--paper-root": paper_root}
-    else:
-        # ``backend`` has no default: the plugin ships no experiment backend, so
-        # a registry row with an empty binding is not a usable paper (ADR-0013).
-        needed = {"--research-root": research, "--backend": backend}
-    missing = sorted(name for name, value in needed.items() if not value)
-    if missing:
-        typer.echo(
-            f"--scaffold at the {level} level requires {', '.join(missing)}", err=True
-        )
+    # ``backend`` has no default: the plugin ships no experiment backend, so a
+    # registry row with an empty binding is not a usable paper (ADR-0013).
+    if level == "paper" and not backend:
+        typer.echo("--scaffold at the paper level requires --backend", err=True)
         raise typer.Exit(code=2)
+
+
+def _scaffold_layout(research: str | None) -> Layout:
+    """Resolve the layout a paper scaffold writes into.
+
+    An explicit ``--research-root`` overrides ``research_root`` and *only* that
+    field: the repo root the registry row is rendered against still comes from
+    the resolved layout. Deriving it from the directory instead (its
+    grandparent) was correct only for the default ``docs/research`` and
+    silently wrong for anything else — a paper under ``/repo/writing`` was
+    registered as ``repo/writing/dc``.
+
+    :param research: The explicit ``--research-root``, which always wins.
+    :returns: The layout to scaffold under.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block.
+    """
+    _config, layout = _layout_or_exit()
+    if research:
+        return dataclasses.replace(layout, research_root=Path(research).resolve())
+    return layout
+
+
+def _scaffold_paper_root(paper_root: str | None) -> Path:
+    """Resolve ``--paper-root``, falling back to the cwd's paper directory.
+
+    :param paper_root: The explicit ``--paper-root``, which always wins.
+    :returns: The paper's root directory.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 when the
+        cwd is outside every paper.
+    """
+    if paper_root:
+        return Path(paper_root)
+    _config, layout = _layout_or_exit()
+    return _paper_dir_or_exit(layout, "--paper-root")
 
 
 def _scaffold_promoted(
     level: str,
     row: dict[str, str],
     *,
-    paper_root: str,
-    research: str,
+    paper_root: str | None,
+    research: str | None,
     backend: str,
     slug: str,
     date: str,
@@ -1422,26 +1788,31 @@ def _scaffold_promoted(
     :param level: The validated backlog level.
     :param row: The promoted row, whose ``one-line``/``provenance`` are carried
         into the artifact verbatim.
-    :param paper_root: The paper root (hypothesis level).
-    :param research: The ``docs/research`` directory (paper level).
+    :param paper_root: The paper root (hypothesis level); from the layout when
+        omitted.
+    :param research: The research directory (paper level); from the layout when
+        omitted.
     :param backend: The experiment-backend binding to record (paper level).
     :param slug: Explicit hypothesis folder name; ``<date>-<row-id>`` otherwise.
     :param date: ISO date for the folder name and ``last-updated``.
     :returns: The created paths, keyed for the caller's JSON report.
     :raises backlog_mod.BacklogError: If a target artifact already exists.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, code 2 when a
+        path can neither be given nor resolved.
     """
     today = date or backlog_mod.today_iso()
     if level == "hypothesis":
         target = backlog_mod.scaffold_hypothesis(
-            paper_root,
+            _scaffold_paper_root(paper_root),
             slug or f"{today}-{row['id']}",
             row["one-line"],
             row["provenance"],
             today=today,
         )
         return {"hypothesis": str(target)}
+    layout = _scaffold_layout(research)
     root = backlog_mod.scaffold_paper(
-        research,
+        layout,
         row["id"],
         row["one-line"],
         backend=backend,
@@ -1450,29 +1821,29 @@ def _scaffold_promoted(
     )
     return {
         "paper_root": str(root),
-        "pitch": str(root / "paper" / "pitch.md"),
-        "backlog": str(root / "backlog.md"),
-        "registry": str(Path(research) / "papers.md"),
+        "pitch": str(layout.paper_docs_dir(row["id"]) / "pitch.md"),
+        "backlog": str(layout.backlog(row["id"])),
+        "registry": str(layout.papers_registry),
     }
 
 
 @backlog.command()
 def promote(
     row_id: str,
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
     scaffold: Annotated[
         bool,
         typer.Option("--scaffold", help="Also scaffold the next-stage artifact."),
     ] = False,
     paper_root: Annotated[
-        str,
+        str | None,
         typer.Option("--paper-root", help="Paper root (hypothesis level scaffold)."),
-    ] = "",
+    ] = None,
     research_root: Annotated[
-        str,
-        typer.Option("--research-root", help="docs/research dir (paper level)."),
-    ] = "",
+        str | None,
+        typer.Option("--research-root", help="Research dir (paper level)."),
+    ] = None,
     backend: Annotated[
         str,
         typer.Option("--backend", help="Experiment-backend binding (paper level)."),
@@ -1497,22 +1868,24 @@ def promote(
     retryable, never ``promoted`` with nothing on disk.
 
     :param row_id: The row to promote.
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :param scaffold: Also scaffold the next-stage artifact.
-    :param paper_root: The paper root; required with ``--scaffold`` at the
-        hypothesis level.
-    :param research_root: The ``docs/research`` directory; required with
-        ``--scaffold`` at the paper level.
+    :param paper_root: The paper root (hypothesis level); the paper the cwd sits
+        in when omitted.
+    :param research_root: The research directory (paper level); the layout's
+        ``research_root`` when omitted.
     :param backend: The experiment-backend binding; required with ``--scaffold``
         at the paper level (the plugin bundles no default).
     :param slug: Explicit ``<YYYY-MM-DD-slug>`` hypothesis folder name.
     :param date: ISO date for the folder name and ``last-updated``.
-    :raises typer.Exit: Code 1 on a guard violation, code 2 on a missing option.
+    :raises typer.Exit: Code 1 on a guard violation, code 2 on a missing option
+        or an unresolvable path.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     if scaffold:
-        _check_scaffold_opts(level, paper_root, research_root, backend)
+        _check_scaffold_opts(level, backend)
     try:
         row = board.promote(row_id)
         artifacts = (
@@ -1531,7 +1904,7 @@ def promote(
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     if artifacts is None:
         _emit_row(row)
     typer.echo(json.dumps({"row": row, "artifacts": artifacts}, indent=2))
@@ -1542,24 +1915,25 @@ def promote(
 def drop(
     row_id: str,
     reason: Annotated[str, typer.Option("--reason", help="Why it is dropped.")],
-    backlog_path: _BacklogPath = "backlog.md",
+    backlog_path: _BacklogPath = None,
     level: _LevelOpt = "hypothesis",
 ) -> None:
     """Retire a row as ``dropped`` with a recorded reason (never deletes it).
 
     :param row_id: The row to drop.
     :param reason: Why it is dropped; required (file-drawer discipline).
-    :param backlog_path: Path to the backlog table.
+    :param backlog_path: Path to the backlog table; resolved from the layout
+        when omitted.
     :param level: Backlog level.
     :raises typer.Exit: Code 1 on a guard violation.
     """
-    board = _open_backlog(backlog_path, level)
+    target, board = _open_backlog(backlog_path, level)
     try:
         row = board.drop(row_id, reason)
     except backlog_mod.BacklogError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
-    board.save(backlog_path)
+    board.save(target)
     _emit_row(row)
 
 
@@ -1719,8 +2093,8 @@ def list_keys() -> None:
     raise typer.Exit(code=0)
 
 
-@keys.command()
-def check() -> None:
+@keys.command()  # type: ignore[no-redef]
+def check() -> None:  # noqa: F811
     """Report presence/absence and source of each key as JSON (never a value)."""
     compact = [
         {"name": row["name"], "present": row["present"], "source": row["source"]}

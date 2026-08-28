@@ -1,8 +1,8 @@
 ---
 status:
   level: paper
-  id: <paper-id>
-  verdict: <publish | no-go>   # the material decision; no-go is a valid, done outcome — not failure
+  id: null                     # <paper-id> — kebab-case slug from the papers.md registry
+  verdict: null                # publish | no-go — the material decision; no-go is a valid, done outcome
   readiness: drafting          # → under-review → published as the manuscript progresses
   signed-off-by: null          # REQUIRED — named human; decision is not real until set
   signed-off-date: null        # REQUIRED
@@ -11,7 +11,7 @@ status:
   load-bearing: null
   understanding: {status: ok, unresolved: []}        # from the `defend` guardrail before sign-off
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Decision: <paper-id>

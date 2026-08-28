@@ -31,6 +31,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `errors[]` row (exit 1) rather than a `manual[]` one, and a `429` from a PDF
   host aborts the sweep with `complete: false` exactly as a metadata throttle
   does.
+- **The consumer layout is recorded once, and every command resolves paths from
+  it** ([ADR-0039](decisions/0039-recorded-consumer-layout.md)). The tree was
+  previously restated in each command's options and in nine documents, so the
+  caller had to know it: `backlog list` wanted `--backlog`, `promote --scaffold`
+  wanted `--paper-root` or `--research-root`, and `dataset` wanted `--manifest`.
+  All of them now derive their paths from one definition, and a repo that
+  diverges from the default tree records the divergence in an optional four-key
+  `layout:` block in `.defendable-science/config.yml` — `research_root`,
+  `literature_dir`, `datasets_manifest`, `thesis_dir`. Omitted keys keep the
+  default so a conventional repo records nothing; an unknown key is an error
+  rather than a silent no-op, and a path escaping the work tree is refused
+  outright. Explicit options still win where they exist.
+  The repository root is now discovered by walking up from the cwd, so every
+  command behaves the same from a paper directory as from the top. That fixed
+  two ways paths could land in the wrong place: the root was being derived as
+  `research_root.parent.parent`, which is correct only for the default
+  `docs/research` and silently wrong for any other research root, and a relative
+  `cache_dir` was anchored to the cwd, so `dataset fetch` run from a
+  subdirectory wrote its cache into a directory `research-init` had never
+  gitignored. Relative `cache_dir`, `literature.registry` and `literature.triage`
+  values all anchor to the repo root now.
+- **`defendable-science init [--root PATH] [--thesis] [--dry-run]`** — scaffolds
+  a consumer repo, rendering every machine-read file from the package that
+  already owns its shape rather than from prose an agent retypes. A
+  prose-scaffolded repo was dead on arrival: both backlog tables carried headers
+  no column profile accepts and `papers.md` an invented fourth column, so
+  `backlog park` and `backlog promote --scaffold` both failed on a freshly
+  onboarded repo. `init` writes `papers.md`, the portfolio backlog,
+  `references.json`, `triage.yml`, `datasets.yml`, `config.yml`,
+  `rclone.conf.example` and a `dashboard.md` stub — and with `--thesis` the
+  thesis aims stub, `milestones.yml` and `kappa/` — each asserted in the test
+  suite against the loader that consumes it, so two runs agree and the result
+  parses.
+  It is idempotent and non-destructive: a file already present is reported
+  `exists` and left exactly as the author wrote it, which is why there is no
+  `--force`; `.gitignore` is the single exception and is merged append-only.
+  `--dry-run` produces the report a real run would and writes nothing, and a run
+  that fails prints no report at all — a partial scaffold must never read as a
+  finished one. Unset machine-read fields are `null` or their empty collection,
+  never a `<...>` placeholder: a placeholder parses as a real value, which is how
+  a scaffolded `readiness: <synthesis | defensible>` used to reach `progress` as
+  a real readiness. The dashboard stub says plainly that no generator has run
+  rather than projecting a fabricated state.
 
 ### Changed
 

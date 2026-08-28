@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from defendable_science.core import load_config
+from defendable_science.core.config import find_repo_root
 
 
 def test_missing_file_returns_empty(tmp_path: Path) -> None:
@@ -44,3 +45,29 @@ def test_malformed_yaml_is_clean_value_error(tmp_path: Path) -> None:
     path.write_text("literature: [unclosed\n", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid YAML"):
         load_config(path)
+
+
+def test_find_repo_root_walks_up_to_the_config_dir(tmp_path: Path) -> None:
+    (tmp_path / ".defendable-science").mkdir()
+    nested = tmp_path / "docs" / "research" / "depth-collapse"
+    nested.mkdir(parents=True)
+
+    assert find_repo_root(nested) == tmp_path.resolve()
+
+
+def test_find_repo_root_returns_the_start_when_there_is_no_config_dir(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+
+    assert find_repo_root(nested) == nested.resolve()
+
+
+def test_find_repo_root_defaults_to_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".defendable-science").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert find_repo_root() == tmp_path.resolve()

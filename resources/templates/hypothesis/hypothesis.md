@@ -1,7 +1,7 @@
 ---
 status:
   level: hypothesis
-  id: <YYYY-MM-DD-slug>        # matches the hypothesis folder name
+  id: null                     # <YYYY-MM-DD-slug> — matches the hypothesis folder name
   verdict: pending             # pending | confirmed | refuted | inconclusive (set in findings.md)
   readiness: pending           # pending | resolved
   signed-off-by: null          # named human — set only at the findings verdict
@@ -11,7 +11,7 @@ status:
   load-bearing: null           # does refutation block the parent paper's claim? (true|false)
   understanding: {status: pending, unresolved: []}   # written by the `defend` skill; never scored
   blockers: []
-  last-updated: <YYYY-MM-DD>
+  last-updated: null           # <YYYY-MM-DD>
 ---
 
 # Hypothesis: <one-line claim>

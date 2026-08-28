@@ -49,7 +49,7 @@ frictionless; `generate` and `rank` do the analytic work.
 
 ### Backlog row schema
 
-Every row (a line in the `backlog.md` table under `docs/research/<paper>/`)
+Every row (a line in the paper's `backlog.md`, which the CLI resolves from the repo's layout)
 carries provenance so any candidate can be traced to where it came from:
 
 ```
@@ -147,7 +147,7 @@ testing slate.
 - **Upstream:** `literature scout` (`../../docs/design/02-literature.md`) feeds
   citation-seeded candidates; EDA and the generation moves feed the rest. All
   origins converge on the one `backlog.md`.
-- **Downstream — `promote`:** scaffold `docs/research/<paper>/hypotheses/<YYYY-MM-DD-slug>/`
+- **Downstream — `promote`:** scaffold a new hypothesis folder (resolved from the repo's layout)
   and write `hypothesis.md` (the free-form claim — the first staged doc of
   `hypothesis-testing`, `../../docs/design/01-lifecycle.md` §2.2), carrying the
   backlog provenance forward. Set the backlog row to `promoted` with a link to

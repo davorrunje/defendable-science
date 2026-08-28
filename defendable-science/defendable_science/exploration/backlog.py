@@ -17,7 +17,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import date as date_cls
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+from defendable_science.scaffold import status
+
+if TYPE_CHECKING:
+    from defendable_science.scaffold.layout import Layout
 
 from defendable_science.core.mdtable import Document as Document
 from defendable_science.core.mdtable import Row as Row
@@ -56,6 +61,45 @@ PAPER_COLUMNS = [
 
 #: The columns ``papers.md`` must carry for ``promote`` to register a paper.
 REGISTRY_COLUMNS = ["paper-id", "root", "backend"]
+
+_REGISTRY_PREAMBLE = """\
+# Papers registry
+
+<!-- paper-id → the paper's root + its experiment-backend binding.
+     `defendable-science backlog promote --scaffold` appends rows; a paper-id is
+     stable once written, because it keys the paper across the backlog, the
+     dashboard and `progress`. -->
+
+"""
+
+
+#: The heading and prose an empty hypothesis backlog carries. Public because
+#: ``scaffold.render`` renders the same file for ``init`` and this is the one
+#: definition of it: ``render`` imports ``backlog``, so the constant has to live
+#: here for both writers to share it rather than drift into two variants.
+HYPOTHESIS_PREAMBLE = """\
+# Hypothesis backlog
+
+<!-- Hypotheses for this paper: parked → candidate → ranked →
+     promoted | dropped. -->
+
+"""
+
+
+def registry_dumps(preamble: str = _REGISTRY_PREAMBLE) -> str:
+    """Render an empty-but-valid ``papers.md``.
+
+    The header is rendered from :data:`REGISTRY_COLUMNS`, so a column added there
+    cannot leave scaffolding behind: a scaffolded registry can never be *missing*
+    a required column, which is the one thing that stops
+    :func:`append_papers_registry` — and so ``promote --scaffold`` — registering a
+    paper. Columns beyond the profile are the author's, and are preserved.
+
+    :param preamble: Host prose to place above the table.
+    :returns: The whole document.
+    """
+    return splice(preamble, "", list(REGISTRY_COLUMNS), [])
+
 
 #: Allowed source states for the ``rank`` transition.
 _RANK_SOURCES = frozenset({"candidate", "parked"})
@@ -347,22 +391,12 @@ def today_iso() -> str:
     return date_cls.today().isoformat()
 
 
+#: The first staged doc of ``hypothesis-testing``. Its ``status:`` block is
+#: interpolated from :func:`defendable_science.scaffold.status.render`, the one
+#: definition of the frontmatter (#120).
 _HYPOTHESIS_TEMPLATE = """\
 ---
-status:
-  level: hypothesis
-  id: {slug}
-  verdict: pending
-  readiness: pending
-  signed-off-by: null
-  signed-off-date: null
-  evidence: []
-  covers: []
-  load-bearing: null
-  understanding: {{status: pending, unresolved: []}}
-  blockers: []
-  last-updated: {today}
----
+{status}---
 
 # Hypothesis: {one_line}
 
@@ -385,30 +419,14 @@ status:
 """
 
 
-#: Mirrors ``resources/templates/paper/pitch.md``. The **status block must stay
-#: byte-identical** to that template's (inline comments aside): ``progress``
-#: projects it, so a drift makes a promoted paper misread or vanish from the
-#: dashboard. The plugin's ``resources/`` is not importable from here — the two
-#: artifacts ship on separate cadences (ADR-0026) and the wheel contains only
-#: ``defendable_science`` — so the constant is duplicated deliberately and
-#: ``tests/test_backlog.py`` fails on divergence. Prose is condensed; the shipped
-#: template stays the fuller authoring skeleton.
+#: The tracked stub of ``resources/templates/paper/pitch.md``, whose prose is
+#: condensed (the shipped template stays the fuller authoring skeleton). Its
+#: ``status:`` block is interpolated from
+#: :func:`defendable_science.scaffold.status.render` — one definition, shared
+#: structurally rather than kept in step by a drift test (#120).
 _PAPER_TEMPLATE = """\
 ---
-status:
-  level: paper
-  id: {paper_id}
-  verdict: null
-  readiness: drafting
-  signed-off-by: null
-  signed-off-date: null
-  evidence: []
-  covers: []
-  load-bearing: null
-  understanding: {{status: pending, unresolved: []}}
-  blockers: []
-  last-updated: {today}
----
+{status}---
 
 # Pitch: {one_line}
 
@@ -467,10 +485,11 @@ def scaffold_hypothesis(
     folder.mkdir(parents=True, exist_ok=True)
     target.write_text(
         _HYPOTHESIS_TEMPLATE.format(
-            slug=slug,
+            status=status.render(
+                "hypothesis", {"id": slug, "last-updated": today or today_iso()}
+            ),
             one_line=one_line,
             provenance=provenance,
-            today=today or today_iso(),
         ),
         encoding="utf-8",
     )
@@ -524,17 +543,20 @@ def append_papers_registry(
     )
 
 
-def _registry_root(root: Path, research: Path) -> str:
-    """Render the paper root relative to the repo root for the registry row."""
-    repo = research.parent.parent  # docs/research → repo root
-    try:
-        return str(root.relative_to(repo))
-    except ValueError:
-        return str(root)
+def registry_root(layout: Layout, paper_root: Path) -> str:
+    """Render `paper_root` relative to the repo root for the registry row.
+
+    :param layout: The resolved layout, which knows the repo root. Deriving it
+        as ``research.parent.parent`` was correct only for the default
+        ``docs/research`` and silently wrong for any other ``research_root``.
+    :param paper_root: The paper's root directory.
+    :returns: The repo-relative path as a string.
+    """
+    return str(layout.rel(paper_root))
 
 
 def scaffold_paper(
-    research_root: str | Path,
+    layout: Layout,
     paper_id: str,
     one_line: str,
     *,
@@ -546,7 +568,9 @@ def scaffold_paper(
 
     Creates ``<research_root>/<paper_id>/{hypotheses,paper}/`` with an empty
     ``backlog.md`` and a ``paper/pitch.md`` seeded from :data:`_PAPER_TEMPLATE`,
-    then appends the ``papers.md`` registry row.
+    then appends the ``papers.md`` registry row. Every one of those paths is
+    derived from `layout`, so none of them can drift from what the rest of the
+    tooling reads.
 
     The pitch carries the **status frontmatter** ``progress`` projects, exactly as
     :func:`scaffold_hypothesis` does one level down. Without it a promoted paper
@@ -558,7 +582,11 @@ def scaffold_paper(
     *tracked stub*, not a drafted pitch, and seeding prose the author did not
     write would cut against the agency principle (meta-spec §2.1).
 
-    :param research_root: The ``docs/research`` directory.
+    :param layout: The resolved layout: where the paper tree goes, *and* the
+        repo root its registry row is rendered against. It is the whole layout
+        rather than a bare directory deliberately — deriving the repo root from
+        the directory (``research_root.parent.parent``) was correct only for the
+        default ``docs/research`` and silently wrong for anything else.
     :param paper_id: The stable paper id.
     :param one_line: The pitch line carried from the portfolio-backlog row.
     :param backend: The experiment-backend binding to record.
@@ -567,25 +595,27 @@ def scaffold_paper(
     :returns: The paper root directory.
     :raises BacklogError: If the paper root already exists.
     """
-    research = Path(research_root)
-    root = research / paper_id
+    root = layout.paper_dir(paper_id)
     if root.exists():
         raise BacklogError(f"{root} already exists — refusing to overwrite")
-    (root / "hypotheses").mkdir(parents=True)
-    (root / "paper").mkdir(parents=True)
-    (root / "backlog.md").write_text(
-        Backlog(level="hypothesis").dumps(), encoding="utf-8"
+    layout.hypotheses_dir(paper_id).mkdir(parents=True)
+    docs_dir = layout.paper_docs_dir(paper_id)
+    docs_dir.mkdir(parents=True)
+    layout.backlog(paper_id).write_text(
+        Backlog(level="hypothesis", preamble=HYPOTHESIS_PREAMBLE).dumps(),
+        encoding="utf-8",
     )
-    (root / "paper" / "pitch.md").write_text(
+    (docs_dir / "pitch.md").write_text(
         _PAPER_TEMPLATE.format(
-            paper_id=paper_id,
+            status=status.render(
+                "paper", {"id": paper_id, "last-updated": today or today_iso()}
+            ),
             one_line=one_line,
             provenance=provenance,
-            today=today or today_iso(),
         ),
         encoding="utf-8",
     )
     append_papers_registry(
-        research / "papers.md", paper_id, _registry_root(root, research), backend
+        layout.papers_registry, paper_id, registry_root(layout, root), backend
     )
     return root

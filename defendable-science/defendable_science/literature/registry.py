@@ -287,6 +287,26 @@ def _decode_asset(item: dict[str, Any]) -> Asset | None:
     )
 
 
+def _parse_items(text: str, target: Path) -> list[Any]:
+    """Parse CSL-JSON items from text.
+
+    :param text: The JSON text to parse.
+    :param target: The path (for error messages).
+    :returns: The parsed array of items.
+    :raises RegistryError: If the text is not valid JSON or is not a JSON array.
+    """
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RegistryError(f"{target}: invalid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise RegistryError(
+            f"{target}: expected a JSON array of CSL-JSON items, got "
+            f"{type(data).__name__}"
+        )
+    return data
+
+
 def _read_items(path: Path) -> list[Any]:
     """Read and structurally validate the CSL-JSON array at `path`.
 
@@ -295,29 +315,21 @@ def _read_items(path: Path) -> list[Any]:
     """
     if not path.is_file():
         raise RegistryError(f"{path}: registry not found")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise RegistryError(f"{path}: invalid JSON: {exc}") from exc
-    if not isinstance(data, list):
-        raise RegistryError(
-            f"{path}: expected a JSON array of CSL-JSON items, got "
-            f"{type(data).__name__}"
-        )
-    return data
+    return _parse_items(path.read_text(encoding="utf-8"), path)
 
 
-def load_registry(path: str | Path) -> Registry:
-    """Load and decode ``references.json``.
+def load_registry_text(text: str, path: str | Path) -> Registry:
+    """Decode ``references.json`` from text.
 
-    :param path: The registry path.
+    :param text: The JSON text to decode.
+    :param path: The registry path (for error messages and the returned Registry).
     :returns: The decoded registry.
-    :raises RegistryError: If the file is missing, unparsable, not a JSON array,
-        or contains an entry that is not an object or has no ``id``.
+    :raises RegistryError: If the text is not a JSON array, or contains an entry
+        that is not an object or has no ``id``.
     """
     target = Path(path)
     entries: list[Entry] = []
-    for index, item in enumerate(_read_items(target)):
+    for index, item in enumerate(_parse_items(text, target)):
         if not isinstance(item, dict):
             raise RegistryError(f"{target}: entry {index} is not an object")
         citekey = _opt_str(item.get("id"))
@@ -335,6 +347,20 @@ def load_registry(path: str | Path) -> Registry:
             )
         )
     return Registry(path=target, entries=entries)
+
+
+def load_registry(path: str | Path) -> Registry:
+    """Load and decode ``references.json``.
+
+    :param path: The registry path.
+    :returns: The decoded registry.
+    :raises RegistryError: If the file is missing, unparsable, not a JSON array,
+        or contains an entry that is not an object or has no ``id``.
+    """
+    target = Path(path)
+    if not target.is_file():
+        raise RegistryError(f"{target}: registry not found")
+    return load_registry_text(target.read_text(encoding="utf-8"), target)
 
 
 def asset_to_json(asset: Asset) -> dict[str, Any]:
@@ -460,12 +486,15 @@ class TriageRow:
     raw: dict[str, Any]
 
 
-def _triage_mapping(target: Path, text: str) -> dict[Any, Any]:
+def triage_mapping(target: Path, text: str) -> dict[Any, Any]:
     """Parse the triage sidecar into its raw top-level mapping.
 
     Raw on purpose: the row values are handed back exactly as ``pyyaml`` gave
     them, including rows that are not mappings, so a *writer* can see what a
-    reader would skip.
+    reader would skip. This public function must exist because ``load_triage``
+    skips rows that are not mappings — correct for a reader, but that means a
+    malformed row is invisible to every consumer, and ``check`` is the one
+    caller that must see what a reader would skip.
 
     :param target: The path, for error messages.
     :param text: The file contents.
@@ -502,7 +531,7 @@ def load_triage(path: str | Path) -> dict[str, TriageRow]:
     target = Path(path)
     if not target.is_file():
         return {}
-    data = _triage_mapping(target, target.read_text(encoding="utf-8"))
+    data = triage_mapping(target, target.read_text(encoding="utf-8"))
     rows: dict[str, TriageRow] = {}
     for citekey, row in data.items():
         if not isinstance(row, dict):
@@ -572,7 +601,7 @@ def patch_triage(
                 f"{target}: carries comments, which cannot be preserved on write "
                 f"— set {sorted(updates)} on {citekey!r} by hand"
             )
-        raw = _triage_mapping(target, text)
+        raw = triage_mapping(target, text)
         opaque = sorted(
             str(key) for key, row in raw.items() if not isinstance(row, dict)
         )

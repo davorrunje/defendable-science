@@ -110,14 +110,14 @@ defendable-science defend record \
 This patches `status.understanding` in the digest's frontmatter — the same
 `{status: ok|gaps, unresolved: [...]}` shape `progress` already reads — and
 appends the full per-point record (source quote + your actual answer, for
-every point, not just the failed ones) to the accountability log
-(`docs/research/defend-log/`). The frontmatter stays small; the log is where
+every point, not just the failed ones) to the accountability log (for
+illustration: `docs/research/defend-log/`). The frontmatter stays small; the log is where
 the evidence lives, independently checkable later without re-running the
 session.
 
 ## Output artifact
 
-`docs/research/literature/digests/<citekey>.md` — one file per digested
+The digest artifact (for illustration: `docs/research/literature/digests/<citekey>.md`) — one file per digested
 source paper, named by citekey so it joins trivially with
 `references.json`/`triage.yml`. Git-tracked, citeable.
 
@@ -149,7 +149,7 @@ consistent with current practice.
   `cited-work` target escalates into `digest` on a comprehension gap (see
   When to use).
 - **`progress`** surfaces digested-vs-unresolved counts from
-  `docs/research/literature/digests/*.md` frontmatter as an independent
+  digest artifacts (for illustration: `docs/research/literature/digests/*.md`) frontmatter as an independent
   "literature reading" view (`../progress/SKILL.md`), alongside — not folded
   into — the hypothesis/paper/thesis roll-ups.
 
