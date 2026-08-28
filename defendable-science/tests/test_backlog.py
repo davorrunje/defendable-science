@@ -275,7 +275,7 @@ def test_registry_root_fallback(tmp_path: Path) -> None:
 
 
 def test_split_cells_without_borders() -> None:
-    assert b._split_cells("a | b | c") == ["a", "b", "c"]
+    assert b.split_cells("a | b | c") == ["a", "b", "c"]
 
 
 def test_loads_ragged_row_raises() -> None:
@@ -558,7 +558,7 @@ def test_registry_row_lands_inside_the_table(tmp_path: Path) -> None:
     assert "| second | docs/research/second | sim |\n\n## Scope notes" in text
     assert text.endswith("- **first** — the anchor paper.\n")
     # Still one table: the parser sees both rows.
-    doc = b._parse_document(text)
+    doc = b.parse_document(text)
     assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
 
 
@@ -571,7 +571,7 @@ def test_registry_extra_columns_are_filled_empty(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     b.append_papers_registry(papers, "second", "docs/research/second", "sim")
-    doc = b._parse_document(papers.read_text(encoding="utf-8"))
+    doc = b.parse_document(papers.read_text(encoding="utf-8"))
     assert doc.rows[1] == {
         "paper-id": "second",
         "root": "docs/research/second",
@@ -628,7 +628,7 @@ def test_scaffold_paper_row_is_inside_the_table(tmp_path: Path) -> None:
     research.mkdir(parents=True)
     (research / "papers.md").write_text(_REGISTRY_DOC, encoding="utf-8")
     b.scaffold_paper(research, "second", "a follow-up paper", backend="sim")
-    doc = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    doc = b.parse_document((research / "papers.md").read_text(encoding="utf-8"))
     assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
     assert doc.rows[1]["root"] == "docs/research/second"
     assert doc.postamble.startswith("\n## Scope notes")
@@ -737,7 +737,7 @@ def test_promote_scaffold_paper_registers_and_reports(tmp_path: Path) -> None:
     }
     assert (root / "paper" / "pitch.md").is_file()
     assert (root / "backlog.md").is_file()
-    registry = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    registry = b.parse_document((research / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows == [
         {
             "paper-id": "depth-collapse",
