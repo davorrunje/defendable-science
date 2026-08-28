@@ -555,22 +555,141 @@ def _has_comments(text: str) -> bool:
     return any(line.lstrip().startswith("#") for line in text.splitlines())
 
 
-def _aliased_rows(raw: dict[Any, Any]) -> list[list[str]]:
-    """Return the groups of citekeys whose rows are the *same* Python object.
+def _walk_node(
+    node: yaml.Node, owner: str, visits: dict[int, list[str]], stack: set[int]
+) -> None:
+    """Record that ``node`` (and everything reachable from it) belongs to ``owner``.
 
-    ``yaml.safe_load`` gives every alias of one anchor the same object, so
-    ``b2021: *shared`` is not a copy of ``a2020`` — it *is* ``a2020``. Identity
-    is the exact test for that and cannot false-positive: two rows written out
-    separately are distinct objects however identical they read.
+    A self-referential anchor (``a: &s {self: *s}``) makes the composed node
+    graph cyclic — a legitimate YAML shape, not malformed input — so this
+    tracks the node ids currently on the recursion path (``stack``) and stops
+    descending once it returns to one of them, rather than recursing forever.
+    The owner is still recorded for that revisit: reaching a node a second
+    time, even via its own cycle, is exactly what "aliased" means here.
 
-    :param raw: The top-level mapping, as :func:`triage_mapping` returned it.
-    :returns: One sorted citekey list per shared object, groups sorted; empty
-        when no two rows are the same object.
+    :param node: The composed node to visit.
+    :param owner: The top-level citekey whose subtree this node was reached from.
+    :param visits: Accumulator, mutated in place: node id → the owners that
+        reached it, one entry per visit (so a node reached twice from the same
+        owner still shows a duplicate, meaning "aliased").
+    :param stack: Node ids currently being descended into, on this call path;
+        mutated in place and restored before returning.
     """
-    by_object: dict[int, list[str]] = {}
-    for key, row in raw.items():
-        by_object.setdefault(id(row), []).append(str(key))
-    return sorted(sorted(keys) for keys in by_object.values() if len(keys) > 1)
+    visits.setdefault(id(node), []).append(owner)
+    if id(node) in stack:
+        return
+    if isinstance(node, yaml.MappingNode):
+        stack.add(id(node))
+        for _, value_node in node.value:
+            _walk_node(value_node, owner, visits, stack)
+        stack.discard(id(node))
+    elif isinstance(node, yaml.SequenceNode):
+        stack.add(id(node))
+        for item_node in node.value:
+            _walk_node(item_node, owner, visits, stack)
+        stack.discard(id(node))
+
+
+def _compose_row_visits(
+    root: yaml.MappingNode,
+) -> tuple[dict[str, yaml.Node], dict[int, list[str]]]:
+    """Walk every row's subtree, tracking which citekey(s) reach each node.
+
+    :param root: The composed top-level mapping node.
+    :returns: ``(row_nodes, visits)`` — each top-level citekey's own value
+        node, and, for every node anywhere in the document, the list of
+        citekeys whose subtree reached it (with duplicates, so length alone
+        says whether it was reached more than once).
+    """
+    row_nodes: dict[str, yaml.Node] = {}
+    visits: dict[int, list[str]] = {}
+    stack: set[int] = set()
+    for key_node, value_node in root.value:
+        citekey = str(key_node.value)
+        row_nodes[citekey] = value_node
+        _walk_node(value_node, citekey, visits, stack)
+    return row_nodes, visits
+
+
+def _classify_alias_groups(
+    row_nodes: dict[str, yaml.Node], visits: dict[int, list[str]]
+) -> tuple[list[list[str]], list[list[str]]]:
+    """Split nodes reached more than once into whole-row and nested-alias groups.
+
+    A node reached only once is not aliased at all — ordinary content. A node
+    reached more than once is a genuine ``&anchor``/``*alias`` (see
+    :func:`_alias_groups` for why that identity test cannot false-positive).
+    It is a **whole-row** group when every citekey that reached it did so via
+    its *own* top-level row value — the original "two citekeys, one anchored
+    mapping" case. Otherwise it is a **nested-alias** group: at least one
+    citekey reached the shared node only through something nested inside its
+    row (a nested row, a merge key, or a scalar), or the same citekey reached
+    it more than once from within its own row.
+
+    :param row_nodes: Each top-level citekey's own value node.
+    :param visits: Node id → the citekeys whose subtree reached it, as built
+        by :func:`_compose_row_visits`.
+    :returns: ``(whole_row_groups, nested_alias_groups)``, each a sorted list
+        of sorted citekey lists; empty when nothing is aliased.
+    """
+    whole: dict[int, tuple[str, ...]] = {}
+    nested: dict[int, tuple[str, ...]] = {}
+    for node_id, owners in visits.items():
+        if len(owners) <= 1:
+            continue
+        distinct = tuple(sorted(set(owners)))
+        if all(id(row_nodes.get(c)) == node_id for c in distinct):
+            whole[node_id] = distinct
+        else:
+            nested[node_id] = distinct
+    return (
+        [list(group) for group in sorted(set(whole.values()))],
+        [list(group) for group in sorted(set(nested.values()))],
+    )
+
+
+def _alias_groups(text: str) -> tuple[list[list[str]], list[list[str]]]:
+    """Return the citekey groups implicated by a YAML anchor/alias in ``text``.
+
+    This walks the **composed node graph** (``yaml.compose``), not the
+    ``yaml.safe_load``-constructed objects. That distinction is what makes the
+    check safe for scalars: CPython interns small integers and singletons like
+    ``True``/``False``, so two independently-written rows that both happen to
+    hold ``extracted: true`` would share ``id(True)`` with no YAML anchor
+    involved at all — a false positive if identity were tested on the
+    constructed values. A composed :class:`yaml.nodes.Node` carries no such
+    caching: every node is a fresh wrapper object regardless of the scalar it
+    holds, so two nodes are ever the same object only when the source text
+    actually used ``&anchor``/``*alias`` to make them so.
+
+    Two kinds of sharing are distinguished, because one of them is exactly the
+    pre-existing "two citekeys, one anchored mapping" case and keeps its
+    established message; see :func:`_classify_alias_groups` for exactly how:
+
+    - **whole-row** groups: every implicated citekey's *entire* top-level row
+      is the shared node (``a2020: &shared`` / ``b2021: *shared``) — the
+      original ``_aliased_rows`` case from ``bd60859``, now folded in here.
+    - **nested-alias** groups: the shared node is reachable from more than one
+      place but is not every implicated row's whole value — a row anchored at
+      the top level and aliased *inside* another row's nested value, a merge
+      key (``<<: *base``), or a scalar anchor (``rationale: *reason``) reused
+      anywhere, including within a single row.
+
+    :param text: The sidecar's YAML text. Assumed already validated by
+        :func:`triage_mapping` as either blank or a top-level mapping — the
+        only two shapes ``patch_triage`` calls this with.
+    :returns: ``(whole_row_groups, nested_alias_groups)``, each a sorted list
+        of sorted citekey lists; empty when nothing is aliased.
+    """
+    root = yaml.compose(text, Loader=yaml.SafeLoader)
+    if root is None:
+        return [], []
+    if not isinstance(root, yaml.MappingNode):  # pragma: no cover
+        # Unreachable in practice: triage_mapping already required text to be
+        # either blank or a top-level mapping before this is ever called.
+        return [], []
+    row_nodes, visits = _compose_row_visits(root)
+    return _classify_alias_groups(row_nodes, visits)
 
 
 def patch_triage(
@@ -600,20 +719,30 @@ def patch_triage(
     hand-authored while carrying, say, an extraction record for a paper nothing
     ever extracted. Inventing an audit-trail entry is worse than losing one, so
     this is refused as well, naming the rows that share an object.
-    :func:`_aliased_rows` tests object *identity*, which cannot false-positive:
-    two rows written out separately are distinct objects however alike they read.
 
-    .. warning::
-       One class of loss remains **unguarded** (defendable-science#143): an
-       anchored *scalar or nested value inside* a row (``rationale: *reason``)
-       is written back fully expanded. The data survives; the sharing does not.
-       A file using anchors that way should be hand-edited rather than patched.
+    It also covers every other shape a YAML anchor can take
+    (defendable-science#143), via :func:`_alias_groups`, which walks the
+    *composed node graph* rather than the constructed objects — the only way
+    to test true identity without false-positiving on interned scalars like
+    small ints or ``True``/``False``:
+
+    - A row anchored at the top level and aliased **inside another row's
+      nested value** (``a2020: &shared`` / ``b2021: {parent: *shared}``) is
+      refused the same as the whole-row case — patching ``a2020`` must not
+      silently write into ``b2021.parent`` too.
+    - A **merge key** (``<<: *base``) or a **scalar anchor**
+      (``rationale: *reason``), reused anywhere in the file — across rows or
+      within one row — is refused rather than silently expanded. Anchor names
+      cannot survive ``safe_dump`` either way; the previous behaviour lost
+      only the anchor label, but "loses a label silently" is still a silent
+      change this writer should not make on the human's behalf.
 
     :param path: The sidecar path (created if absent).
     :param citekey: The row to patch (created if absent).
     :param updates: Scalar keys to set; a ``None`` value deletes the key.
     :raises RegistryError: If the file carries comments, holds a row that is not
-        a mapping, holds two rows that are the same anchored mapping, is
+        a mapping, holds a YAML anchor aliased more than once anywhere in the
+        document (whole rows, nested values, merge keys, or scalars), is
         unreadable, or any update value is not a scalar.
     """
     for key, value in updates.items():
@@ -641,13 +770,24 @@ def patch_triage(
                 "writer cannot rewrite the file without dropping them, so it is "
                 f"refusing — set {sorted(updates)} on {citekey!r} by hand"
             )
-        shared = _aliased_rows(raw)
-        if shared:
+        whole, nested = _alias_groups(text)
+        if whole:
             raise RegistryError(
-                f"{target}: rows {shared} are the same mapping — citekeys joined "
+                f"{target}: rows {whole} are the same mapping — citekeys joined "
                 "by a YAML anchor. Setting a field on any one of them would set "
                 "it on all of them, recording work that was never done on the "
                 "others. So it is refusing — give each row its own keys, or set "
+                f"{sorted(updates)} on {citekey!r} by hand"
+            )
+        if nested:
+            raise RegistryError(
+                f"{target}: rows {nested} share a YAML anchor somewhere inside "
+                "them — a row anchored at the top level and aliased inside "
+                "another row's nested value, a merge key ('<<: *base'), or a "
+                "scalar anchor ('rationale: *reason'). Writing this back would "
+                "either silently propagate a change across rows that share the "
+                "anchor, or silently drop the anchor/alias structure entirely. "
+                "So it is refusing — remove the anchor, or set "
                 f"{sorted(updates)} on {citekey!r} by hand"
             )
         data: dict[str, Any] = {str(key): row for key, row in raw.items()}

@@ -624,6 +624,197 @@ def test_patch_triage_does_not_refuse_rows_that_merely_look_alike(
     assert "extracted" not in rows["b2021"].raw
 
 
+def test_patch_triage_refuses_blank_file_without_choking_on_composing_it(
+    tmp_path: Path,
+) -> None:
+    """A blank *existing* file composes to ``None`` — not a mapping to walk."""
+    path = tmp_path / "t.yml"
+    path.write_text("", encoding="utf-8")
+    reg.patch_triage(path, "k", {"disposition": "screened"})
+    assert reg.load_triage(path)["k"].disposition == "screened"
+
+
+# --- #143: a row anchored at the top level, aliased *inside* another row's ----
+# nested value. The bd60859 guard only buckets top-level rows by id() and does
+# not walk into a row's nested values, so this shape slipped through: patching
+# `a2020` silently wrote `extracted`/`extraction-cells` into `b2021.parent` too,
+# and `patch_triage` returned exit 0 as a clean success.
+
+NESTED_ALIAS_TRIAGE = (
+    "a2020: &shared\n"
+    "  disposition: screened\n"
+    "  rationale: superseded by the 2023 revision\n"
+    "b2021:\n"
+    "  disposition: screened\n"
+    "  parent: *shared\n"
+)
+
+
+def test_patch_triage_refuses_a_row_aliased_inside_another_rows_nested_value(
+    tmp_path: Path,
+) -> None:
+    """The issue's exact repro: `a2020` reachable both at top level and nested."""
+    path = tmp_path / "t.yml"
+    path.write_text(NESTED_ALIAS_TRIAGE, encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(
+            path, "a2020", {"extracted": "2026-08-28", "extraction-cells": 8}
+        )
+
+    message = str(caught.value)
+    assert "a2020" in message
+    assert "b2021" in message
+    assert "'extracted'" in message
+    assert "'extraction-cells'" in message
+    # No write happened at all — b2021.parent must not have gained the fields.
+    assert path.read_bytes() == before
+    assert not (tmp_path / "t.yml.tmp").exists()
+
+
+def test_patch_triage_refuses_a_row_aliased_inside_a_list(tmp_path: Path) -> None:
+    """The same nested-alias hazard, one level deeper: inside a sequence."""
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020: &shared\n"
+        "  disposition: screened\n"
+        "b2021:\n"
+        "  disposition: screened\n"
+        "  related:\n"
+        "    - *shared\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    message = str(caught.value)
+    assert "a2020" in message
+    assert "b2021" in message
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_refuses_a_self_referential_anchor_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """A row aliased into its own nested value makes the node graph cyclic.
+
+    ``&anchor`` inside the row it names, aliased back into itself
+    (``a2020: &shared {..., self: *shared}``), is a legitimate composed shape
+    — a plausible typo, not malformed YAML — and must be refused like any
+    other anchor reuse, not crash with a ``RecursionError``.
+    """
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020: &shared\n  disposition: screened\n  self: *shared\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    assert "a2020" in str(caught.value)
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_refuses_a_merge_key_reuse(tmp_path: Path) -> None:
+    """A merge key (`<<: *base`) is refused by name, not silently expanded."""
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "base: &base\n"
+        "  disposition: screened\n"
+        "a2020:\n"
+        "  <<: *base\n"
+        "  rationale: templated\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    message = str(caught.value)
+    assert "a2020" in message
+    assert "base" in message
+    assert "anchor" in message
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_refuses_a_scalar_anchor_reuse(tmp_path: Path) -> None:
+    """A scalar anchor (`rationale: *reason`) reused across rows is refused."""
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020:\n"
+        "  disposition: screened\n"
+        "  rationale: &reason superseded by the 2023 revision\n"
+        "b2021:\n"
+        "  disposition: screened\n"
+        "  rationale: *reason\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    message = str(caught.value)
+    assert "a2020" in message
+    assert "b2021" in message
+    assert "anchor" in message
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_refuses_a_scalar_anchor_reused_within_one_row(
+    tmp_path: Path,
+) -> None:
+    """The same posture applies with no cross-row leak at all: still refused.
+
+    Per #143's acceptance criteria, a merge key or scalar anchor is "either
+    survives or is refused — not silently expanded" unconditionally, even when
+    every alias of the anchor sits inside the single row being patched.
+    """
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020:\n"
+        "  disposition: screened\n"
+        "  rationale: &reason same story\n"
+        "  note: *reason\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    message = str(caught.value)
+    assert "a2020" in message
+    assert "anchor" in message
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_on_an_accepted_sidecar_changes_only_the_named_row(
+    tmp_path: Path,
+) -> None:
+    """A negative test on a plain, alias-free sidecar with several rows."""
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020:\n  disposition: screened\n"
+        "b2021:\n  disposition: exclude\n"
+        "c2022:\n  disposition: inbox\n",
+        encoding="utf-8",
+    )
+    reg.patch_triage(path, "b2021", {"extracted": "2026-08-28", "extraction-cells": 8})
+    rows = reg.load_triage(path)
+    assert rows["b2021"].raw["extracted"] == "2026-08-28"
+    assert rows["b2021"].raw["extraction-cells"] == 8
+    for citekey in ("a2020", "c2022"):
+        assert "extracted" not in rows[citekey].raw
+        assert "extraction-cells" not in rows[citekey].raw
+
+
 def test_patch_triage_keeps_a_non_string_citekey_addressable(tmp_path: Path) -> None:
     """A YAML key that is not a string (``2020:``) is still a row, not a casualty."""
     path = tmp_path / "t.yml"
