@@ -216,6 +216,131 @@ def test_axes_reports_an_invalid_layout_block(
     assert "unknown layout key" in result.stderr
 
 
+# --- cells: the read-only accessor (defendable-science#141) -----------------------
+
+
+def test_cells_prints_the_recorded_cells_as_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 0
+    result = runner.invoke(
+        app, ["digest", "extract", "cells", "--citekey", "sill1997monotonic"]
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["citekey"] == "sill1997monotonic"
+    assert payload["error"] is None
+    artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
+    assert payload["artifact"] == str(artifact)
+    assert payload["cells"] == [
+        {
+            "citekey": "sill1997monotonic",
+            "axis": "guarantee type",
+            "value": "architectural — monotone by construction",
+            "locator": "§2, Eq. (3)",
+            "justification": None,
+        },
+        {
+            "citekey": "sill1997monotonic",
+            "axis": "partial monotonicity",
+            "value": "not-addressed",
+            "locator": None,
+            "justification": ("scoped to fully-monotone inputs in §1; never revisited"),
+        },
+    ]
+
+
+def test_cells_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No write, no log entry — a pure reader over an already-recorded paper."""
+    root = _repo(tmp_path)
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 0
+    artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
+    before = artifact.read_text(encoding="utf-8")
+    log_dir = root / "docs" / "research" / "defend-log"
+    before_log = sorted(log_dir.iterdir()) if log_dir.is_dir() else []
+    result = runner.invoke(
+        app, ["digest", "extract", "cells", "--citekey", "sill1997monotonic"]
+    )
+    assert result.exit_code == 0, result.stderr
+    assert artifact.read_text(encoding="utf-8") == before
+    after_log = sorted(log_dir.iterdir()) if log_dir.is_dir() else []
+    assert after_log == before_log
+
+
+def test_cells_refuses_a_paper_with_no_digest_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    result = runner.invoke(
+        app, ["digest", "extract", "cells", "--citekey", "never-extracted"]
+    )
+    assert result.exit_code == 1
+    assert "digest extract cells failed" in result.stderr
+    assert "digest artifact not found" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["cells"] is None
+    assert payload["error"]
+
+
+def test_cells_refuses_an_artifact_with_no_cells_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A digest that exists (e.g. depth mode only) but was never extracted."""
+    root = _repo(tmp_path)
+    layout = Layout.default(root.resolve())
+    layout.digests_dir.mkdir(parents=True)
+    artifact = layout.digest("neverextracted2020")
+    artifact.write_text(
+        "---\nstatus:\n  understanding: {status: ok, unresolved: []}\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    result = runner.invoke(
+        app, ["digest", "extract", "cells", "--citekey", "neverextracted2020"]
+    )
+    assert result.exit_code == 1
+    assert "has not been extracted" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["cells"] is None
+
+
+def test_cells_refuses_a_malformed_cells_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    layout = Layout.default(root.resolve())
+    layout.digests_dir.mkdir(parents=True)
+    artifact = layout.digest("corrupt2021")
+    artifact.write_text(
+        "---\nstatus:\n  extraction: {cells: 1, locators: ok, in-sample: false, "
+        "batch-check: pending}\n---\n\n"
+        f"{artifact_mod.CELLS_END}\n{artifact_mod.CELLS_BEGIN}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    result = runner.invoke(
+        app, ["digest", "extract", "cells", "--citekey", "corrupt2021"]
+    )
+    assert result.exit_code == 1
+    assert "markers are malformed" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+
+
+def test_cells_missing_citekey_option_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(_repo(tmp_path))
+    result = runner.invoke(app, ["digest", "extract", "cells"])
+    assert result.exit_code == 2
+
+
 # --- record: the happy path ------------------------------------------------------
 
 

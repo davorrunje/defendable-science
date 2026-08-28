@@ -39,6 +39,9 @@ the author elects to stop and record the gap.
    artifact under examination. Load the relevant sources: the author's own cited
    works, the methodology digests under `../../resources/references/`, and the
    rigor-kit element in play. Confirm the active persona (see Mentor personas).
+   For a `cited-work` target driven by `digest` extraction, the artifact under
+   examination is a paper's digest artifact and the source is its recorded
+   cells, not prose — see "Extracted cells as a `cited-work` source" below.
 2. **Probe.** Ask one open, reasoning-eliciting question at a time — the
    reviewer/examiner agenda: novelty vs. prior work, "why this method,"
    entailments, assumptions, limitations & threats to validity, rival
@@ -64,7 +67,9 @@ the author elects to stop and record the gap.
    plus what the author actually said, resolved or not (ADR-0033) — goes to the
    accountability log, not just the frontmatter. Unanswered probes and any
    logged overrides are the accountability trail. If fired as a guardrail,
-   follow Guardrail semantics.
+   follow Guardrail semantics. **Exception:** a `cited-work` examination
+   sourced from `digest` extraction cells never writes `understanding` — see
+   below.
 
 > **Tooling.** The record step is the `defendable-science defend record` CLI command
 > (`defendable_science/defend/record.py`) — ensure via
@@ -77,7 +82,10 @@ the author elects to stop and record the gap.
 > `status:` block set `understanding: {status: ok|gaps, unresolved: [...]}` to
 > match the schema `progress` reads (`../progress/SKILL.md`), and bump
 > `status.last-updated` (do **not** nest a date inside `understanding`); if a
-> transcript is kept, write it beside the artifact as `defend-<date>.md`.
+> transcript is kept, write it beside the artifact as `defend-<date>.md`. When
+> examining an extracted cell, pass `--no-understanding` instead (see below) —
+> the artifact is a digest artifact, and this flag skips the frontmatter patch
+> while still appending the log entry.
 
 ## Example (a methodology probe)
 
@@ -111,6 +119,67 @@ On a `cited-work` gap — you can't explain what the source says, or the
 citation misrepresents it — offer a deeper remediation than an inline
 correction: a full `digest` session on that paper (`../digest/SKILL.md`).
 Same guardrail stop/offer/log semantics; no new mechanism.
+
+### Extracted cells as a `cited-work` source
+
+`digest`'s **extraction mode** (`../digest/SKILL.md` § "The extraction
+artifact") records, per paper, a concept-matrix cell per axis, each cell
+carrying a mandatory source locator — but the locator's *shape* is all
+extraction validates, never its correctness (a cell can cite §3 when the
+claim is in §5). Closing that gap is exactly what the `cited-work` target is
+for, so an extracted cell is a **named `cited-work` source**, alongside the
+author's own prose citations:
+
+1. **Entry point: the citekey.** Given a paper's citekey, read its recorded
+   cells with `defendable-science digest extract cells --citekey <citekey>`
+   (ensure via [`ensure-tooling`](../../resources/ensure-tooling.md)). This is
+   a pure read over the digest artifact's generated cells block — no write, no
+   log entry, no status change — and fails with a distinct, actionable message
+   (naming the artifact and the remedy) if the paper was never extracted or its
+   cells block is malformed; it never reports a clean empty result.
+2. **Probe cell by cell.** For each cell, ask the Scope→Probe question
+   directly: "the matrix says *`value`* for axis *`axis`*, cited at
+   *`locator`*; open the source at that locator and tell me what it actually
+   says." If the source cannot be resolved at all (no mirrored copy, a locator
+   that doesn't exist in the document), that is its own distinct refusal —
+   name the paper and the locator, and do not silently skip the cell.
+3. **Detect gap / Teach / Re-probe** exactly as for any other `cited-work`
+   probe (established knowledge → teach freely from the source). On a gap,
+   the existing escalation to a full `digest` session applies unchanged.
+4. **Record — without touching `status.understanding`.** The outcome still
+   goes through the existing `defendable-science defend record --target
+   cited-work` command, unmodified in shape — one `PointRecord` per probed
+   cell (`point` = the axis, `source_quote` = what the source actually says,
+   `reader_answer` = what the matrix cell claims, `resolved` = whether they
+   agree) — but with `--artifact` set to the paper's **digest artifact** and
+   `--no-understanding` passed. The accountability log entry is the durable,
+   reviewable record of the check (`target: cited-work`, the per-cell points,
+   `outcome`) — a checked cell shows up there even though the artifact's
+   frontmatter does not change. This is the one exception to step 6 of the
+   core loop above.
+
+**Why a distinct accessor and the existing recording path, not `digest
+extract sample --verdict`.** `extract sample --verdict` already exists and
+looks like the obvious reuse — it carries a human-check semantics
+(`in-sample` / `batch-check`) that sounds like exactly this. It was
+deliberately **not** reused, because it answers a different question. `extract
+sample --verdict` records that *a human spot-checked a deterministic sample of
+an extraction batch* — a statement about the population a survey-scale run
+produced (ADR-0040), set once per batch, not per cell. A `defend` examination
+records that *this one cell was probed against its source, right now, by
+whoever is running this loop* — a single evidentiary point in ADR-0033's
+per-point model, exactly like a `claim` or `methodology` probe. Routing the
+extraction-cell check through `extract sample --verdict` would conflate "the
+batch was sampled" with "an examination was run," letting one satisfy
+`progress`'s reporting of the other. Keeping them apart costs one small,
+purely-read CLI command (`digest extract cells`); reusing `defend record`
+for the outcome costs nothing new at all — `record()`/`patch_understanding()`
+in `defend/record.py` are already generic over `target`, so no new recording
+mechanism was needed, only the `--no-understanding` escape hatch described
+above (`record()` previously patched `status.understanding` unconditionally
+for every target, which would have forged comprehension of a paper nobody
+read — see `defendable_science/defend/record.py`'s docstring on
+`record_understanding`).
 
 **Stage presets** (suggested defaults, overridable):
 
