@@ -469,7 +469,10 @@ def write_extraction(
     :param log_dir: The accountability-log directory (`DEFAULT_LOG_DIR`).
     :param date: ISO date, for ``status.last-updated`` and the log entry.
     :returns: The accountability-log entry written — the one path the caller
-        does not already hold.
+        does not already hold. Named from the paper's citekey
+        (defendable-science#146), not from the artifact's filename — the log
+        entry stays joined to the paper it records even if `Layout.digest`'s
+        naming scheme ever changes.
     :raises ExtractionError: If the cells are empty, span more than one paper,
         or would not survive validation; if `batch_check` is not a known
         verdict; or if the existing artifact's frontmatter is malformed.
@@ -497,7 +500,7 @@ def write_extraction(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(rebuild(fm_lines, body), encoding="utf-8")
     return append_log_entry(
-        Path(log_dir), date, path.stem, _log_body(path, citekey, cells, date)
+        Path(log_dir), date, citekey, _log_body(path, citekey, cells, date)
     )
 
 

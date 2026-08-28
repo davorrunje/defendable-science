@@ -305,7 +305,12 @@ def append_log_entry(log_dir: Path, date: str, stem: str, body: str) -> Path:
 
     :param log_dir: The accountability-log directory (created if absent).
     :param date: ISO date, used as the filename prefix.
-    :param stem: The artifact stem, used as the filename body.
+    :param stem: What a reader would search the log directory for, used as the
+        filename body — ``defend record`` passes the examined artifact's own
+        filename stem, while ``digest extract record`` passes the paper's
+        citekey (defendable-science#146) rather than the digest artifact's
+        stem, so the entry stays named after the paper even if the artifact's
+        naming scheme changes.
     :param body: The rendered YAML to write.
     :returns: The path written.
     """
