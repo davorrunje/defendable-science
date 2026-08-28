@@ -618,6 +618,76 @@ def test_init_honours_root_and_a_recorded_layout(tmp_path: Path) -> None:
     assert not any(line.startswith("/") for line in ignored)
 
 
+def test_init_refuses_a_root_that_does_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo in ``--root`` is a message, not a whole tree at the typo (#132).
+
+    ``Path(root).resolve()`` does not require existence and the writers
+    ``mkdir(parents=True)``, so this silently scaffolded ``/typo/path`` before.
+    """
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    typo = tmp_path / "typo-root"
+
+    result = runner.invoke(app, ["init", "--root", str(typo)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(typo) in result.output
+    assert "does not exist" in result.output
+    assert "mkdir -p" in result.output
+    assert result.stdout.strip() == ""
+    assert not typo.exists()
+
+
+def test_init_refuses_a_root_that_is_not_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And says so: reporting a file as a partial scaffold is unhelpful.
+
+    Before #132 this raised ``NotADirectoryError`` part-way through the
+    scaffold, which the generic ``OSError`` handler reported as an incomplete
+    run — accurate about the symptom, silent about the cause.
+    """
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    notes = tmp_path / "notes.md"
+    notes.write_text("mine\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init", "--root", str(notes)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(notes) in result.output
+    assert "not a directory" in result.output
+    assert "incomplete" not in result.output
+    assert result.stdout.strip() == ""
+    assert notes.read_text(encoding="utf-8") == "mine\n"
+
+
+def test_init_still_discovers_a_root_when_it_is_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery stays as permissive as it was: #132 tightens ``--root`` only."""
+    repo = _fresh_repo(tmp_path)
+    nested = repo / "src" / "deep"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["root"] == str(nested.resolve())
+
+
+def test_init_help_states_that_root_must_exist() -> None:
+    result = runner.invoke(app, ["init", "--help"])
+
+    assert result.exit_code == 0
+    assert "existing" in result.stdout
+
+
 def test_init_gitignores_the_configured_cache_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

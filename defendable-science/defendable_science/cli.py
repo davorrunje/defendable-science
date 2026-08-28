@@ -166,6 +166,26 @@ def _load_config_or_exit(root: Path | None = None) -> dict[str, Any]:
         raise typer.Exit(code=1) from exc
 
 
+def _explicit_root_or_exit(root: str | None) -> Path | None:
+    """Validate an explicitly-named ``--root``, or pass discovery through.
+
+    :param root: The ``--root`` value, or ``None`` to discover from the cwd.
+    :returns: The canonical root directory, or ``None`` when `root` is unset —
+        discovery is deliberately left as permissive as it has always been.
+    :raises typer.Exit: Code 1 if `root` is not an existing directory, with the
+        kernel's message and no traceback.
+    """
+    from defendable_science.core.config import RootError, resolve_root
+
+    if not root:
+        return None
+    try:
+        return resolve_root(root)
+    except RootError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
 def _layout_or_exit(root: Path | None = None) -> tuple[dict[str, Any], Layout]:
     """Load the config and resolve the layout, exiting 1 on an invalid block.
 
@@ -272,7 +292,11 @@ def init(
     root: Annotated[
         str | None,
         typer.Option(
-            "--root", help="Repository root to scaffold; discovered if omitted."
+            "--root",
+            help=(
+                "Repository root to scaffold; must be an existing directory. "
+                "Discovered from the current directory if omitted."
+            ),
         ),
     ] = None,
     thesis: Annotated[
@@ -298,18 +322,22 @@ def init(
     re-running against a customised repo cannot re-scaffold the default tree
     beside it.
 
-    :param root: The repository root to scaffold; discovered from the cwd when
-        omitted. Authoritative for the whole resolution chain — the config that
-        is read and the cache path that is ignored come from this root too.
+    :param root: The repository root to scaffold, which **must already exist as
+        a directory** (:func:`resolve_root`) — the writers create parents, so a
+        typo would otherwise raise a whole tree at the typo. Discovered from the
+        cwd when omitted, which stays as permissive as it has always been.
+        Authoritative for the whole resolution chain — the config that is read
+        and the cache path that is ignored come from this root too.
     :param thesis: Also scaffold the optional thesis tree (aims, milestones,
         the kappa directory).
     :param dry_run: Report exactly what a real run would do, touching nothing.
-    :raises typer.Exit: Code 1 on an invalid ``.defendable-science/config.yml``,
-        or if a path cannot be written (an unwritable tree, a parent that is a
+    :raises typer.Exit: Code 1 if ``--root`` names something that is not an
+        existing directory, on an invalid ``.defendable-science/config.yml``, or
+        if a path cannot be written (an unwritable tree, a parent that is a
         file). A failed run prints no report: a partial scaffold must never read
         as a completed one.
     """
-    config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    config, layout = _layout_or_exit(_explicit_root_or_exit(root))
     # Repo-relative and directory-shaped, matching `render.DEFAULT_CACHE_DIR`:
     # this string is written into both config.yml and .gitignore, and an
     # absolute path in either would be wrong (.gitignore) or unportable (config).
@@ -351,7 +379,13 @@ def init(
 def check(
     root: Annotated[
         str | None,
-        typer.Option("--root", help="Repository root to check; discovered if omitted."),
+        typer.Option(
+            "--root",
+            help=(
+                "Repository root to check; must be an existing directory. "
+                "Discovered from the current directory if omitted."
+            ),
+        ),
     ] = None,
     text: Annotated[
         bool,
@@ -365,15 +399,22 @@ def check(
     to severity: ``invalid`` or ``unreadable`` → 1; ``gap`` or clean → 0.
 
     A missing or invalid layout block is fatal — the checker cannot know where
-    anything is — so the check exits 1 with a message and no findings JSON.
+    anything is — so the check exits 1 with a message and no findings JSON. So
+    is a ``--root`` that is not an existing directory: "every required file is
+    missing" would be a verdict on a repository nobody ever looked at.
 
+    :param root: The repository root to check, which **must already exist as a
+        directory**. Discovered from the cwd when omitted, which stays as
+        permissive as it has always been.
+    :param text: Print a human-readable summary instead of JSON.
     :raises typer.Exit: Code 0 when the repo is valid (gaps alone are OK).
-        Code 1 when any file is invalid or unreadable.
+        Code 1 when any file is invalid or unreadable, when ``--root`` is not an
+        existing directory, or when the layout block is invalid.
     """
     from defendable_science.check import run_checks
     from defendable_science.check.probe import FsProbe
 
-    _config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    _config, layout = _layout_or_exit(_explicit_root_or_exit(root))
     probe = FsProbe()
     report = run_checks(layout, probe)
 

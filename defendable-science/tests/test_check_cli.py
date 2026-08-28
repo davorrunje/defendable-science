@@ -147,6 +147,62 @@ def test_unreadable_is_distinguishable_from_valid_and_empty(
     assert "empty" not in reported[0]["message"].lower()
 
 
+def test_a_directory_where_papers_md_belongs_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a real filesystem, not just through the fake seam (#131).
+
+    ``init`` probes with ``exists()`` and so reports this repo as a clean
+    scaffold; ``check`` is what has to say the path is unusable.
+    """
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    papers = tmp_path / "docs" / "research" / "papers.md"
+    papers.unlink()
+    papers.mkdir()
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    payload = json.loads(result.stdout)
+    reported = [f for f in payload["findings"] if "papers.md" in f["file"]]
+    assert len(reported) == 1, payload["findings"]
+    assert reported[0]["severity"] == "invalid"
+    assert reported[0]["check"] == "layout"
+    assert "is a directory" in reported[0]["message"]
+    assert "requires a file" in reported[0]["message"]
+    assert reported[0]["remedy"]
+    # And `init` really does call this repo clean, which is why `check` must not.
+    assert runner.invoke(app, ["init"]).exit_code == 0
+
+
+def test_a_file_where_the_literature_directory_belongs_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One defect, one finding: the two files it swallows are not reported."""
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    literature = tmp_path / "docs" / "research" / "literature"
+    for child in literature.iterdir():
+        child.unlink()
+    literature.rmdir()
+    literature.write_text("not a directory\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    payload = json.loads(result.stdout)
+    reported = [f for f in payload["findings"] if "literature" in f["file"]]
+    assert len(reported) == 1, payload["findings"]
+    assert reported[0]["file"] == "docs/research/literature"
+    assert reported[0]["severity"] == "invalid"
+    assert "is a file" in reported[0]["message"]
+    assert "requires a directory" in reported[0]["message"]
+    assert reported[0]["remedy"]
+
+
 def test_check_exits_one_on_an_invalid_layout_block(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,6 +217,52 @@ def test_check_exits_one_on_an_invalid_layout_block(
     assert result.exit_code == 1
     assert "unknown layout key" in result.output
     assert "Traceback" not in result.output
+
+
+def test_check_refuses_a_root_that_does_not_exist(tmp_path: Path) -> None:
+    """A typo in ``--root`` is a message, not a repo reported wholly missing.
+
+    ``check`` writes nothing, so the cost is a confusing report rather than a
+    stray tree — but "every required file is missing" is a report about a
+    repository that was never looked at, and an integrity tool must not hand
+    that back as a finding about the author's work (#132).
+    """
+    typo = tmp_path / "typo-root"
+
+    result = runner.invoke(app, ["check", "--root", str(typo)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(typo) in result.output
+    assert "does not exist" in result.output
+    assert result.stdout.strip() == ""
+
+
+def test_check_refuses_a_root_that_is_not_a_directory(tmp_path: Path) -> None:
+    notes = tmp_path / "notes.md"
+    notes.write_text("mine\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["check", "--root", str(notes)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(notes) in result.output
+    assert "not a directory" in result.output
+    assert result.stdout.strip() == ""
+
+
+def test_check_still_discovers_a_root_when_it_is_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery stays as permissive as it was: only ``--root`` is tightened."""
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    nested = tmp_path / "docs" / "research"
+    monkeypatch.chdir(nested)
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 0, result.stdout
 
 
 def test_unreadable_staged_document_is_reported_once(

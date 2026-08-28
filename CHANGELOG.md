@@ -107,9 +107,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a scaffolded `readiness: <synthesis | defensible>` used to reach `progress` as
   a real readiness. The dashboard stub says plainly that no generator has run
   rather than projecting a fabricated state.
+- **`defendable-science check [--root PATH] [--text]`** — validates every
+  defendable-science-owned file in a repo, reports each problem with its file,
+  what is wrong and how to fix it, and exits non-zero when anything is invalid.
+  Nothing could previously tell an author whether their repo was in a valid
+  state: validation existed per-artifact and only for datasets, so a corrupted
+  or hand-mangled file surfaced when some unrelated command tripped over it, or
+  never.
+  Findings carry one of three severities, and **the exit code is keyed to
+  severity, not count**: `invalid` (the file violates a shape the package owns)
+  and `unreadable` (it could not be read or parsed, so its validity is *unknown*)
+  exit 1; `gap` exits 0. `unreadable` is separate so that "failed to read
+  `references.json`" can never render as "0 references, all fine". `gap` exists
+  so an unsigned verdict, empty evidence or an unbound `experiment_backend` are
+  reported **without failing the run** — the exit code tracks invalid *files*,
+  never incomplete *science*. A `refuted` hypothesis and a `no-go` paper are
+  successful science and are never findings at all.
+  Six families run: layout, tables, frontmatter, registries, config and
+  cross-artifact. Every finding carries a copy-pasteable remedy, and `check`
+  reimplements no validator — where one took a path while `check` reads through
+  its filesystem seam, the validator's own module gained a text-level entry
+  point and its path-based function became a delegate, so each rule still has
+  exactly one implementation.
+
+- **`defendable-science check` reports a path that exists as the wrong type.**
+  `init` probes with `path.exists()`, which is true for a file *and* for a
+  directory, so a directory sitting where `papers.md` belongs was reported
+  `exists` and `init` called the scaffold clean over a repo that cannot be
+  used — non-destructive, and silent until some later command tripped over it.
+  Diagnosing that is `check`'s job, not `init`'s: `init` writes what is missing,
+  it does not audit what is already there. The layout family now reports a
+  mis-typed required path as `invalid`, naming the path, what it actually is,
+  and what the layout requires there. Required *directories* are derived from
+  the required-files list rather than declared a second time, so
+  `scaffold.layout` stays the one definition of the tree.
+  **One defect is one finding**, which took more than adding the check: a file
+  at `literature/` makes `references.json` and `triage.yml` unable to exist, so
+  the missing-file rule would have fired for both on top of the wrong-type
+  finding, and every other family reads those paths too. An absence caused by a
+  mis-typed ancestor is now suppressed as the consequence it is, and no family
+  but `layout` reads a required path that is absent or is a directory — which
+  also retires a pre-existing duplicate, where a *missing* `references.json`
+  was reported once as missing and again as unreadable. (#131)
 
 ### Changed
 
+- **`defendable-science init --root` and `check --root` require the directory to
+  exist.** `Path(root).resolve()` does not require existence and `init`'s
+  writers `mkdir(parents=True)`, so `init --root /typo/path` silently built a
+  whole tree at the typo and reported it as a clean scaffold; `check --root
+  /typo/path` reported all seven required files as missing, which is a verdict
+  on a repository nobody ever looked at. Both now exit 1 with a message naming
+  the path and the action that fixes it, and a `--root` that exists but is *not*
+  a directory is refused with a message that says so rather than surfacing
+  mid-scaffold as a partial run. **Potentially breaking**: a script passing
+  `--root` at a path that does not yet exist used to succeed and now fails —
+  `mkdir -p PATH && defendable-science init --root PATH` restores it. There is
+  deliberately no `--allow-new-root`: an explicitly-named root is a statement
+  about an *existing* repository, a non-existent one is almost always a typo,
+  and a flag for a rare intent is surface for little value. Discovery is
+  untouched — with no `--root`, `find_repo_root()` still walks up for
+  `.defendable-science/` and falls back to the current directory, because an
+  un-onboarded directory is exactly where `init` is run. (#132)
 - **`docs/USER-GUIDE.md` restructured around the `Guides` nav group.** The single
   page carried a paragraph per capability and nothing deeper; five new
   per-capability guides now hold the depth it implied, following
