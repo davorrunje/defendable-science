@@ -78,13 +78,23 @@ namespace aligned:
 ```
 defendable-science digest extract axes    [--positioning PATH]
 defendable-science digest extract record  --cells FILE|-   [--positioning PATH]
-defendable-science digest extract sample  --batch FILE|-   [--size N]
+defendable-science digest extract sample  (--citekey KEY ... | --all)  [--size N]
+                                          [--verdict verified|failed]
 defendable-science digest extract render  [--positioning PATH]
 ```
 
 `axes` prints the question set (§6.1) so the agent knows what to extract before reading
 anything. `record` is the validating writer of §3.3. `sample` draws the deterministic sample and
 drives the check. `render` performs the `positioning.md` merge of §9.
+
+*Amended during implementation.* `sample` takes its batch as repeated `--citekey` options or
+`--all` (every artifact under `digests/` carrying a `status.extraction` block), not the
+`--batch FILE|-` this section first sketched. A file of citekeys is a caller-supplied
+membership set, and since the draw is a deterministic function of membership, handing the
+caller that file hands them the sample — the anti-gaming property of §8 defeated by its own
+input. Recording the human's verdict is a second invocation of the same command with
+`--verdict`, on the same membership, rather than an interactive prompt: the questioning is the
+skill's job, and the CLI stays scriptable and testable.
 
 *Rejected:* a third `literature` mode (would make `literature` open PDFs for the first time and
 sits badly against its "propose and surface, never adjudicate" guardrail); a new fourth skill
@@ -190,8 +200,16 @@ comments on `in-sample` and `batch-check` explaining each. That made the documen
 **unwritable**: an annotated child inside a block mapping is refused by the frontmatter writer,
 which will not silently destroy a comment it cannot round-trip. A reader copying this example
 verbatim would have hit that refusal. The explanations now live in prose below — `in-sample`
-records whether *this* paper was drawn into the sample, and `batch-check` is the verdict on the
-whole extraction run, one of `pending` | `verified` | `failed`.
+records whether a human actually checked *this* paper's cells, and `batch-check` is the verdict
+on the whole extraction run, one of `pending` | `verified` | `failed`.
+
+*Amended again, during implementation.* `in-sample` first read "was drawn into the sample", the
+nomination meaning. It is set at **verdict** time, not draw time, so it means *a human checked
+these cells* — a draw never followed by a verdict has established nothing, and a field that
+says otherwise overstates the record. It is also monotone within a set of cells: nothing sets it
+back to `false`, so it accumulates across re-samples of the same batch. That is safe because
+`record` rewrites the whole block with `in-sample: false` on every re-extraction, so the flag
+can never outlive the cells it certified.
 
 Two fields rather than one, because they answer different questions and conflating them
 produces nonsense. `in-sample` is a fact about this paper. `batch-check` is the verdict on the
@@ -355,6 +373,22 @@ signal about the population into a tidy-looking local fix.
 
 Per-cell check records append to the same accountability log depth mode writes to, so the
 evidence is independently reviewable later without re-running the session.
+
+*Amended during implementation — two refusals this section did not anticipate.* Both come from
+the same asymmetry: `failed` is a **finding** and must land whatever else went wrong, but
+`verified` is a **claim** and may only be written for what was actually established.
+
+- **A `verified` verdict is refused when the drawn sample's cells could not all be read.** The
+  run exits 1 and writes nothing. Otherwise the durable record reads `batch-check: verified`
+  with no paper marked checked — a self-contradictory state whose only honest signal is a
+  transient exit code that no later reader ever sees.
+- **`--all` aborts before drawing or writing if membership cannot be fully determined.** An
+  unreadable artifact would otherwise be dropped from the population silently, and since the
+  draw is a deterministic function of membership, *making one file unreadable re-rolls the
+  sample* — sample-shopping through a route that looks like a routine file problem. A verdict
+  is a statement about a population, so a run that cannot determine the population has nothing
+  to say about it. The `--citekey` path needs no such guard: membership is explicit there, and
+  a missing member is reported against its own citekey.
 
 ## 9. Writeback into `positioning.md`
 
