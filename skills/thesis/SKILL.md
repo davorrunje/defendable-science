@@ -43,9 +43,8 @@ answers — and the **narrative through-line** that makes the papers read as one
 project rather than a stapled stack. Then map which portfolio papers compose the
 thesis and which aim(s) each supports.
 
-- Lives in `docs/research/thesis/aims.md`: the aims, the through-line, and the
-  chapter↔paper map (aim → supporting paper-ids drawn from the `papers.md`
-  registry).
+- Lives in the thesis aims file (for illustration: `docs/research/thesis/aims.md`): the aims, the through-line, and the
+  chapter↔paper map (aim → supporting paper-ids drawn from the papers registry).
 - *Proposes and records the author's framing; it does not select papers on the
   author's behalf.* Which work belongs in the thesis is a scoping judgment the
   author makes and signs.
@@ -68,7 +67,7 @@ are `framing` outputs, the last is this mode:
 The kappa (Swedish "overcoat") is the synthesizing framing chapter that turns a
 stack of papers into one thesis. It is **more than concatenated introductions** and
 **introduces no new findings** — it recontextualizes existing, already-resolved
-work. Draft it in `docs/research/thesis/kappa/`. Components (the artifact schema):
+work. Draft it in the thesis kappa directory (for illustration: `docs/research/thesis/kappa/`). Components (the artifact schema):
 
 | Component | What it holds |
 |---|---|
@@ -90,7 +89,7 @@ result the papers do not already establish, that is a hypothesis for
 ## Milestones
 
 Program milestones are a small, **configurable, time-based** list in
-`docs/research/thesis/milestones.yml` — institution gates vary and are
+the thesis milestones file (for illustration: `docs/research/thesis/milestones.yml`) — institution gates vary and are
 deadline-driven, so they are never hard-coded. A typical progression:
 
 ```

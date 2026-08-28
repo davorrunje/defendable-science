@@ -26,9 +26,8 @@ It also honors the two governing principles:
 ## When to use
 
 - A `backlog.md` item has just been **promoted** and needs to be resolved.
-- You are resuming an in-flight hypothesis under
-  `docs/research/<paper>/hypotheses/<YYYY-MM-DD-slug>/` (pick up at the first
-  unfinished staged doc).
+- You are resuming an in-flight hypothesis (pick up at the first
+  unfinished staged doc in its folder, resolved from the repo's layout).
 - You need to re-check whether a resolved hypothesis's evidence has gone stale
   (`is-current` on its run-refs). Revising a signed verdict is itself a **material
   decision** — it re-triggers the `defend` guardrail and a new named sign-off, not
@@ -41,8 +40,7 @@ same claim.
 
 ## Staged documents
 
-All under `docs/research/<paper>/hypotheses/<YYYY-MM-DD-slug>/`, produced **in
-order**. Each carries a status frontmatter block that feeds
+All produced **in order** in the hypothesis folder (resolved from the repo's layout). Each carries a status frontmatter block that feeds
 [`progress`](../progress/SKILL.md). Templates live in
 [`../../resources/templates/`](../../resources/templates/).
 
@@ -105,7 +103,7 @@ exactly what invalidates a confirmatory claim).
 
 Evidence flows through the **experiment-backend contract**
 ([`../../resources/contracts/experiment-backend.md`](../../resources/contracts/experiment-backend.md)),
-resolved from the `backend:` binding in `docs/research/papers.md`:
+resolved from the `backend:` binding in the paper registry (which the CLI resolves from the repo's layout):
 
 | Capability | Use in this skill |
 |---|---|

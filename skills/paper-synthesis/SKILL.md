@@ -17,7 +17,7 @@ authors and decides** (see `../../docs/design/00-meta-spec.md` §2.1). You canno
 
 - After a paper has been **promoted** from `portfolio-backlog.md` (by
   `paper-exploration`, `../paper-exploration/SKILL.md`) and registered in
-  `docs/research/papers.md` — it is a committed deliverable, not a candidate.
+  the papers registry (resolved from the repo's layout) — it is a committed deliverable, not a candidate.
 - When its constituent hypotheses have accumulated enough evidence
   (`findings.md` verdicts, backed by run-refs) that a **publish decision** is in
   reach, or to develop the manuscript incrementally as they resolve.
@@ -27,7 +27,7 @@ authors and decides** (see `../../docs/design/00-meta-spec.md` §2.1). You canno
 
 ## Staged documents
 
-All staged docs live under `docs/research/<paper>/paper/` in the consumer repo
+All staged docs live in the paper's staged-documents directory (resolved from the repo's layout)
 (`../../docs/design/00-meta-spec.md` §5). Each carries a status frontmatter block
 feeding the `progress` roll-up (`../progress/SKILL.md`). The pipeline, in order:
 
@@ -47,7 +47,7 @@ be revisited as hypotheses resolve; the decision is gated on the whole.
 
 1. **Pitch.** Carry the promoted backlog row into `pitch.md`: the central claim,
    the intended contribution, the target venue and its bar. Confirm which
-   hypotheses (`docs/research/<paper>/hypotheses/*`) are load-bearing for this
+   hypotheses (resolved from the repo's layout) are load-bearing for this
    paper.
 2. **Positioning.** Invoke `literature position --level paper`
    (`../literature/SKILL.md`, `../../docs/design/02-literature.md` §3) to produce
@@ -65,7 +65,7 @@ be revisited as hypotheses resolve; the decision is gated on the whole.
    (`engineering_backend:`) — its `design` → `plan` capabilities — exactly as
    `hypothesis-testing` delegates `design.md`/`plan.md`.
    Store the resulting
-   `outline.md` / `plan.md` under `docs/research/<paper>/paper/`. This skill owns
+   `outline.md` / `plan.md` in the paper's staged-documents directory (resolved from the repo's layout). This skill owns
    the *scientific* framing; it does not reimplement engineering planning.
 4. **Decision.** When the evidence and positioning are in, draft `decision.md` as
    a **publish / no-go** proposal: does the accumulated hypothesis evidence
@@ -89,7 +89,7 @@ be revisited as hypotheses resolve; the decision is gated on the whole.
 
 ## The claim→evidence ledger
 
-`docs/research/<paper>/paper/ledger.md` is the backbone of the manuscript: each
+The claim→evidence ledger (for illustration: `<paper>/paper/ledger.md`) is the backbone of the manuscript: each
 row is one paper-level claim recorded as a **Toulmin sextet**, so that every
 assertion the paper makes is traceable to the evidence and its limits are
 explicit. The six fields:
@@ -143,8 +143,7 @@ from `rr-a91f` / `rr-7c02`; the author never types them.
   run-refs).
 - **Calls:** `literature position --level paper` for `positioning.md`; the
   engineering backend bound in `.defendable-science/config.yml` (`engineering_backend:`)
-  for `outline.md`/`plan.md`; and the experiment backend bound in
-  `docs/research/papers.md` (`backend:`) — `tables` / `evidence` / `is-current` —
+  for `outline.md`/`plan.md`; and the experiment backend (from the paper's `backend:` field in the papers registry, resolved from the repo's layout) — `tables` / `evidence` / `is-current` —
   for result blocks and staleness.
 - **Examined by:** `defend` (`../defend/SKILL.md`), whose `paper-synthesis` preset
   targets **positioning** (novelty vs. prior work) and **cited-work** (do the

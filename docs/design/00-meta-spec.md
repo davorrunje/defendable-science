@@ -416,31 +416,39 @@ The plugin ships generic logic; the consuming repo owns content, config, and
 the experiment-backend implementation. After `init`/`adopt`, a consumer repo
 (illustrated for `mononet`) looks like:
 
+The layout is defined once in `defendable-science/defendable_science/scaffold/layout.py`,
+and recorded per repo in `.defendable-science/config.yml`'s optional `layout:` block
+([ADR-0039](../../decisions/0039-recorded-consumer-layout.md)). It is scaffolded
+by `defendable-science init` and validated by `defendable-science check`. The
+tree below is the **default layout, for illustration**—the resolver is authoritative.
+
 ```
 <consumer-repo>/
 ├── docs/research/
-│   ├── papers.md                         # registry: paper-id → root + backend binding
+│   ├── papers.md
 │   ├── <paper>/
 │   │   ├── hypotheses/<YYYY-MM-DD-slug>/{hypothesis,strategy,design,plan,findings}.md
 │   │   ├── backlog.md
 │   │   └── paper/{positioning,outline,ledger,decision, sections/}
 │   ├── portfolio-backlog.md
-│   ├── thesis/                           # OPTIONAL — only in a thesis repo
-│   │   ├── kappa/                         # framing chapter (aims, narrative, per-paper contribution)
-│   │   ├── aims.md                        # the through-line + chapter↔paper map
-│   │   └── milestones.yml                 # configurable program gates (candidacy, submission, defense)
-│   ├── dashboard.md                      # GENERATED projection of status frontmatter (never hand-edited)
+│   ├── thesis/
+│   │   ├── kappa/
+│   │   ├── aims.md
+│   │   └── milestones.yml
+│   ├── dashboard.md
 │   └── literature/
-│       ├── references.json               # CSL-JSON bibliographic facts — source of truth (ADR-0020); .bib is exported on demand
-│       └── triage.yml                    # decision sidecar (keyed by citekey/DOI)
-├── datasets.yml                          # dataset registry (entries + checksums + tiers)
+│       ├── references.json
+│       └── triage.yml
+├── datasets.yml
 ├── .defendable-science/
-│   ├── config.yml                        # rclone remote name, lit anchors, cache_dir, experiment-backend + engineering_backend bindings
-│   ├── cache/                            # gitignored materialized data + HTTP cache (path from `cache_dir:`; ADR-0031)
-│   ├── rclone.conf                       # gitignored (creds)
-│   └── rclone.conf.example               # committed template (remote name/type only)
-└── <experiment-backend implementation>   # supplied by the consuming project; not shipped with the plugin
+│   ├── config.yml
+│   ├── cache/
+│   ├── rclone.conf
+│   └── rclone.conf.example
+└── <experiment-backend implementation>
 ```
+
+The `.defendable-science/config.yml` records the consumer bindings: `cache_dir` (dataset + HTTP cache path), `experiment_backend:` (the run/evidence/tables contract implementation), `engineering_backend:` (the design/plan/implement delegate), plus the rclone mirror name and literature anchors.
 
 | Lives in the **plugin** | Lives in the **consumer** |
 |---|---|
