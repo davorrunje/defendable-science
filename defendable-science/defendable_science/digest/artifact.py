@@ -494,6 +494,34 @@ def write_extraction(
     )
 
 
+def _set_extraction_key(
+    artifact: str | Path, key: str, value: Any, date: str | None
+) -> None:
+    """Set one key of an already-extracted artifact's ``status.extraction``.
+
+    Exactly one key per call, and ``last-updated`` when a date is given:
+    `set_batch_check` and `set_in_sample` answer different questions (spec §5)
+    and must stay separately callable, so nothing can set them together by
+    accident. The body — and so every cell — is rebuilt verbatim.
+
+    :raises ExtractionError: If the artifact is missing or malformed, or carries
+        no ``status.extraction`` block.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    try:
+        fm_lines, body = split_frontmatter(path.read_text(encoding="utf-8"))
+        block = _extraction_mapping(fm_lines, path)
+        block[key] = value
+        fm_lines = set_field(fm_lines, EXTRACTION_KEY, _dump_block(block, path))
+        if date is not None:
+            fm_lines = set_field(fm_lines, "last-updated", date)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    path.write_text(rebuild(fm_lines, body), encoding="utf-8")
+
+
 def set_batch_check(
     artifact: str | Path, verdict: str, *, date: str | None = None
 ) -> None:
@@ -511,19 +539,32 @@ def set_batch_check(
         or malformed, or it carries no ``status.extraction`` block.
     """
     _check_verdict(verdict)
-    path = Path(artifact)
-    if not path.is_file():
-        raise ExtractionError(f"{path}: digest artifact not found")
-    try:
-        fm_lines, body = split_frontmatter(path.read_text(encoding="utf-8"))
-        block = _extraction_mapping(fm_lines, path)
-        block["batch-check"] = verdict
-        fm_lines = set_field(fm_lines, EXTRACTION_KEY, _dump_block(block, path))
-        if date is not None:
-            fm_lines = set_field(fm_lines, "last-updated", date)
-    except FrontmatterError as exc:
-        raise ExtractionError(f"{path}: {exc}") from exc
-    path.write_text(rebuild(fm_lines, body), encoding="utf-8")
+    _set_extraction_key(artifact, "batch-check", verdict, date)
+
+
+def set_in_sample(
+    artifact: str | Path, *, in_sample: bool, date: str | None = None
+) -> None:
+    """Record that a human checked **this** paper's cells against its sources.
+
+    ``in-sample: true`` means *a human looked at these cells and the places they
+    cite*, not *this paper was nominated* — a draw that is never followed by a
+    verdict has established nothing, so only ``digest extract sample
+    --verdict`` sets it. Writing it at draw time would let an unanswered
+    invocation leave behind an artifact claiming it had been checked.
+
+    Separate from `set_batch_check` because the two keys answer different
+    questions (spec §5): an unsampled paper in a failed batch reads
+    ``in-sample: false``, ``batch-check: failed``.
+
+    :param artifact: The per-paper digest artifact.
+    :param in_sample: Whether this paper's cells were checked by a human.
+    :param date: ISO date for ``status.last-updated``; left alone if omitted.
+    :raises ExtractionError: If the artifact is missing or malformed, or carries
+        no ``status.extraction`` block — a paper that was never extracted cannot
+        have been sampled.
+    """
+    _set_extraction_key(artifact, "in-sample", in_sample, date)
 
 
 def append_check_log(

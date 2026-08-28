@@ -327,8 +327,9 @@ def test_a_failed_verdict_marks_every_member_and_touches_no_cell(
     for citekey in sorted(BATCH):
         status = _block(root, citekey)
         assert status["extraction"]["batch-check"] == "failed"
-        # in-sample stays a fact about the paper; batch-check is about the run.
-        assert status["extraction"]["in-sample"] is False
+        # The two keys do not move together: `batch-check` is the verdict on the
+        # run, `in-sample` is whether a human looked at *this* paper's cells.
+        assert status["extraction"]["in-sample"] is (citekey in EXPECTED_SAMPLE)
         # The guarantee-inflation guard: extraction never claims comprehension.
         assert "understanding" not in status
         # Byte-identical cells: repairing the caught cell would convert a
@@ -346,6 +347,75 @@ def test_a_verified_verdict_marks_every_member(
     assert result.exit_code == 0, result.stdout + result.stderr
     for citekey in BATCH:
         assert _block(root, citekey)["extraction"]["batch-check"] == "verified"
+
+
+def test_in_sample_marks_exactly_the_papers_the_draw_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two invocations must agree about who was checked.
+
+    The verdict call re-draws with the same deterministic selector over the same
+    membership set, so the papers marked ``in-sample: true`` are the ones the
+    human was actually shown — not a second, differently-drawn set.
+    """
+    root = _repo(tmp_path)
+    drawn = json.loads(_run(root, *_citekey_args(), monkeypatch=monkeypatch).stdout)
+    shown = [p["citekey"] for p in drawn["sampled"]]
+    # Drawing alone establishes nothing, so it must claim nothing.
+    assert all(_block(root, k)["extraction"]["in-sample"] is False for k in BATCH)
+
+    _run(root, *_citekey_args(), "--verdict", "verified", monkeypatch=monkeypatch)
+
+    marked = [k for k in sorted(BATCH) if _block(root, k)["extraction"]["in-sample"]]
+    assert marked == shown
+
+
+def test_in_sample_follows_an_explicit_size_on_both_invocations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    drawn = json.loads(
+        _run(root, *_citekey_args(), "--size", "5", monkeypatch=monkeypatch).stdout
+    )
+    _run(
+        root,
+        *_citekey_args(),
+        "--size",
+        "5",
+        "--verdict",
+        "verified",
+        monkeypatch=monkeypatch,
+    )
+    marked = [k for k in sorted(BATCH) if _block(root, k)["extraction"]["in-sample"]]
+    assert marked == drawn["sample"]
+    assert len(marked) == 5
+
+
+def test_a_sampled_paper_whose_cells_could_not_be_read_is_not_marked_checked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The human cannot have checked cells the command could not show them."""
+    root = _repo(tmp_path, ["a1", "b2"])
+    target = _digest(root, "a1")
+    fm_lines, _body = split_frontmatter(target.read_text(encoding="utf-8"))
+    target.write_text(
+        "---\n" + "\n".join(fm_lines) + "\n---\n\nprose only\n", encoding="utf-8"
+    )
+    result = _run(
+        root,
+        "--citekey",
+        "a1",
+        "--citekey",
+        "b2",
+        "--verdict",
+        "failed",
+        monkeypatch=monkeypatch,
+    )
+    assert result.exit_code == 1
+    assert _block(root, "a1")["extraction"]["in-sample"] is False
+    # The verdict on the run still lands — that is what a failed batch means.
+    assert _block(root, "a1")["extraction"]["batch-check"] == "failed"
+    assert _block(root, "b2")["extraction"]["in-sample"] is True
 
 
 def test_an_unknown_verdict_is_refused(

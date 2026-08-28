@@ -2537,9 +2537,12 @@ def _apply_verdict(
     """Write the human's verdict onto **every** member of the batch (spec §8).
 
     Unsampled members included: the verdict is a finding about the population
-    the sample was drawn from. Only the drawn papers get a check log entry —
-    they are the only ones a human actually looked at, and logging a check that
-    did not happen would forge the evidence trail.
+    the sample was drawn from. The drawn papers additionally get
+    ``in-sample: true`` and a check-log entry — they are the only ones a human
+    actually looked at, and claiming a check that did not happen, in either
+    place, would forge the evidence trail. The two frontmatter keys are written
+    through separate calls precisely so they cannot drift into meaning one
+    thing (spec §5).
 
     A failure on one member is reported and the sweep continues; aborting would
     leave the batch half-marked with no report of which half.
@@ -2561,6 +2564,7 @@ def _apply_verdict(
             artifact_mod.set_batch_check(target, verdict, date=date)
             updated.append(key)
             if key in drawn_cells:
+                artifact_mod.set_in_sample(target, in_sample=True, date=date)
                 log_entries.append(
                     str(
                         artifact_mod.append_check_log(
@@ -2621,7 +2625,16 @@ def extract_sample(
     no cell. A process that produced one confidently-wrong cell in a sample of
     three probably produced more in the other thirty-seven, so the finding is
     about the batch; silently repairing the caught cell would convert that
-    signal into a tidy-looking local fix (spec §8).
+    signal into a tidy-looking local fix (spec §8). The drawn papers also get
+    ``in-sample: true``, which means *a human checked these cells* — which is
+    why the draw itself writes nothing: an unanswered draw has established
+    nothing about any paper.
+
+    The verdict call re-draws over the batch it is given, so **give it the same
+    batch and the same ``--size``**. Both are deterministic, so identical
+    arguments mark exactly the papers the draw reported; a different membership
+    set or ``--size`` is a different batch, and marks a different set of papers
+    as checked.
 
     Never writes ``status.understanding``. Extraction certifies located cells
     checked by sample, which is a weaker claim than verified comprehension.

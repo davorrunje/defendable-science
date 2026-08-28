@@ -842,3 +842,49 @@ def test_append_check_log_refuses_an_unknown_verdict(tmp_path: Path) -> None:
             log_dir=tmp_path / "log",
             date=DATE,
         )
+
+
+# --- set_in_sample: "a human checked these cells" ------------------------------
+
+
+def test_set_in_sample_touches_only_that_key(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write(target, tmp_path / "log")
+    before = target.read_text(encoding="utf-8")
+
+    art.set_in_sample(target, in_sample=True)
+
+    after = target.read_text(encoding="utf-8")
+    assert _status(target)["extraction"] == {
+        "cells": 2,
+        "locators": "ok",
+        "in-sample": True,
+        # The verdict on the run is a separate question and must not move with it.
+        "batch-check": "pending",
+    }
+    assert UNDERSTANDING_LINE in after.splitlines()
+    assert _cells_span(after) == _cells_span(before)
+    assert _last_updated(target) == DATE
+
+
+def test_set_in_sample_can_stamp_the_check_date(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+    art.set_in_sample(target, in_sample=True, date="2026-09-02")
+
+    assert _last_updated(target) == "2026-09-02"
+    assert _status(target)["extraction"]["in-sample"] is True
+
+
+def test_set_in_sample_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    with pytest.raises(ex.ExtractionError, match="digest artifact not found"):
+        art.set_in_sample(tmp_path / "nope.md", in_sample=True)
+
+
+def test_set_in_sample_never_invents_an_extraction_block(tmp_path: Path) -> None:
+    """A paper that was never extracted cannot have been sampled."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus:\n---\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="has not been extracted"):
+        art.set_in_sample(target, in_sample=True)
