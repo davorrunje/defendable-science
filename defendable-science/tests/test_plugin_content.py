@@ -56,8 +56,7 @@ def test_no_skill_hard_codes_the_research_tree(skill: Path) -> None:
 
     # Format offenders as "file:line: text" for error message
     formatted = [
-        f"{skill.relative_to(_REPO_ROOT)}:{n}: {line}"
-        for n, line in offenders
+        f"{skill.relative_to(_REPO_ROOT)}:{n}: {line}" for n, line in offenders
     ]
 
     assert formatted == [], "\n".join(formatted)
