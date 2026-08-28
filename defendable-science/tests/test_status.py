@@ -136,6 +136,70 @@ def test_every_shipped_template_matches_the_renderer(relpath: str) -> None:
     assert _status_block(shipped.read_text(encoding="utf-8")) == expected
 
 
+_TEMPLATES_README = _REPO_ROOT / "resources" / "templates" / "README.md"
+
+
+def _readme_block() -> str:
+    """Return the fenced YAML block under README § Status-frontmatter convention.
+
+    Inline comments and blank lines are stripped, as for a shipped template.
+    """
+    assert _TEMPLATES_README.is_file(), (
+        f"{_TEMPLATES_README} is missing; the drift guard cannot run. These tests "
+        "are meant to run from a repo checkout, which has both artifacts."
+    )
+    text = _TEMPLATES_README.read_text(encoding="utf-8")
+    match = re.search(
+        r"^## Status-frontmatter convention$.*?^```yaml\n(.*?)^```$",
+        text,
+        re.S | re.M,
+    )
+    assert match is not None, (
+        f"{_TEMPLATES_README} has no fenced yaml block under "
+        "'## Status-frontmatter convention'; that block is the third copy of the "
+        "field set and this guard is the only thing holding it to status.render."
+    )
+    lines = [
+        stripped
+        for line in match.group(1).splitlines()
+        if (stripped := re.sub(r"\s+#.*$", "", line).rstrip())
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _readme_field_names() -> list[str]:
+    """Return the field names of the README's documented status block, in order."""
+    lines = _readme_block().splitlines()
+    assert lines[0] == "status:", (
+        f"expected the README block to open with 'status:', got {lines[0]!r}"
+    )
+    return [line.split(":")[0].strip() for line in lines[1:]]
+
+
+def test_the_templates_readme_documents_the_rendered_field_set() -> None:
+    """The README's block is the human-facing copy of ``status.py``'s field set.
+
+    It cannot be compared verbatim the way a shipped template is: it is
+    illustrative and carries filled-in example values (a `refuted` verdict, a
+    signer, a date) precisely to show what a completed block looks like. So this
+    holds stable what is not illustrative — the field set and its order — which
+    is the part a reader would copy into a new artifact and the part `progress`
+    projects.
+    """
+    assert _readme_field_names() == list(st.FIELD_ORDER)
+
+
+def test_the_templates_readme_carries_no_placeholder_in_the_status_block() -> None:
+    """A `<...>` example teaches the bug `render` exists to prevent (#121)."""
+    status = yaml.safe_load(_readme_block())["status"]
+    placeholders = {
+        key: value
+        for key, value in status.items()
+        if isinstance(value, str) and value.startswith("<")
+    }
+    assert placeholders == {}
+
+
 @pytest.mark.parametrize("relpath", sorted(st.TEMPLATE_FORMS))
 def test_no_shipped_template_carries_a_placeholder_in_a_machine_read_field(
     relpath: str,

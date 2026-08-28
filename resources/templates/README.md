@@ -4,12 +4,19 @@
 
 Fillable skeletons for every staged document the `defendable-science` pipeline produces.
 The skills *draft* these as proposals; the **author authors and decides**. Copy a
-template into the consumer repo's `docs/research/` tree at the location its skill
-scaffolds, then fill it in — replace every `<...>` placeholder and delete the
-guidance comments as you go.
+template into the consumer repo at the location its skill scaffolds, then fill it
+in — replace every `<...>` placeholder and delete the guidance comments as you go.
 
 These are skeletons, not essays. Keep them short. The science is in the content
 you add, not in prose the template ships with.
+
+**This directory holds the prose skeletons only.** The machine-read files — the
+registries, the backlogs, the config, the dashboard — are *not* templated here;
+`defendable-science init` renders each one from the package, because the package
+already owns its columns and validators. A second copy here would be a second
+editable definition of a shape a loader has to parse, and the two would drift.
+The one thing both sides do write is the status frontmatter block, which is why
+it has a drift guard (see below).
 
 ## What produces what
 
@@ -23,9 +30,31 @@ you add, not in prose the template ships with.
 | `paper/positioning.md` | `paper-synthesis` · positioning | `.../paper/positioning.md` |
 | `paper/ledger.md` | `paper-synthesis` · sections (Toulmin-sextet claim→evidence ledger) | `.../paper/ledger.md` |
 | `paper/decision.md` | `paper-synthesis` · decision (**material decision**) | `.../paper/decision.md` |
-| `thesis/aims.md` | `thesis` · framing | `docs/research/thesis/aims.md` |
+| `thesis/aims.md` | `defendable-science init --thesis` scaffolds the stub; `thesis` · framing develops it | `docs/research/thesis/aims.md` |
 | `thesis/kappa.md` | `thesis` · synthesis + defensibility (**material decision**) | `docs/research/thesis/kappa/kappa.md` |
-| `thesis/milestones.yml` | `thesis` · framing (configurable program gates) | `docs/research/thesis/milestones.yml` |
+| `thesis/milestones.yml` | `defendable-science init --thesis` (configurable program gates, none started) | `docs/research/thesis/milestones.yml` |
+
+The machine-read files have no template — each is rendered by the command named
+here, from the module that owns its shape. Locations are the default layout; a
+repo that records a `layout:` block in `.defendable-science/config.yml` gets the
+same files at the paths it recorded.
+
+| File | Produced by | Deployed to |
+|---|---|---|
+| `papers.md` | `defendable-science init` | `docs/research/papers.md` |
+| `portfolio-backlog.md` | `defendable-science init` | `docs/research/portfolio-backlog.md` |
+| `dashboard.md` | `defendable-science init` (a stub saying it has not been generated); `progress` regenerates it | `docs/research/dashboard.md` |
+| `references.json` | `defendable-science init` (empty CSL-JSON) | `docs/research/literature/references.json` |
+| `triage.yml` | `defendable-science init` | `docs/research/literature/triage.yml` |
+| `datasets.yml` | `defendable-science init`; the `dataset` skill's `register` verb appends entries | `datasets.yml` |
+| `config.yml` | `defendable-science init` — every binding `null`, never a placeholder | `.defendable-science/config.yml` |
+| `rclone.conf.example` | `defendable-science init` (remote name and type only) | `.defendable-science/rclone.conf.example` |
+| `.gitignore` | `defendable-science init` — **append-only merge**, never a rewrite | repo root |
+| `<paper>/backlog.md` | `defendable-science backlog promote --scaffold` | `docs/research/<paper>/backlog.md` |
+
+`thesis/milestones.yml` is the one file with a foot in both tables: it is a
+shipped template *and* rendered by `init --thesis`, so `tests/test_render.py`
+holds the two to one schema.
 
 Design/plan (hypothesis) and outline/plan (paper) are **engineering**, delegated to
 the bound engineering backend via the engineering-delegation contract (its
@@ -37,7 +66,18 @@ the bound engineering backend via the engineering-delegation contract (its
 Every hypothesis / paper / thesis artifact carries one `status:` block in its
 markdown frontmatter — the single source of truth `progress`
 (`../../skills/progress/SKILL.md`) reads and rolls up. There is deliberately no
-separate progress file. **Field set (copied verbatim from `progress/SKILL.md`):**
+separate progress file.
+
+The **definition** of the field set, its order, and the per-level enums lives in
+`defendable-science/defendable_science/scaffold/status.py`; what follows is the
+human-facing reference that mirrors it, with example values filled in. **The
+field set and its order cannot drift** —
+`defendable-science/tests/test_status.py` checks this block against
+`status.render`, the same guard it runs over the nine shipped templates. The
+enums in the comments below are *not* guarded, so read
+`status.VERDICTS`/`status.READINESS` if a value here looks wrong.
+
+**Field set:**
 
 ```yaml
 status:

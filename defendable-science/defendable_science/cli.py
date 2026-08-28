@@ -34,6 +34,7 @@ from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
 from defendable_science.literature import registry as registry_mod
+from defendable_science.scaffold.init_repo import init_repo
 from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
@@ -127,7 +128,7 @@ def doctor() -> None:
 _DEFAULT_CACHE_ROOT = Path(".defendable-science/cache")
 
 
-def _load_config_or_exit() -> dict[str, Any]:
+def _load_config_or_exit(root: Path | None = None) -> dict[str, Any]:
     """Load ``.defendable-science/config.yml``, exiting 1 on invalid YAML/mapping.
 
     The file is looked up from the **repository root** rather than the cwd, so a
@@ -135,6 +136,9 @@ def _load_config_or_exit() -> dict[str, Any]:
     one run from the top — and never silently falls back to "all defaults"
     because the author happened to be one directory down.
 
+    :param root: The repository root to read from; discovered from the cwd when
+        omitted. ``init --root`` passes it, so the repo named on the command
+        line is the one whose config is read.
     :returns: The parsed configuration mapping (empty if the file is absent).
     :raises typer.Exit: Code 1 if the file exists but is not a valid YAML
         mapping.
@@ -146,22 +150,24 @@ def _load_config_or_exit() -> dict[str, Any]:
     )
 
     try:
-        return load_config(find_repo_root() / DEFAULT_CONFIG_PATH)
+        return load_config((root or find_repo_root()) / DEFAULT_CONFIG_PATH)
     except ValueError as exc:
         typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
 
-def _layout_or_exit() -> tuple[dict[str, Any], Layout]:
+def _layout_or_exit(root: Path | None = None) -> tuple[dict[str, Any], Layout]:
     """Load the config and resolve the layout, exiting 1 on an invalid block.
 
+    :param root: The repository root to resolve against; discovered from the cwd
+        when omitted.
     :returns: The config mapping and the resolved layout.
     :raises typer.Exit: Code 1 if ``layout:`` is invalid.
     """
     from defendable_science.core.config import find_repo_root
 
-    config = _load_config_or_exit()
-    repo_root = find_repo_root()
+    config = _load_config_or_exit(root)
+    repo_root = root or find_repo_root()
     try:
         return config, resolve_layout(config, repo_root)
     except LayoutError as exc:
@@ -169,7 +175,7 @@ def _layout_or_exit() -> tuple[dict[str, Any], Layout]:
         raise typer.Exit(code=1) from exc
 
 
-def _repo_relative(value: str | Path) -> Path:
+def _repo_relative(value: str | Path, root: Path | None = None) -> Path:
     """Anchor a configured path to the repository root.
 
     A path written in ``config.yml`` describes a location in the *repository*,
@@ -180,15 +186,17 @@ def _repo_relative(value: str | Path) -> Path:
     absolute value is honoured as given.
 
     :param value: The configured path.
+    :param root: The repository root to anchor to; discovered from the cwd when
+        omitted.
     :returns: The absolute path it names.
     """
     from defendable_science.core.config import find_repo_root
 
     path = Path(value)
-    return path if path.is_absolute() else find_repo_root() / path
+    return path if path.is_absolute() else (root or find_repo_root()) / path
 
 
-def _cache_root(config: dict[str, Any] | None = None) -> Path:
+def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) -> Path:
     """Resolve the cache root from ``config.yml``'s ``cache_dir:`` key.
 
     Both the dataset content-addressed cache and the literature HTTP cache
@@ -200,22 +208,104 @@ def _cache_root(config: dict[str, Any] | None = None) -> Path:
     so the cache does not move when a command is run from a subdirectory.
 
     :param config: A pre-loaded config mapping; loaded fresh when omitted.
+    :param root: The repository root a relative ``cache_dir`` is anchored to;
+        discovered from the cwd when omitted.
     :returns: The absolute cache root — the configured ``cache_dir``, or
         :data:`_DEFAULT_CACHE_ROOT` when it is unset.
     :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string.
     """
     if config is None:
-        config = _load_config_or_exit()
+        config = _load_config_or_exit(root)
     cache_dir = config.get("cache_dir")
     if cache_dir is None:
-        return _repo_relative(_DEFAULT_CACHE_ROOT)
+        return _repo_relative(_DEFAULT_CACHE_ROOT, root)
     if not isinstance(cache_dir, str):
         typer.echo(
             "invalid .defendable-science/config.yml: 'cache_dir' must be a string",
             err=True,
         )
         raise typer.Exit(code=1)
-    return _repo_relative(cache_dir)
+    return _repo_relative(cache_dir, root)
+
+
+# --- init (defendable-science#123) ----------------------------------------------------
+
+
+@app.command()
+def init(
+    root: Annotated[
+        str | None,
+        typer.Option(
+            "--root", help="Repository root to scaffold; discovered if omitted."
+        ),
+    ] = None,
+    thesis: Annotated[
+        bool, typer.Option("--thesis", help="Also scaffold the optional thesis tree.")
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Report what would be written; write nothing."),
+    ] = False,
+) -> None:
+    """Scaffold the consumer layout, and report every path considered as JSON.
+
+    Writes each machine-read file from the renderer that owns its shape, so a
+    scaffolded repo is immediately readable by the commands that consume it.
+    **Existing files are never overwritten** — a file already there is reported
+    ``exists`` and left exactly as the author wrote it, which is why there is no
+    ``--force``: re-running only fills the gaps. ``.gitignore`` is the single
+    exception and is merged append-only, so it is reported ``merged`` (not
+    ``created``) even on a brand-new repo.
+
+    The layout, and the ``cache_dir`` recorded in the config and ``.gitignore``,
+    come from ``.defendable-science/config.yml`` when this repo has one, so
+    re-running against a customised repo cannot re-scaffold the default tree
+    beside it.
+
+    :param root: The repository root to scaffold; discovered from the cwd when
+        omitted. Authoritative for the whole resolution chain — the config that
+        is read and the cache path that is ignored come from this root too.
+    :param thesis: Also scaffold the optional thesis tree (aims, milestones,
+        the kappa directory).
+    :param dry_run: Report exactly what a real run would do, touching nothing.
+    :raises typer.Exit: Code 1 on an invalid ``.defendable-science/config.yml``,
+        or if a path cannot be written (an unwritable tree, a parent that is a
+        file). A failed run prints no report: a partial scaffold must never read
+        as a completed one.
+    """
+    config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    # Repo-relative and directory-shaped, matching `render.DEFAULT_CACHE_DIR`:
+    # this string is written into both config.yml and .gitignore, and an
+    # absolute path in either would be wrong (.gitignore) or unportable (config).
+    cache_dir = f"{layout.rel(_cache_root(config, layout.repo_root)).as_posix()}/"
+    try:
+        actions = init_repo(layout, thesis=thesis, dry_run=dry_run, cache_dir=cache_dir)
+    except OSError as exc:
+        typer.echo(
+            f"init failed: {exc}; the scaffold is incomplete — fix that path and "
+            "re-run (init is idempotent and never overwrites an existing file)",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "root": str(layout.repo_root),
+                "thesis": thesis,
+                "dry_run": dry_run,
+                "actions": [
+                    {"path": layout.rel(a.path).as_posix(), "status": a.status}
+                    for a in actions
+                ],
+                "counts": {
+                    status: sum(1 for a in actions if a.status == status)
+                    for status in ("created", "exists", "merged")
+                },
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0)
 
 
 # --- literature (defendable-science#1) ------------------------------------------------

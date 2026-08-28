@@ -1216,3 +1216,27 @@ def test_an_explicit_research_root_is_still_rendered_against_the_repo_root(
     assert result.exit_code == 0, result.stdout
     registry = b._parse_document((writing / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows[0]["root"] == "writing/dc"
+
+
+def test_registry_dumps_produces_a_registry_append_papers_registry_accepts(
+    tmp_path: Path,
+) -> None:
+    """The 4th `state` column an agent invented is why promote could not register."""
+    papers = tmp_path / "papers.md"
+    papers.write_text(b.registry_dumps(), encoding="utf-8")
+
+    b.append_papers_registry(papers, "depth-collapse", "docs/research/dc", "bench")
+
+    text = papers.read_text(encoding="utf-8")
+    header = [c.strip() for c in text.splitlines()[7].strip("|").split("|")]
+    assert header == b.REGISTRY_COLUMNS
+    assert "depth-collapse" in text
+
+
+def test_registry_dumps_carries_a_heading_and_no_data_rows() -> None:
+    text = b.registry_dumps()
+
+    assert text.startswith("# Papers registry\n")
+    assert "| paper-id | root | backend |" in text
+    assert "|---" in text
+    assert text.count("\n|") == 2  # header + separator only
