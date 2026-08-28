@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import dataclasses
 import getpass
+import inspect
 import json
 import platform
+import re
 import shutil
 import subprocess  # nosec B404 - used only to read `--version` of trusted tools
 import sys
@@ -48,8 +50,7 @@ from defendable_science.scaffold.layout import (
 )
 
 if TYPE_CHECKING:
-    import re
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from defendable_science.core.http import HttpClient
 
@@ -58,7 +59,120 @@ class CacheDirError(ValueError):
     """Raised on an invalid ``cache_dir:`` configuration."""
 
 
-app = typer.Typer(
+_FIELD_LIST_RE = re.compile(r"^:\w[\w-]*")
+_INLINE_ROLE_RE = re.compile(r":[A-Za-z][\w-]*:`([^`]*)`")
+
+
+def _role_target(raw: str) -> str:
+    """Render a Sphinx inline-role target the way Sphinx itself would.
+
+    :param raw: The role's backtick-quoted target, e.g. ``resolve_root`` or
+        ``~pkg.mod.func`` (a leading ``~`` means "show only the last
+        component").
+    :returns: `raw` with a leading ``~`` resolved to its last dotted
+        component; `raw` unchanged otherwise.
+    """
+    if raw.startswith("~"):
+        return raw[1:].rsplit(".", 1)[-1]
+    return raw
+
+
+def _strip_inline_roles(text: str) -> str:
+    """Strip reStructuredText inline roles (e.g. ``:func:`x```) from `text`.
+
+    :param text: Prose that may contain Sphinx inline roles such as
+        ``:func:``, ``:class:``, ``:mod:`` or ``:data:``.
+    :returns: `text` with each role replaced by its rendered target (see
+        `_role_target`); unchanged when `text` carries no role.
+    """
+    return _INLINE_ROLE_RE.sub(lambda m: _role_target(m.group(1)), text)
+
+
+def _prose_only(doc: str | None) -> str:
+    """Extract a MyST field-list docstring's prose lead-in for ``--help``.
+
+    Typer renders a command function's raw ``__doc__`` as its ``--help`` text
+    when no explicit ``help=`` is given, but ``CLAUDE.md`` requires MyST
+    field-list docstrings (``:param:``/``:returns:``/``:raises:``) on every
+    command for maintainers, mypy and the docs build. Showing that field list
+    verbatim in a terminal leaks reStructuredText markup at a user
+    (defendable-science#152) — this keeps the two conventions from colliding
+    without touching `doc` itself, so the source-facing docstring is unchanged.
+
+    :param doc: The command function's raw ``__doc__``, or `None`.
+    :returns: The dedented prose that precedes the first field-list line
+        (a line whose stripped form starts with e.g. ``:param``,
+        ``:returns:``, ``:raises`` or ``:rtype:``), with inline roles such as
+        ``:func:`x``` rendered as plain text. ``""`` when `doc` is `None`,
+        empty, or entirely a field list.
+    """
+    if not doc:
+        return ""
+    cleaned = inspect.cleandoc(doc)
+    prose_lines: list[str] = []
+    for line in cleaned.splitlines():
+        if _FIELD_LIST_RE.match(line.strip()):
+            break
+        prose_lines.append(line)
+    return _strip_inline_roles("\n".join(prose_lines).rstrip())
+
+
+class DocstringTyper(typer.Typer):
+    """A `typer.Typer` that keeps MyST field lists out of ``--help`` text.
+
+    Overrides `command` and `callback` so that, when the caller has not
+    passed an explicit ``help=``, the registered command's ``--help`` text is
+    derived from the decorated function's docstring prose only (see
+    `_prose_only`) instead of Typer's own default of the raw docstring. The
+    function's ``__doc__`` is never modified, so mypy, Sphinx and
+    ``CLAUDE.md``'s MyST-docstring convention are unaffected
+    (defendable-science#152). Applies to every group built on this class
+    without any command opting in, so a command added later cannot regress.
+    """
+
+    def command(  # type: ignore[override]
+        self, *args: Any, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a command, computing ``help=`` from the docstring when absent.
+
+        :param args: Forwarded to `typer.Typer.command` (its optional
+            positional ``name``).
+        :param kwargs: Forwarded to `typer.Typer.command`; ``help`` is
+            computed from the decorated function's docstring via
+            `_prose_only` unless the caller already passed one.
+        :returns: The command-registering decorator.
+        """
+        if "help" in kwargs:
+            return super().command(*args, **kwargs)
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            kwargs["help"] = _prose_only(fn.__doc__)
+            return super(DocstringTyper, self).command(*args, **kwargs)(fn)
+
+        return decorator
+
+    def callback(  # type: ignore[override]
+        self, *args: Any, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a callback, computing ``help=`` from the docstring when absent.
+
+        :param args: Forwarded to `typer.Typer.callback`.
+        :param kwargs: Forwarded to `typer.Typer.callback`; ``help`` is
+            computed from the decorated function's docstring via
+            `_prose_only` unless the caller already passed one.
+        :returns: The callback-registering decorator.
+        """
+        if "help" in kwargs:
+            return super().callback(*args, **kwargs)
+
+        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+            kwargs["help"] = _prose_only(fn.__doc__)
+            return super(DocstringTyper, self).callback(*args, **kwargs)(fn)
+
+        return decorator
+
+
+app = DocstringTyper(
     name="defendable-science",
     help="Supporting tooling for the defendable-science research-workflow plugin.",
     no_args_is_help=True,
@@ -546,7 +660,7 @@ def check(
 
 
 # --- progress (defendable-science#130) --------------------------------------------
-progress = typer.Typer(
+progress = DocstringTyper(
     help="Read-only reporting: regenerate the dashboard projection.",
     no_args_is_help=True,
 )
@@ -669,7 +783,7 @@ def progress_dashboard(
 
 
 # --- literature (defendable-science#1) ------------------------------------------------
-literature = typer.Typer(
+literature = DocstringTyper(
     help="Citation-graph and metadata tools.", no_args_is_help=True
 )
 app.add_typer(literature, name="literature")
@@ -1357,7 +1471,7 @@ def lit_mirror(
 
 
 # --- dataset (defendable-science#2 manifest / #3 retrieval) ---------------------------
-dataset = typer.Typer(
+dataset = DocstringTyper(
     help="Dataset manifest, retrieval and mirroring.", no_args_is_help=True
 )
 app.add_typer(dataset, name="dataset")
@@ -1670,7 +1784,7 @@ def audit(
 
 
 # --- defend (defendable-science#4, defendable-science#68) ----------------------------------
-defend = typer.Typer(help="Defensibility record helpers.", no_args_is_help=True)
+defend = DocstringTyper(help="Defensibility record helpers.", no_args_is_help=True)
 app.add_typer(defend, name="defend")
 
 
@@ -1812,7 +1926,7 @@ def record(
 
 
 # --- backlog (defendable-science#5) ---------------------------------------------------
-backlog = typer.Typer(help="Exploration backlog management.", no_args_is_help=True)
+backlog = DocstringTyper(help="Exploration backlog management.", no_args_is_help=True)
 app.add_typer(backlog, name="backlog")
 
 _BacklogPath = Annotated[
@@ -2228,7 +2342,7 @@ def drop(
 
 
 # --- keys (defendable-science#42) -----------------------------------------------------
-keys = typer.Typer(
+keys = DocstringTyper(
     help="Store, list and check API keys & credentials (ADR-0029).",
     no_args_is_help=True,
 )
@@ -2417,9 +2531,9 @@ def path() -> None:
 
 
 # --- digest extract (defendable-science#100, spec §3.1) -------------------------------
-digest = typer.Typer(help="Reading-record helpers (digest).", no_args_is_help=True)
+digest = DocstringTyper(help="Reading-record helpers (digest).", no_args_is_help=True)
 app.add_typer(digest, name="digest")
-extract = typer.Typer(
+extract = DocstringTyper(
     help="Extraction mode: breadth reading into located matrix cells.",
     no_args_is_help=True,
 )
