@@ -1165,3 +1165,55 @@ def test_has_extraction_or_cells_refuses_malformed_cells_markers(
     target.write_text(f"---\nstatus:\n---\n\n{art.CELLS_BEGIN}\n", encoding="utf-8")
     with pytest.raises(ex.ExtractionError, match="malformed"):
         art.has_extraction_or_cells(target)
+
+
+def test_has_understanding_without_cells_is_true_for_a_plain_depth_digest(
+    tmp_path: Path,
+) -> None:
+    """The exact "not yet recorded" case #142's render-batch fix must surface."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    assert art.has_understanding_without_cells(target) is True
+
+
+def test_has_understanding_without_cells_is_false_once_cells_are_recorded(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write_depth(target, tmp_path / "log")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_is_false_for_an_extracted_artifact(
+    tmp_path: Path,
+) -> None:
+    """`status.extraction` present: extraction's population, not depth's."""
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_is_false_with_no_understanding_either(
+    tmp_path: Path,
+) -> None:
+    """Neither block present at all: not a depth digest, nothing pending."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus:\n---\n", encoding="utf-8")
+    assert art.has_understanding_without_cells(target) is False
+
+
+def test_has_understanding_without_cells_refuses_a_missing_artifact(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ex.ExtractionError, match="digest artifact not found"):
+        art.has_understanding_without_cells(tmp_path / "nope.md")
+
+
+def test_has_understanding_without_cells_refuses_unparseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("not a digest at all\n", encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
+        art.has_understanding_without_cells(target)

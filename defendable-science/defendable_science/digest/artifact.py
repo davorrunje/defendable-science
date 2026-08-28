@@ -746,6 +746,45 @@ def has_extraction_or_cells(artifact: str | Path) -> bool:
     return _locate_block(body, path) is not None
 
 
+def has_understanding_without_cells(artifact: str | Path) -> bool:
+    """Whether `artifact` is a depth digest that could contribute a row, but hasn't.
+
+    True only for a depth digest (``status.understanding`` present) with
+    **no** delimited cells block at all and no ``status.extraction`` — a
+    paper a bulk ``digest extract render`` would otherwise pass over in
+    total silence, because :func:`has_extraction_or_cells` correctly excludes
+    it from the batch (it has no recorded cells to render) but nothing else
+    then says so. Left unsurfaced, a survey author who read a paper at depth
+    and forgot to run ``digest depth cells record`` would see a clean
+    ``ok: true`` bulk render with no indication that paper was ever a
+    candidate — the same silent-skip failure #142's acceptance criteria
+    forbid, just triggered by "no cells recorded yet" instead of "cells
+    block missing after being declared".
+
+    An artifact that already has cells (either provenance) or a
+    ``status.extraction`` block returns ``False`` here — this predicate is
+    about the "not yet recorded" state specifically, not about presence.
+
+    :param artifact: The per-paper digest artifact.
+    :returns: Whether the artifact is a depth digest with no cells recorded yet.
+    :raises ExtractionError: If the artifact is missing or its frontmatter is
+        absent or unparsable.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    text = path.read_text(encoding="utf-8")
+    try:
+        fm_lines, body = split_frontmatter(text)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    if _status_extraction(fm_lines, path) is not None:
+        return False
+    if _locate_block(body, path) is not None:
+        return False
+    return _has_understanding(fm_lines, path)
+
+
 def _set_extraction_key(
     artifact: str | Path, key: str, value: Any, date: str | None
 ) -> None:

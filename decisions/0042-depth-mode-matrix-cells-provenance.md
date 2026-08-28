@@ -127,6 +127,20 @@ cells block (a pre-existing corruption case, unrelated to this ADR) still surfac
 read error when its cells are gathered, exactly as it did before — `has_extraction_or_cells`
 does not change that path, only adds the depth-sourced one alongside it.
 
+**Review of this change caught one more instance of the same failure class**, on the other
+side of the same predicate: a depth digest with `status.understanding` but **no** cells
+block at all is correctly excluded from the default batch by `has_extraction_or_cells`
+(there is nothing of it to render), but exclusion alone left it unmentioned anywhere —
+`batch`, `errors`, and stderr all stayed silent about it, so a survey author who read a
+paper at depth and forgot to run `digest depth cells record` would see a clean `ok: true`
+bulk render with no sign that paper was ever a candidate. This is the same "silent skip in
+a bulk render that reports success" #142's acceptance criteria forbid, just triggered by
+"no cells recorded yet" rather than "cells block missing after being declared" (§3's
+original finding). Fixed with a third predicate, `has_understanding_without_cells`, and a
+`pending` list in `extract render`'s default-batch report (plus a stderr line per pending
+citekey) — deliberately **not** folded into `errors` and not affecting `ok`, since an
+unrecorded paper is an incomplete population, not a defect in the run that did happen.
+
 ### 4. The accountability log gets a distinct `kind`
 
 `write_depth_cells` appends to the same accountability log `write_extraction` does

@@ -3630,6 +3630,16 @@ def extract_render(
     A matrix that cannot be located unambiguously is a refusal instead: the
     file is left byte-identical rather than written at a guess.
 
+    In the default batch (no ``--citekey`` named), a depth digest with
+    ``status.understanding`` but no recorded cells is correctly left out of
+    the batch — there is nothing of it to render — but is named in the
+    report's ``pending`` list and on stderr, rather than passed over in
+    silence: a survey author who read a paper at depth and forgot to run
+    ``digest depth cells record`` would otherwise see a clean ``ok: true``
+    with no sign that paper was ever a candidate (defendable-science#142).
+    ``pending`` never affects ``ok`` — an unrecorded paper is an incomplete
+    population, not a defect in this run.
+
     :param citekey: A paper to render; repeatable. Defaults to every digest
         artifact carrying recorded matrix cells — extraction-sourced
         (``status.extraction``) or depth-sourced (a cells block with no
@@ -3649,10 +3659,29 @@ def extract_render(
     # caller reading only the report is never left with an unexplained
     # ``ok: false``.
     error: str | None = None
+    pending: list[str] = []
     if citekey:
         batch = sorted(set(citekey))
     else:
         batch, errors = _render_batch(layout, "digest extract render")
+        # A depth digest with no cells recorded yet is correctly excluded from
+        # `batch` (there is nothing of it to render) but must not vanish in
+        # total silence — the same "silent skip in a bulk render that still
+        # reports success" failure #142's acceptance criteria forbid, just
+        # triggered by "no cells yet" rather than "cells block missing after
+        # being declared" (which `errors` above already reports).
+        pending, _pending_errors = _digest_batch(
+            layout,
+            "digest extract render",
+            artifact_mod.has_understanding_without_cells,
+        )
+        for stale_citekey in pending:
+            typer.echo(
+                f"digest extract render: {stale_citekey} was read at depth "
+                "but has no matrix cells recorded — run `digest depth cells "
+                "record` for it if it should contribute a row",
+                err=True,
+            )
     if not batch and errors:
         # An empty batch that is empty *because nothing could be read* is not
         # an empty batch — whether anything has recorded cells is unknown, and
@@ -3705,6 +3734,12 @@ def extract_render(
                 "rendered": rendered,
                 "changed": changed,
                 "errors": errors,
+                # Depth digests with no matrix cells recorded yet — correctly
+                # excluded from `batch`, but named here rather than left
+                # silent (#142). Never affects `ok`: a paper that hasn't
+                # recorded cells yet is an incomplete population, not a
+                # defect in this run.
+                "pending": pending,
                 "error": error,
             },
             indent=2,

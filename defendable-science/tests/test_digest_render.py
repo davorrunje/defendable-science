@@ -543,6 +543,49 @@ def test_a_bulk_render_does_not_silently_skip_a_cell_less_depth_digest(
     assert "depth2020" not in text
 
 
+def test_a_default_bulk_render_names_a_cell_less_depth_digest_as_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default (no ``--citekey``) case: `pending` must not be silent either.
+
+    `depth2020` is correctly excluded from `batch` — there is nothing of it to
+    render — but a survey author who forgot `digest depth cells record` for it
+    must still see it named, not a clean `ok: true` with no trace it exists.
+    """
+    root = _repo(tmp_path)
+    _extract(
+        root, "vanilla2020", {"guarantee type": "learned", "partial monotonicity": "no"}
+    )
+    _depth_digest(root, "depth2020", values={})
+
+    result = _run(root, monkeypatch)
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["batch"] == ["vanilla2020"]
+    assert payload["errors"] == []
+    assert payload["pending"] == ["depth2020"]
+    assert "depth2020" in result.stderr
+    assert "digest depth cells record" in result.stderr
+
+
+def test_a_default_bulk_render_has_no_pending_papers_when_none_are_missing_cells(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _extract(
+        root, "vanilla2020", {"guarantee type": "learned", "partial monotonicity": "no"}
+    )
+    _depth_digest(root, "depth2020")
+
+    result = _run(root, monkeypatch)
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["pending"] == []
+
+
 def test_render_leaves_the_document_untouched_when_nothing_was_extracted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
