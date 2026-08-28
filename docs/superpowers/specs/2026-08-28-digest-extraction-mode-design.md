@@ -328,8 +328,15 @@ Default: `§3` / `§3.2` / `§3.2.1`, `Section 3` / `Sec. 3`, `p. 7` / `pp. 7-9`
 `Eq. (4)` / `Equation 4`, `Table 2`, `Fig. 5` / `Figure 5`, `Alg. 1`, `Thm. 2` / `Theorem 2` /
 `Lemma 3` / `Def. 1`, and comma-joined combinations (`§3, Eq. (4)`).
 
-Extended or replaced via `literature.extraction.locator_patterns` in
-`.defendable-science/config.yml`.
+Extended via `literature.extraction.locator_patterns` in `.defendable-science/config.yml`.
+
+*Amended during implementation — "or replaced" was never built, and should not be.*
+`compile_locator_patterns` appends the configured patterns to the defaults; there is
+deliberately no way to drop one. Widening only ever admits a locator shape that would
+otherwise have been rejected, so it cannot cause a false negative on a locator the author
+meant; allowing removal would let a misconfiguration reject locators the author wrote, which
+is the failure with no signal. A pattern set that cannot be combined raises `ExtractionError`
+rather than silently narrowing.
 
 ### 7.4 Refusal
 
