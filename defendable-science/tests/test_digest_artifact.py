@@ -245,6 +245,26 @@ def test_the_log_entry_records_every_cell_including_the_absences(
     ]
 
 
+def test_the_log_entry_is_named_from_the_citekey_not_the_artifacts_stem(
+    tmp_path: Path,
+) -> None:
+    """Pins defendable-science#146: the join must survive `Layout.digest` changing.
+
+    Today ``Layout.digest`` happens to name the artifact ``<citekey>.md``, so a
+    log entry named from ``path.stem`` coincides with one named from the
+    citekey — for every path through the code. This writes the artifact at a
+    filename that deliberately does *not* match its citekey, so the two would
+    diverge if the log entry were still keyed off the file's stem.
+    """
+    log_dir = tmp_path / "defend-log"
+    artifact_path = tmp_path / "digest-2026-not-the-citekey.md"
+    entry_path = _write(artifact_path, log_dir)
+
+    assert entry_path == log_dir / f"{DATE}-{CITEKEY}.yml"
+    entry = yaml.safe_load(entry_path.read_text(encoding="utf-8"))[0]
+    assert entry["citekey"] == CITEKEY
+
+
 def test_a_second_extraction_the_same_day_never_overwrites_the_first(
     tmp_path: Path,
 ) -> None:
