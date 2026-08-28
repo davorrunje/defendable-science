@@ -81,6 +81,31 @@ def test_text_mode_prints_a_human_summary(
     assert "invalid: 0" in result.stdout
 
 
+def test_text_mode_with_zero_findings_prints_counts_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Text mode on a repo with zero findings shows counts without a findings section."""
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    # Bind the experiment_backend to eliminate the one gap
+    (tmp_path / ".defendable-science" / "config.yml").write_text(
+        "cache_dir: .defendable-science/cache/\nexperiment_backend: bench\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check", "--text"])
+
+    assert result.exit_code == 0
+    assert "defendable-science check" in result.stdout
+    assert "invalid: 0" in result.stdout
+    assert "unreadable: 0" in result.stdout
+    assert "gap: 0" in result.stdout
+    # No findings section should appear when there are no findings
+    lines = result.stdout.splitlines()
+    # Should be 4 lines: "defendable-science check", "  invalid: 0", "  unreadable: 0", "  gap: 0"
+    assert len(lines) == 4
+
+
 def test_malformed_files_never_produce_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
