@@ -342,3 +342,88 @@ def test_an_unwindowed_ragged_table_after_the_first_is_still_ignored() -> None:
     """`backlog.py`'s guarantee: a later sloppy table is not this caller's problem."""
     text = "| a | b |\n|---|---|\n| 1 | 2 |\n\nprose\n\n| x |\n|---|\n| 1 | 2 |\n"
     assert md.parse_document(text).header == ["a", "b"]
+
+
+# --- find_headings (issue #145, case A) -----------------------------------------
+
+
+def test_find_headings_locates_a_matching_heading() -> None:
+    text = "# Doc\n\n## Concept matrix\n\nprose\n"
+    assert md.find_headings(text, "Concept matrix") == [2]
+
+
+def test_find_headings_is_case_insensitive_and_strips_the_title() -> None:
+    text = "### concept MATRIX\n\nprose\n"
+    assert md.find_headings(text, "  Concept Matrix  ") == [0]
+
+
+def test_find_headings_returns_empty_for_no_match() -> None:
+    assert md.find_headings("# Doc\n\nprose\n", "Concept matrix") == []
+
+
+def test_find_headings_ignores_a_heading_shown_inside_a_fence() -> None:
+    text = "# Doc\n\n```\n## Concept matrix\n```\n\nprose\n"
+    assert md.find_headings(text, "Concept matrix") == []
+
+
+def test_find_headings_reports_every_match_for_ambiguity_callers() -> None:
+    text = "## Concept matrix\n\nprose\n\n### concept matrix\n\nmore\n"
+    assert md.find_headings(text, "Concept matrix") == [0, 4]
+
+
+# --- fence-indent inside a list item (issue #145, case B) -----------------------
+
+
+def test_a_fence_indented_inside_a_list_item_is_detected() -> None:
+    lines = ["- item", "", "    ```", "    | a |", "    |---|", "    ```"]
+    assert md._fenced(lines) == [False, False, True, True, True, True]
+
+
+def test_a_fenced_list_item_table_is_not_selected_as_the_document_s_table() -> None:
+    text = "- item\n\n    ```\n    | a |\n    |---|\n    | fake |\n    ```\n\nprose\n"
+    doc = md.parse_document(text)
+    assert doc.header is None
+    assert doc.preamble == text
+
+
+def test_splice_does_not_overwrite_a_fenced_table_inside_a_list_item() -> None:
+    text = (
+        "- item\n\n    ```\n    | a |\n    |---|\n    | fake |\n    ```\n\n"
+        "| Method | axis |\n|---|---|\n| real | value |\n"
+    )
+    doc = md.parse_document(text)
+    assert doc.header == ["Method", "axis"]
+    out = md.splice(doc.preamble, doc.postamble, doc.header, doc.rows)
+    assert out == text
+    assert "| fake |" in out
+
+
+def test_a_closer_indented_less_than_its_opener_does_not_close() -> None:
+    """The case-B approximation: a closer must be at least as indented."""
+    lines = ["    ```", "  ```", "content"]
+    assert md._fenced(lines) == [True, True, True]
+
+
+# --- backtick info-string restriction (issue #145, case C) ----------------------
+
+
+def test_a_backtick_paragraph_with_a_further_backtick_does_not_open_a_fence() -> None:
+    lines = ["```js `x`", "| a |", "|---|", "| 1 |"]
+    assert md._fenced(lines) == [False, False, False, False]
+
+
+def test_the_table_after_a_backtick_paragraph_is_still_found() -> None:
+    text = "```js `x`\n\n| a |\n|---|\n| 1 |\n"
+    doc = md.parse_document(text)
+    assert doc.header == ["a"]
+    assert doc.rows == [{"a": "1"}]
+
+
+def test_a_tilde_fence_s_info_string_may_contain_a_backtick() -> None:
+    lines = ["~~~info with a backtick ` in it", "content", "~~~"]
+    assert md._fenced(lines) == [True, True, True]
+
+
+def test_a_backtick_fence_with_a_clean_info_string_still_opens() -> None:
+    lines = ["```python", "code", "```"]
+    assert md._fenced(lines) == [True, True, True]

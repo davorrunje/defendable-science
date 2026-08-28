@@ -20,6 +20,7 @@ from defendable_science.core.mdtable import (
     AmbiguousSectionError,
     Row,
     TableError,
+    find_headings,
     parse_document,
 )
 
@@ -34,14 +35,6 @@ SELF_ROW = "**This paper**"
 
 #: An unreplaced template placeholder, e.g. ``<attr 1>`` or ``<prior work>``.
 PLACEHOLDER_RE = re.compile(r"^<[^>]*>$")
-
-#: The concept-matrix heading as a line, matched the way the parser matches it:
-#: any level, case-insensitively (see ``core.mdtable._section_bounds``). Used
-#: only to tell "no such section" apart from "section, but no table".
-_MATRIX_HEADING_LINE = re.compile(
-    rf"^#{{1,6}}\s+{re.escape(CONCEPT_MATRIX_HEADING)}\s*$",
-    re.IGNORECASE | re.MULTILINE,
-)
 
 
 class ExtractionError(ValueError):
@@ -112,7 +105,7 @@ def read_matrix(path: str | Path) -> Matrix:
             f"{target}: {exc} — give every row one cell per header column"
         ) from exc
     if doc.header is None:
-        if _MATRIX_HEADING_LINE.search(text) is None:
+        if not find_headings(text, CONCEPT_MATRIX_HEADING):
             raise ExtractionError(
                 f"{target}: no '{CONCEPT_MATRIX_HEADING}' section — ask the "
                 "`literature` skill for `position --level paper` to write one"

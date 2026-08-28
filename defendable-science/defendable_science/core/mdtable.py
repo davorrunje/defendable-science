@@ -17,9 +17,33 @@ Row = dict[str, str]
 #: A markdown heading of any level, with its title text.
 _HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$")
 
-#: A CommonMark fenced-code-block marker: up to three spaces of indent, then at
-#: least three backticks or tildes, then the info string.
-_FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+#: A backtick fence: any amount of leading-space indent (see the indent note on
+#: :func:`_fenced`), then three or more backticks, then an info string. Per
+#: CommonMark, a *backtick* fence's info string may not itself contain a
+#: backtick — otherwise a paragraph that merely starts with three backticks
+#: and goes on to mention another one would wrongly open a fence that is never
+#: closed. ``[^`]*`` enforces that; it may still be empty.
+_BACKTICK_FENCE = re.compile(r"^(?P<indent> *)(?P<fence>`{3,})(?P<info>[^`]*)$")
+
+#: A tilde fence: same shape, but CommonMark does not restrict its info
+#: string — a tilde fence is exactly what a backtick-restricted info string
+#: would need to escape into, so the exemption is deliberate, not an
+#: oversight.
+_TILDE_FENCE = re.compile(r"^(?P<indent> *)(?P<fence>~{3,})(?P<info>.*)$")
+
+
+def _fence_match(line: str) -> re.Match[str] | None:
+    """Return the fence-opener/closer match for `line`, backtick or tilde.
+
+    Tried as two separate patterns (rather than one with an alternation)
+    because Python's `re` cannot give the backtick and tilde branches of one
+    alternation the same group names, and the caller wants one shape
+    (``indent``/``fence``/``info``) regardless of which delimiter matched.
+
+    :param line: One document line, newline already stripped.
+    :returns: The match, or ``None`` if `line` opens or closes neither kind.
+    """
+    return _BACKTICK_FENCE.match(line) or _TILDE_FENCE.match(line)
 
 
 def _fenced(lines: list[str]) -> list[bool]:
@@ -35,16 +59,34 @@ def _fenced(lines: list[str]) -> list[bool]:
     Closing follows CommonMark: the same character as the opening fence, at
     least as long, and no info string. An unclosed fence runs to the end.
 
+    Indent, a deliberate approximation: CommonMark caps a fence at three
+    spaces of indent **at the document's top level** — four or more there is
+    an indented code block instead, not a fence. But block content inside a
+    list item is indented relative to the item's own marker, so a fence
+    legitimately sits at four or more columns there, and this module does not
+    track list-item nesting to know which regime a given line is in. Rather
+    than re-deriving that (a real chunk of CommonMark's container-block
+    algorithm), an opener is accepted at *any* indent, and a closer must be
+    indented at least as far as its opener (CommonMark itself allows a closer
+    up to three spaces regardless of the opener's indent; this module trades
+    that precision for not having to track containers). Both directions of
+    error this can introduce only make `_fenced` claim *more* of the document
+    as fenced, never less — consistent with the module's "conservative on
+    purpose" contract of hiding a possible illustration rather than risking
+    it read as real content.
+
     :param lines: The document's lines.
     :returns: One flag per line, ``True`` when the line is fenced.
     """
     mask = [False] * len(lines)
     marker: str | None = None
+    marker_indent = 0
     for i, line in enumerate(lines):
-        match = _FENCE.match(line.rstrip("\n"))
+        match = _fence_match(line.rstrip("\n"))
         if marker is None:
             if match is not None:
                 marker = match.group("fence")
+                marker_indent = len(match.group("indent"))
                 mask[i] = True
             continue
         mask[i] = True
@@ -53,6 +95,7 @@ def _fenced(lines: list[str]) -> list[bool]:
             and match.group("fence")[0] == marker[0]
             and len(match.group("fence")) >= len(marker)
             and not match.group("info").strip()
+            and len(match.group("indent")) >= marker_indent
         ):
             marker = None
     return mask
@@ -186,6 +229,48 @@ def _collect_rows(
     return rows, end
 
 
+def _headings(lines: list[str], fenced: list[bool]) -> list[tuple[int, str]]:
+    """Return every heading's ``(index, casefolded title)``, fence-aware.
+
+    Shared by :func:`_section_bounds` and :func:`find_headings` so "scan the
+    document for headings by title" has exactly one implementation — a
+    ``#``-prefixed line inside a code block is a comment or a shell prompt,
+    not a heading, and neither caller should re-derive that rule.
+
+    :param lines: The document's lines.
+    :param fenced: Per-line fence flags from :func:`_fenced`.
+    :returns: Every heading, in document order.
+    """
+    headings: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        if fenced[i]:
+            continue
+        match = _HEADING.match(line)
+        if match is not None:
+            headings.append((i, match.group("title").strip().casefold()))
+    return headings
+
+
+def find_headings(text: str, title: str) -> list[int]:
+    """Return the 0-based line indices of headings matching `title`.
+
+    Fence-aware: a heading merely *shown* inside a code block (documentation,
+    an example) is not a match — the same rule :func:`parse_document` and
+    :func:`_section_bounds` apply when they decide whether a section exists.
+    Exported so a caller that only wants to know "does this section exist at
+    all" (as opposed to locating and reading it) does not have to fall back to
+    a fence-blind regex to ask that question.
+
+    :param text: The host markdown document.
+    :param title: The heading text to find, compared case-insensitively.
+    :returns: The matching headings' line indices, in document order.
+    """
+    lines = text.splitlines(keepends=True)
+    fenced = _fenced(lines)
+    want = title.strip().casefold()
+    return [i for i, heading_title in _headings(lines, fenced) if heading_title == want]
+
+
 def _section_bounds(
     lines: list[str], title: str, fenced: list[bool]
 ) -> tuple[int, int] | None:
@@ -206,13 +291,7 @@ def _section_bounds(
         silently, since the document parses perfectly well either way.
     """
     want = title.strip().casefold()
-    headings: list[tuple[int, str]] = []
-    for i, line in enumerate(lines):
-        if fenced[i]:
-            continue
-        match = _HEADING.match(line)
-        if match is not None:
-            headings.append((i, match.group("title").strip().casefold()))
+    headings = _headings(lines, fenced)
     matches = [i for i, heading in enumerate(headings) if heading[1] == want]
     if len(matches) > 1:
         raise AmbiguousSectionError(

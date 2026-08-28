@@ -86,6 +86,23 @@ def test_the_missing_section_remedy_is_a_skill_request_not_a_shell_command(
     assert "`literature position" not in message
 
 
+def test_a_heading_only_inside_a_fence_reports_no_section(tmp_path: Path) -> None:
+    """Issue #145 case A: a fence-blind probe would offer the wrong remedy.
+
+    The document's only ``## Concept matrix`` heading sits inside a code
+    fence, so the fence-aware parser correctly finds no section. The
+    discriminator between "no section" and "section, but no table" must agree
+    — reporting "holds no table" here would send the author to add a matrix
+    to a section that does not exist.
+    """
+    text = "# P\n\n```\n## Concept matrix\n```\n"
+    with pytest.raises(ex.ExtractionError, match="no 'Concept matrix'") as caught:
+        ex.axes_from_positioning(_write(tmp_path, text))
+    message = str(caught.value)
+    assert "ask the `literature` skill" in message
+    assert "holds no table" not in message
+
+
 def test_a_differently_cased_heading_still_reports_the_missing_table(
     tmp_path: Path,
 ) -> None:
