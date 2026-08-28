@@ -1261,6 +1261,21 @@ def test_the_ungenerated_dashboard_stub_is_not_stale_on_an_empty_repo() -> None:
     assert c.check_cross_artifact(LAYOUT, FakeProbe(_scaffolded())) == []
 
 
+def test_cross_artifact_silent_when_dashboard_missing() -> None:
+    """When dashboard file doesn't exist, no findings about it."""
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc")
+    # Remove the dashboard
+    del files[LAYOUT.dashboard]
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    # Should not complain about missing dashboard in cross-artifact check
+    # (check_layout handles that)
+    stale = [f for f in findings if f.file == "docs/research/dashboard.md"]
+    assert stale == []
+
+
 def test_cross_artifact_ignores_documents_with_missing_status_blocks() -> None:
     files = _scaffolded()
     # Add a document without a status block
@@ -1276,20 +1291,20 @@ def test_cross_artifact_ignores_documents_with_missing_status_blocks() -> None:
     )
 
 
-def test_cross_artifact_ignores_documents_with_unreadable_status_blocks() -> None:
+def test_cross_artifact_reports_unreadable_documents() -> None:
     files = _scaffolded()
-    # Add a document with broken YAML in the frontmatter
+    # Add a document that cannot be read
     path = LAYOUT.hypothesis_dir("dc", "2026-03-04-x") / "findings.md"
-    files[path] = "---\nstatus:\n  level: [broken yaml\n---\n\nContent.\n"
+    files[path] = _doc("hypothesis", id="2026-03-04-x")
 
-    # The parse error means the status block parse fails, not a read error
-    # So we need to use the FakeProbe to simulate an actual read failure
     probe = FakeProbe(files, unreadable={path})
 
     findings = c.check_cross_artifact(LAYOUT, probe)
 
-    # Should not report anything about the unreadable file (it skips with continue)
-    assert not any(f.file.endswith("findings.md") for f in findings)
+    # Should report the unreadable file as a finding
+    unreadable = [f for f in findings if f.file.endswith("findings.md")]
+    assert len(unreadable) == 1
+    assert unreadable[0].severity == "unreadable"
 
 
 def test_cross_artifact_handles_null_artifact_ids() -> None:
@@ -1304,7 +1319,7 @@ def test_cross_artifact_handles_null_artifact_ids() -> None:
     assert stale == []
 
 
-def test_cross_artifact_handles_unreadable_dashboard() -> None:
+def test_cross_artifact_reports_unreadable_dashboard() -> None:
     files = _scaffolded()
     files[PITCH] = _doc("paper", id="dc")
 
@@ -1312,12 +1327,14 @@ def test_cross_artifact_handles_unreadable_dashboard() -> None:
 
     findings = c.check_cross_artifact(LAYOUT, probe)
 
-    # Should not report dashboard issues if it cannot be read
-    stale = [f for f in findings if f.file == "docs/research/dashboard.md"]
-    assert stale == []
+    # Should report the unreadable dashboard as a finding
+    unreadable = [f for f in findings if f.file == "docs/research/dashboard.md"]
+    assert len(unreadable) == 1
+    assert unreadable[0].severity == "unreadable"
+    assert "could not read" in unreadable[0].message
 
 
-def test_cross_artifact_handles_unreadable_aims() -> None:
+def test_cross_artifact_reports_unreadable_aims() -> None:
     files = _scaffolded()
     # Create a document with covers by directly writing YAML
     pitch_content = (
@@ -1330,10 +1347,12 @@ def test_cross_artifact_handles_unreadable_aims() -> None:
 
     findings = c.check_cross_artifact(LAYOUT, probe)
 
-    # Should not check covers if aims is unreadable
-    covers_findings = [
-        f for f in findings if "covers" in f.message or "aim" in f.message
-    ]
+    # Should report the unreadable aims as a finding
+    unreadable = [f for f in findings if "aims.md" in f.file]
+    assert len(unreadable) == 1
+    assert unreadable[0].severity == "unreadable"
+    # Should not generate covers findings since aims cannot be checked
+    covers_findings = [f for f in findings if "covers" in f.message]
     assert covers_findings == []
 
 

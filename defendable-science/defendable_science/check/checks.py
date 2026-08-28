@@ -969,7 +969,8 @@ def _check_dashboard_consistency(
         return findings
 
     dashboard_text = _read(layout.dashboard, layout, probe, CROSS_ARTIFACT_CHECK)
-    if not isinstance(dashboard_text, str):
+    if isinstance(dashboard_text, Finding):
+        findings.append(dashboard_text)
         return findings
 
     # Skip if it's the ungenerated stub and no artifact ids exist
@@ -1042,6 +1043,7 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
         rel = str(layout.rel(path))
         text = _read(path, layout, probe, CROSS_ARTIFACT_CHECK)
         if isinstance(text, Finding):
+            findings.append(text)
             continue
 
         status_block = st.parse(text)
