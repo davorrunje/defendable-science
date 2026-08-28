@@ -737,13 +737,25 @@ def patch_triage(
       only the anchor label, but "loses a label silently" is still a silent
       change this writer should not make on the human's behalf.
 
+    The write itself is **atomic**: the new content lands in a sibling
+    ``<name>.tmp`` first, which then replaces the target in one filesystem
+    operation, so a crash mid-write can never leave a half-written sidecar. If
+    either the write or the replace raises, the ``.tmp`` file is removed before
+    the exception propagates (defendable-science#144) — a failed patch leaves
+    the directory exactly as it found it, not a stray ``triage.yml.tmp`` next
+    to an untouched ``triage.yml`` for the human to puzzle over while doing the
+    by-hand edit the refusal already sent them to do.
+
     :param path: The sidecar path (created if absent).
     :param citekey: The row to patch (created if absent).
     :param updates: Scalar keys to set; a ``None`` value deletes the key.
-    :raises RegistryError: If the file carries comments, holds a row that is not
-        a mapping, holds a YAML anchor aliased more than once anywhere in the
-        document (whole rows, nested values, merge keys, or scalars), is
-        unreadable, or any update value is not a scalar.
+    :raises RegistryError: If the file carries invalid YAML, comments, holds a
+        row that is not a mapping, holds a YAML anchor aliased more than once
+        anywhere in the document (whole rows, nested values, merge keys, or
+        scalars), or any update value is not a scalar.
+    :raises OSError: If the file cannot be read, or the atomic write/replace
+        itself fails (e.g. a full disk or a permission error); no orphan
+        ``.tmp`` file is left behind either way.
     """
     for key, value in updates.items():
         if value is not None and not isinstance(value, (str, int, bool)):
@@ -799,8 +811,24 @@ def patch_triage(
             row.pop(key, None)
         else:
             row[key] = value
+    _write_triage_atomically(target, data)
+
+
+def _write_triage_atomically(target: Path, data: dict[str, Any]) -> None:
+    """Write `data` to `target` via a sibling ``.tmp``, cleaned up on failure.
+
+    :param target: The sidecar path to write.
+    :param data: The full top-level mapping to serialize.
+    :raises OSError: If the write or the replace fails; no orphan ``.tmp`` file
+        is left behind either way (defendable-science#144).
+    """
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(
-        yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
-    tmp.replace(target)
+    try:
+        tmp.write_text(
+            yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        tmp.replace(target)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
