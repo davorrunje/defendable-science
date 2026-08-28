@@ -1734,9 +1734,12 @@ def record(
     transcript: Annotated[
         str, typer.Option("--transcript", help="Transcript file, or '-' for stdin.")
     ] = "",
-    log_dir: Annotated[str, typer.Option("--log-dir")] = str(
-        record_mod.DEFAULT_LOG_DIR
-    ),
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
 ) -> None:
     """Record a ``defend``/``digest`` examination: patch understanding + log.
 
@@ -1753,9 +1756,19 @@ def record(
     :param override: A blanket logged override of the surfaced gaps.
     :param acks: Per-gap acknowledgements, ``gap::name``, ``||``-separated.
     :param transcript: Transcript file path, or ``-`` for stdin.
-    :param log_dir: Directory for the accountability log.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted. The default comes from the layout rather
+        than the cwd because this command is meant to be run from inside a
+        paper directory, and a cwd-relative default would bury the run's
+        evidence there, where no reviewer would look for it.
     :raises typer.Exit: Code 1 on a guard violation or malformed artifact/input.
     """
+    _config, layout = _layout_or_exit()
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / record_mod.DEFAULT_LOG_DIR.name
+    )
     try:
         transcript_text: str | None = None
         if transcript == "-":
@@ -1778,7 +1791,7 @@ def record(
             override=override,
             acknowledgements=_parse_acks(acks),
             transcript=transcript_text,
-            log_dir=log_dir,
+            log_dir=log_root,
         )
     except (record_mod.RecordError, OSError) as exc:
         typer.echo(f"defend record failed: {exc}", err=True)
