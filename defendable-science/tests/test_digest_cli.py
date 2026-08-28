@@ -176,7 +176,11 @@ def test_axes_positioning_option_overrides_the_layout(
         app, ["digest", "extract", "axes", "--positioning", "elsewhere.md"]
     )
     assert result.exit_code == 0
-    assert json.loads(result.stdout)["axes"] == ["only axis"]
+    payload = json.loads(result.stdout)
+    assert payload["axes"] == ["only axis"]
+    # The reported path is absolute whichever branch resolved it, even though a
+    # relative --positioning is honoured as typed.
+    assert payload["positioning"] == str(other.resolve())
 
 
 def test_axes_refuses_a_placeholder_matrix_without_a_traceback(
@@ -235,6 +239,7 @@ def test_record_writes_the_artifact_the_layout_names(
         }
     ]
     assert payload["rejected"] == []
+    assert payload["errors"] == []
     assert payload["not_addressed"] == 1
     assert payload["ok"] is True
 
@@ -347,6 +352,9 @@ def test_record_honours_the_positioning_override(
     )
     assert result.exit_code == 0, result.stderr
     assert Layout.default(root.resolve()).digest("a2020").is_file()
+    assert json.loads(result.stdout)["positioning"] == str(
+        (root / "other.md").resolve()
+    )
 
 
 # --- record: refusal (nothing may land) -------------------------------------------
@@ -511,8 +519,52 @@ def test_record_reports_a_write_failure_without_a_traceback(
     artifact.write_text("no frontmatter here\n", encoding="utf-8")
     result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
     assert result.exit_code == 1
-    assert "digest extract record failed" in result.stderr
+    assert "digest extract record failed for sill1997monotonic" in result.stderr
     assert "Traceback" not in (result.stdout + result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["recorded"] == []
+    assert [e["citekey"] for e in payload["errors"]] == ["sill1997monotonic"]
+    assert payload["errors"][0]["artifact"] == str(artifact)
+    assert payload["errors"][0]["reason"]
+
+
+def test_record_reports_what_landed_when_one_paper_fails_to_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A partly-landed batch must say what landed, not only that it failed.
+
+    Aborting on the first write failure leaves the author knowing something went
+    wrong but not which papers are already recorded — and re-running the whole
+    batch to find out appends a second log entry for each of them.
+    """
+    root = _repo(tmp_path)
+    layout = Layout.default(root.resolve())
+    corrupt = layout.digest("zz2021")
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text("no frontmatter here\n", encoding="utf-8")
+    cells = [
+        *GOOD_CELLS,
+        {"citekey": "zz2021", "axis": "guarantee type", "value": "v", "locator": "§1"},
+        {
+            "citekey": "zz2021",
+            "axis": "partial monotonicity",
+            "value": "w",
+            "locator": "§2",
+        },
+    ]
+    result = _record(
+        root, cells, "--log-dir", str(root / "log"), monkeypatch=monkeypatch
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
+    assert [e["citekey"] for e in payload["errors"]] == ["zz2021"]
+    assert payload["rejected"] == []
+    # The good paper really did land, exactly as the report says.
+    assert layout.digest("sill1997monotonic").is_file()
+    assert len(list((root / "log").iterdir())) == 1
 
 
 # --- record: malformed input -------------------------------------------------------
@@ -701,6 +753,15 @@ def test_write_extraction_is_reached_only_through_validate() -> None:
     Pinned structurally, not by example: a flag, an env var or an early branch
     that wrote without validating would satisfy every behavioural test that
     exercises the validated path, and fail this one.
+
+    **What this costs, so the next person does not loosen it by mistake.** The
+    test also fails for a refactor that is *not* a bypass: extracting the write
+    into a helper — even one called from exactly this loop — moves the call out
+    of `extract_record` and out of the loop over the accepted cells, and this
+    test cannot tell that apart from a second writer added elsewhere, because
+    the two have the same shape. That is deliberate. If you hit it during an
+    honest refactor, keep the write inline here; do not weaken the assertions to
+    let a call site float free of the validation that produced its arguments.
     """
     tree = ast.parse(Path(cli_mod.__file__).read_text(encoding="utf-8"))
     writes = _calls(tree, "write_extraction")

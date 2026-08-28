@@ -2155,10 +2155,15 @@ def _positioning_context(
 ) -> tuple[dict[str, Any], Layout, Path]:
     """Resolve the config, the layout, and the positioning document to read.
 
-    An explicit ``--positioning`` wins and is taken as given (a path typed on the
-    command line means what it says relative to the cwd); otherwise the layout
-    supplies it from the paper id, the same order :func:`_lit_registry_paths`
-    uses. Resolution lives here rather than in
+    The *precedence* is :func:`_lit_registry_paths`'s — an explicit value wins,
+    otherwise the layout supplies the default — but the anchoring deliberately
+    is not. A configured path in ``config.yml`` describes a location in the
+    repository, so that function anchors it to the repo root; a path typed on
+    the command line means what it says relative to the cwd, so it is taken as
+    given here. Do not "reconcile" the two: they are answering different
+    questions.
+
+    Resolution lives here rather than in
     :mod:`defendable_science.digest.extraction`, which only ever sees a path.
 
     :param paper: The paper id, or ``None`` to infer it from the cwd.
@@ -2231,7 +2236,9 @@ def extract_axes(paper: _PaperOpt = None, positioning: _PositioningOpt = None) -
     except extraction_mod.ExtractionError as exc:
         typer.echo(f"digest extract axes failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(json.dumps({"positioning": str(path), "axes": axes}, indent=2))
+    # Reported absolute whichever branch resolved it: a consumer keying or
+    # diffing runs must not see two shapes for one document.
+    typer.echo(json.dumps({"positioning": str(path.resolve()), "axes": axes}, indent=2))
     raise typer.Exit(code=0)
 
 
@@ -2312,12 +2319,13 @@ def extract_record(
         against; inferred from the cwd when omitted.
     :param positioning: An explicit positioning document, overriding the layout.
     :param log_dir: Directory for the accountability log; the layout's
-        ``defend-log`` when omitted. Not a cwd-relative default: this command is
-        meant to be run from inside a paper directory, where one would put the
-        run's evidence somewhere no reviewer would look for it.
+        ``defend-log`` when omitted. The default comes from the layout rather
+        than the cwd because this command is meant to be run from inside a paper
+        directory, and a cwd-relative default would bury the run's evidence
+        there, where no reviewer would look for it.
     :raises typer.Exit: Code 0 when every paper was recorded; code 1 when
-        anything was rejected or the input, matrix or config is unusable; code 2
-        if the paper cannot be resolved.
+        anything was rejected, a write failed, or the input, matrix or config is
+        unusable; code 2 if the paper cannot be resolved.
     """
     config, layout, path = _positioning_context(paper, positioning)
     log_root = (
@@ -2337,9 +2345,10 @@ def extract_record(
     accepted, rejections = extraction_mod.validate(parsed, axes, patterns)
     date = date_cls.today().isoformat()
     recorded: list[dict[str, Any]] = []
-    try:
-        for citekey, paper_cells in sorted(accepted.items()):
-            artifact = layout.digest(citekey)
+    errors: list[dict[str, str]] = []
+    for citekey, paper_cells in sorted(accepted.items()):
+        artifact = layout.digest(citekey)
+        try:
             # `init` does not scaffold literature/digests/ — the first recorded
             # paper creates it.
             artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -2351,39 +2360,45 @@ def extract_record(
                 log_dir=log_root,
                 date=date,
             )
-            recorded.append(
-                {
-                    "citekey": citekey,
-                    "artifact": str(artifact),
-                    "cells": len(paper_cells),
-                    "not_addressed": sum(
-                        1
-                        for c in paper_cells
-                        if c.value == extraction_mod.NOT_ADDRESSED
-                    ),
-                    "log_entry": str(log_entry),
-                }
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            # The sweep continues and the report is still emitted. Aborting here
+            # would leave the author knowing only that *something* failed, while
+            # some papers had already landed — and re-running the whole batch to
+            # find out would append a second log entry for each of those.
+            typer.echo(f"digest extract record failed for {citekey}: {exc}", err=True)
+            errors.append(
+                {"citekey": citekey, "artifact": str(artifact), "reason": str(exc)}
             )
-    except (extraction_mod.ExtractionError, OSError) as exc:
-        typer.echo(f"digest extract record failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+            continue
+        recorded.append(
+            {
+                "citekey": citekey,
+                "artifact": str(artifact),
+                "cells": len(paper_cells),
+                "not_addressed": sum(
+                    1 for c in paper_cells if c.value == extraction_mod.NOT_ADDRESSED
+                ),
+                "log_entry": str(log_entry),
+            }
+        )
 
     for rejection in rejections:
         typer.echo(extraction_mod.render_rejection(rejection), err=True)
     typer.echo(
         json.dumps(
             {
-                "ok": not rejections,
-                "positioning": str(path),
+                "ok": not (rejections or errors),
+                "positioning": str(path.resolve()),
                 "axes": axes,
                 "recorded": recorded,
                 "rejected": [dataclasses.asdict(r) for r in rejections],
+                "errors": errors,
                 "not_addressed": sum(r["not_addressed"] for r in recorded),
             },
             indent=2,
         )
     )
-    raise typer.Exit(code=1 if rejections else 0)
+    raise typer.Exit(code=1 if rejections or errors else 0)
 
 
 if __name__ == "__main__":  # pragma: no cover
