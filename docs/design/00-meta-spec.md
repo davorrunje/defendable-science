@@ -386,7 +386,7 @@ defendable-science/                                  # plugin repo root
 │   ├── dataset/SKILL.md                  # init/register/fetch/verify/mirror/audit
 │   ├── progress/SKILL.md                 # status | dashboard (cross-cutting, read-only)
 │   ├── defend/SKILL.md                  # claim|cited-work|methodology; self + guardrail (cross-cutting)
-│   └── digest/SKILL.md                  # inbound paper comprehension; self + defend escalation (cross-cutting)
+│   └── digest/SKILL.md                  # depth: inbound paper comprehension (self + defend escalation) | extract: breadth reading into located matrix cells (cross-cutting)
 ├── resources/                            # cross-skill shared material
 │   ├── contracts/
 │   │   ├── experiment-backend.md         # the 4-capability contract

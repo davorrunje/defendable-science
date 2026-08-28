@@ -37,7 +37,8 @@ render, or roll it up as anything stronger.
 
 The two modes write **different frontmatter keys** on the same artifact
 (`status.understanding` vs `status.extraction`) precisely so nothing downstream
-can read one as the other.
+can read one as the other. The reasoning, with the rejected alternatives, is
+ADR-0040 (`../../decisions/0040-digest-extraction-mode.md`).
 
 ### The tier ladder
 

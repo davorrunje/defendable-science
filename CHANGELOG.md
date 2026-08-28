@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`digest` gains an extraction mode — breadth reading for a survey**
-  (`digest extract axes | record | sample | render`). Depth mode costs an hour
+  (`digest extract axes | record | sample | render`;
+  [ADR-0040](decisions/0040-digest-extraction-mode.md)). Depth mode costs an hour
   or two per paper, which makes it unusable for the forty-paper set its sibling
   skill triages, so extraction reads each paper against exactly the axes
   `literature position --level paper` already put in the concept matrix, and
