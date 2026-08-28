@@ -723,6 +723,9 @@ def test_record_reports_a_refused_triage_and_leaves_it_byte_identical(
     ]
     assert wanted in payload["triage_not_updated"][0]["reason"]
     assert str(triage) in payload["triage_not_updated"][0]["reason"]
+    # A principled refusal, not a write that failed — a reader must be able to
+    # tell "edit this file by hand" from "the disk said no" without a regex.
+    assert payload["triage_not_updated"][0]["kind"] == "refused"
     # The extraction itself is intact: refusing the sidecar discards nothing.
     assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
     artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
@@ -743,6 +746,9 @@ def test_record_reports_an_unwritable_triage_without_a_traceback(
     assert [t["citekey"] for t in payload["triage_not_updated"]] == [
         "sill1997monotonic"
     ]
+    # `failed`, not `refused`: nothing here is a principled decision, and the
+    # remedy is not "edit the sidecar by hand".
+    assert payload["triage_not_updated"][0]["kind"] == "failed"
     assert payload["errors"] == []
     assert Layout.default(root.resolve()).digest("sill1997monotonic").is_file()
 

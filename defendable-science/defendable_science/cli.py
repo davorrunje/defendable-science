@@ -2319,7 +2319,8 @@ def extract_record(
     hand-annotated sidecar :func:`~.literature.registry.patch_triage` will not
     rewrite) cannot discard an extraction that already landed; the refusal is
     reported under ``triage_not_updated``, apart from ``errors``, and still
-    exits 1.
+    exits 1. Each such entry carries a ``kind``: ``refused`` (the human must
+    edit the sidecar by hand) or ``failed`` (the write itself did not happen).
 
     :param cells: The cells to record — a JSON-array file path, or ``-`` for
         stdin.
@@ -2406,12 +2407,21 @@ def extract_record(
                 {"extracted": date, "extraction-cells": len(paper_cells)},
             )
         except (registry_mod.RegistryError, OSError) as exc:
-            # Not a write *failure* — `patch_triage` refuses a hand-annotated
-            # sidecar rather than destroy its PRISMA rationales. So it is
-            # reported apart from `errors`, where it would read as a lost
-            # artifact, and the message names the fields to set by hand.
+            # Not a write *failure* of the artifact — the cells landed — so this
+            # is reported apart from `errors`, where it would read as a lost
+            # artifact. But the two ways it can happen call for different human
+            # action, and a reader must not have to regex an exception message
+            # to tell them apart: `refused` is `patch_triage` declining to
+            # destroy a hand-annotated sidecar's PRISMA rationales (its message
+            # names the fields to set by hand), `failed` is the OS refusing the
+            # write at all.
+            kind = (
+                "refused" if isinstance(exc, registry_mod.RegistryError) else "failed"
+            )
             typer.echo(f"triage not updated for {citekey}: {exc}", err=True)
-            triage_not_updated.append({"citekey": citekey, "reason": str(exc)})
+            triage_not_updated.append(
+                {"citekey": citekey, "kind": kind, "reason": str(exc)}
+            )
 
     for rejection in rejections:
         typer.echo(extraction_mod.render_rejection(rejection), err=True)
