@@ -406,6 +406,25 @@ def test_layout_check_finds_no_orphan_once_the_stale_file_is_gone() -> None:
     assert c.check_layout(moved, FakeProbe(files)) == []
 
 
+def test_layout_check_does_not_flag_another_keys_live_target_as_an_orphan() -> None:
+    """A customised layout can point one key's live path at another key's default.
+
+    ``research_root`` moves to ``writing``, and ``datasets_manifest`` is
+    separately pointed at ``docs/research/papers.md`` — exactly the default
+    ``papers_registry`` path. That file is genuinely live content
+    (``datasets_manifest`` resolves there), not an orphan left behind by the
+    ``research_root`` move, even though it sits at ``papers_registry``'s
+    stale default location.
+    """
+    moved = _moved(research_root="writing", datasets_manifest="docs/research/papers.md")
+    files = _scaffolded_at(moved)
+    files[moved.datasets_manifest] = "datasets:\n  - id: foo\n"
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert not any(f.file == "docs/research/papers.md" for f in findings)
+
+
 def test_layout_check_reports_an_unreadable_orphan_as_unreadable() -> None:
     """A read failure is never conflated with "empty" — the fact is unknown."""
     moved = _moved(research_root="writing")

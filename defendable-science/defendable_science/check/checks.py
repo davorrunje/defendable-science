@@ -272,8 +272,14 @@ def _stale_registry_pairs(layout: Layout, probe: Probe) -> list[tuple[Path, Path
     Each of :data:`~defendable_science.scaffold.layout.LAYOUT_KEYS` owns a
     disjoint set of registries (``research_root`` → the three under it,
     ``literature_dir`` → references/triage, ``datasets_manifest`` → itself,
-    ``thesis_dir`` → aims/milestones), so the pairs this returns can never
-    collide across keys — there is no dedup to do downstream.
+    ``thesis_dir`` → aims/milestones) *among their own default locations* —
+    but a customised layout can still point one key's *live* path at another
+    key's *default* one (e.g. ``datasets_manifest: docs/research/papers.md``
+    while ``research_root`` moves away from ``docs/research``). A candidate
+    "stale" path that is actually some key's live target is not an orphan —
+    it is exactly the content that key resolves to — so any such candidate is
+    excluded below rather than trusted on the strength of one key having
+    moved.
 
     ``thesis_dir`` is additionally gated on the *default* thesis directory
     existing at all: a repo that never had a thesis tree has no orphan to
@@ -286,7 +292,8 @@ def _stale_registry_pairs(layout: Layout, probe: Probe) -> list[tuple[Path, Path
     :param probe: The filesystem seam, asked whether a default thesis tree
         exists.
     :returns: ``(stale_default_path, live_resolved_path)`` pairs, one per
-        registry whose owning key has moved away from the default.
+        registry whose owning key has moved away from the default and whose
+        stale candidate path is not itself some key's live target.
     """
     default = Layout.default(layout.repo_root)
     pairs: list[tuple[Path, Path]] = []
@@ -308,7 +315,17 @@ def _stale_registry_pairs(layout: Layout, probe: Probe) -> list[tuple[Path, Path
             (default.aims, layout.aims),
             (default.milestones, layout.milestones),
         ]
-    return pairs
+    live_paths = {
+        layout.papers_registry,
+        layout.portfolio_backlog,
+        layout.dashboard,
+        layout.references,
+        layout.triage,
+        layout.datasets_manifest,
+        layout.aims,
+        layout.milestones,
+    }
+    return [(stale, live) for stale, live in pairs if stale not in live_paths]
 
 
 def _orphan_finding(
