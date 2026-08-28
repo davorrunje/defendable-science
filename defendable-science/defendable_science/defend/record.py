@@ -232,8 +232,27 @@ def record(
     transcript: str | None = None,
     log_dir: str | Path = DEFAULT_LOG_DIR,
     today: str | None = None,
+    record_understanding: bool = True,
 ) -> RecordResult:
     """Record an examination outcome: patch the artifact and append the log.
+
+    `target` alone does not say what `artifact` owns: for `claim`/
+    `methodology`/`paper-comprehension`, and for a `cited-work` examination of
+    the *author's own* artifact, `artifact` is a reading/writing record that
+    owns ``status.understanding``, and patching it is exactly right. But a
+    `cited-work` examination can also be driven from `digest` extraction
+    (`../digest/artifact.py`) — probing an extracted cell's value against its
+    locator in the *cited* paper's own source — and there `artifact` is that
+    paper's **digest artifact**, which owns ``status.extraction``, never
+    ``status.understanding`` (`~.digest.artifact`'s own guarantee: a digest
+    carrying an ``understanding`` block reads as "digested & understood" to
+    `progress`, so writing one from an extraction-sourced check would forge
+    exactly that signal for a paper nobody has read). `record` cannot infer
+    which case it is from `target` alone, so the caller states it: pass
+    `record_understanding=False` (CLI: ``--no-understanding``) whenever
+    `artifact` is a digest artifact being checked from its extracted cells.
+    Every other write — the log entry, its `status`/`outcome`, per-point
+    evidence — is identical either way; only the frontmatter patch is skipped.
 
     :param artifact: The examined markdown artifact.
     :param target: ``claim`` / ``cited-work`` / ``methodology`` /
@@ -246,6 +265,11 @@ def record(
     :param transcript: Optional transcript content to persist beside the artifact.
     :param log_dir: Directory for the append-only accountability log.
     :param today: ISO date (defaults to today).
+    :param record_understanding: Whether to patch ``status.understanding``
+        into `artifact`. ``True`` for every existing caller; pass ``False``
+        for a `cited-work` examination whose `artifact` is a `digest`
+        extraction artifact, which must never gain an ``understanding``
+        block from this path (defendable-science#141).
     :returns: What was written.
     :raises RecordError: On an invalid target, or if gaps are passed without a
         named sign-off.
@@ -262,10 +286,11 @@ def record(
         raise RecordError("passing surfaced gaps requires a named --signed-off-by")
 
     artifact_path = Path(artifact)
-    patched = patch_understanding(
-        artifact_path.read_text(encoding="utf-8"), status, gaps, last_updated=date
-    )
-    artifact_path.write_text(patched, encoding="utf-8")
+    if record_understanding:
+        patched = patch_understanding(
+            artifact_path.read_text(encoding="utf-8"), status, gaps, last_updated=date
+        )
+        artifact_path.write_text(patched, encoding="utf-8")
 
     transcript_path: Path | None = None
     if transcript is not None:

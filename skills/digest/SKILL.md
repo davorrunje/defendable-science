@@ -508,7 +508,12 @@ destroyed.
 The body carries the cells themselves in a delimited, generated block — that is
 the durable record. **The matrix row is a projection of it**, never authored
 independently, which is what lets `defend --target cited-work` check a cell
-later without parsing a table out of the author's prose.
+later without parsing a table out of the author's prose: it reads the block
+back with `defendable-science digest extract cells --citekey <citekey>` (a
+pure read, no write) and probes each cell's `value` against its `locator` in
+the source — see `../defend/SKILL.md` § "Extracted cells as a `cited-work`
+source" for the full loop and why the outcome is recorded through `defend
+record`, not through `extract sample --verdict`.
 
 The file is the paper's reading record *at whatever depth it has been read*. A
 survey extracts forty papers; three later get digested properly and grow an

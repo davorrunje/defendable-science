@@ -1741,12 +1741,35 @@ def record(
             "--log-dir", help="Accountability log; from the layout if omitted."
         ),
     ] = None,
+    no_understanding: Annotated[
+        bool,
+        typer.Option(
+            "--no-understanding",
+            help=(
+                "Skip patching status.understanding into --artifact; use for a "
+                "cited-work examination whose artifact is a digest extraction "
+                "artifact (owns status.extraction, never status.understanding)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Record a ``defend``/``digest`` examination: patch understanding + log.
 
     Writes ``status.understanding`` into the artifact frontmatter and appends the
     full evidentiary point record (ADR-0033) to the accountability log. Records
     observed facts only — never a verdict, score, or answer key.
+
+    Pass ``--no-understanding`` when ``--artifact`` is a `digest` extraction
+    artifact rather than a reading/writing record of the author's own — for
+    instance a `cited-work` examination that probes an extracted cell (`digest
+    extract cells`) against its locator in the cited paper's own source. That
+    artifact owns ``status.extraction``; a digest carrying an ``understanding``
+    block reads to `progress` as "digested & understood", which would be false
+    for a paper nobody has read. With the flag, the artifact's frontmatter is
+    left untouched and only the accountability-log entry is written — a
+    checked cell is durable and reviewable there, distinguishable from an
+    unchecked one, without forging comprehension of the paper
+    (defendable-science#141).
 
     :param artifact: The examined markdown artifact.
     :param target: ``claim`` / ``cited-work`` / ``methodology`` /
@@ -1762,6 +1785,8 @@ def record(
         than the cwd because this command is meant to be run from inside a
         paper directory, and a cwd-relative default would bury the run's
         evidence there, where no reviewer would look for it.
+    :param no_understanding: Skip the ``status.understanding`` frontmatter
+        patch; only the accountability log is written.
     :raises typer.Exit: Code 1 on a guard violation or malformed artifact/input.
     """
     _config, layout = _layout_or_exit()
@@ -1793,6 +1818,7 @@ def record(
             acknowledgements=_parse_acks(acks),
             transcript=transcript_text,
             log_dir=log_root,
+            record_understanding=not no_understanding,
         )
     except (record_mod.RecordError, OSError) as exc:
         typer.echo(f"defend record failed: {exc}", err=True)
@@ -2536,6 +2562,74 @@ def extract_axes(paper: _PaperOpt = None, positioning: _PositioningOpt = None) -
                 "ok": error is None,
                 "positioning": str(path.resolve()),
                 "axes": axes,
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if error is None else 1)
+
+
+@extract.command(name="cells")
+def extract_cells(
+    citekey: Annotated[
+        str,
+        typer.Option("--citekey", help="The extracted paper's citekey."),
+    ],
+) -> None:
+    """Print one paper's recorded extraction cells as JSON — a pure read (#141).
+
+    The machine-readable counterpart to reading the digest artifact's
+    generated cells block by eye: it reads back exactly what `extract record`
+    wrote, via `~.digest.artifact.read_cells` (the one parser for that block —
+    this command adds no second one), and prints each cell's `axis`, `value`,
+    `locator` (or, for a `not-addressed` cell, `justification`). No write, no
+    log entry, no status mutation — extraction's own claim is unchanged by
+    reading it back.
+
+    This is the input `defend --target cited-work` reads when probing an
+    extracted cell against its source (`../../skills/defend/SKILL.md`): the
+    examiner opens the source at each cell's `locator` and asks whether it
+    actually supports `value`. That examination is *not* recorded through
+    this command, and not through `digest extract sample --verdict` either —
+    ``extract sample`` records that *a human spot-checked a sample of the
+    batch* (spec §8), a claim about the run's population; a `defend`
+    examination records that *this one cell was checked against its source*
+    (ADR-0033's per-point evidentiary model), a claim about that cell. The two
+    answer different questions and must not share a recording path, so the
+    outcome goes through the existing, unmodified ``defend record --target
+    cited-work`` command instead (with ``--no-understanding``, since the
+    artifact checked here owns ``status.extraction``, never
+    ``status.understanding``).
+
+    Unlike `extract_axes`/`extract_record`/`extract_sample`/`extract_render`,
+    this command takes ``--citekey`` rather than ``--paper``: those resolve
+    *the author's own paper* (whose ``positioning.md`` holds the concept
+    matrix), inferred from the cwd when omitted, but the cells read here
+    belong to the *cited* paper's digest artifact (`Layout.digest`), which has
+    no cwd-inferable identity — so the citekey is always named explicitly,
+    the same convention `extract sample --citekey` already uses.
+
+    :param citekey: The digested paper's citekey (`Layout.digest`'s key).
+    :raises typer.Exit: Code 0 with the cells as JSON; code 1 if the paper has
+        not been extracted, or its cells block is absent or malformed.
+    """
+    _config, layout = _layout_or_exit()
+    artifact = layout.digest(citekey)
+    cells: list[dict[str, Any]] | None = None
+    error: str | None = None
+    try:
+        cells = [dataclasses.asdict(c) for c in artifact_mod.read_cells(artifact)]
+    except extraction_mod.ExtractionError as exc:
+        typer.echo(f"digest extract cells failed: {exc}", err=True)
+        error = str(exc)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": error is None,
+                "citekey": citekey,
+                "artifact": str(artifact),
+                "cells": cells,
                 "error": error,
             },
             indent=2,

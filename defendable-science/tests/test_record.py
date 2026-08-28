@@ -200,6 +200,75 @@ def test_record_never_writes_a_verdict_field(tmp_path: Path) -> None:
     assert parsed["status"]["verdict"] == "pending"
 
 
+def test_record_understanding_false_leaves_the_artifact_untouched(
+    tmp_path: Path,
+) -> None:
+    """A cited-work check sourced from digest extraction must not patch understanding.
+
+    Reproduces the extraction-artifact scenario directly (defendable-science#141):
+    the artifact owns ``status.extraction``, so ``record`` must not add — or
+    even touch — an ``understanding`` key when the caller says so.
+    """
+    artifact = _artifact(tmp_path)
+    before = artifact.read_text(encoding="utf-8")
+    result = r.record(
+        artifact,
+        "cited-work",
+        [_resolved()],
+        log_dir=tmp_path / "log",
+        today="2026-07-18",
+        record_understanding=False,
+    )
+    assert artifact.read_text(encoding="utf-8") == before
+    assert result.outcome == "resolved"
+
+
+def test_record_understanding_false_still_logs_a_gap(tmp_path: Path) -> None:
+    """The accountability log is unaffected — only the frontmatter patch is skipped."""
+    artifact = _artifact(tmp_path)
+    before = artifact.read_text(encoding="utf-8")
+    result = r.record(
+        artifact,
+        "cited-work",
+        [_gap("locator points at §3 but the claim is in §5")],
+        log_dir=tmp_path / "log",
+        today="2026-07-18",
+        record_understanding=False,
+    )
+    assert artifact.read_text(encoding="utf-8") == before
+    assert result.outcome == "unresolved"
+    entry = yaml.safe_load(result.log_entry.read_text(encoding="utf-8"))[0]
+    assert entry["target"] == "cited-work"
+    assert entry["status"] == "gaps"
+    assert (
+        entry["points"][0]["gap_note"] == "locator points at §3 but the claim is in §5"
+    )
+
+
+def test_cli_record_no_understanding_leaves_the_artifact_untouched(
+    tmp_path: Path,
+) -> None:
+    artifact = _artifact(tmp_path)
+    before = artifact.read_text(encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "defend",
+            "record",
+            "--artifact",
+            str(artifact),
+            "--target",
+            "cited-work",
+            "--no-understanding",
+            "--log-dir",
+            str(tmp_path / "log"),
+        ],
+    )
+    assert result.exit_code == 0, result.stderr
+    assert artifact.read_text(encoding="utf-8") == before
+    assert json.loads(result.stdout)["outcome"] == "resolved"
+
+
 def test_record_unresolved_outcome(tmp_path: Path) -> None:
     result = r.record(
         _artifact(tmp_path),
