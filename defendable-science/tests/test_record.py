@@ -352,6 +352,36 @@ def test_cli_record(tmp_path: Path) -> None:
     assert json.loads(result.stdout)["outcome"] == "resolved"
 
 
+def test_cli_record_logs_under_the_layout_not_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run from inside a paper, the log must not land in that paper's tree.
+
+    Reproduces defendable-science#140: a relative ``DEFAULT_LOG_DIR`` resolves
+    against the cwd, and ``defend``/``digest`` are meant to be run from inside
+    a paper directory, so the un-anchored default silently buries the log in
+    a second, nested ``docs/research/defend-log`` under the paper it examined.
+    """
+    (tmp_path / ".defendable-science").mkdir()
+    (tmp_path / ".defendable-science" / "config.yml").write_text("", encoding="utf-8")
+    paper_dir = tmp_path / "docs" / "research" / "p1" / "paper"
+    paper_dir.mkdir(parents=True)
+    artifact = paper_dir / "findings.md"
+    artifact.write_text(_ARTIFACT, encoding="utf-8")
+
+    monkeypatch.chdir(paper_dir)
+    result = runner.invoke(
+        app,
+        ["defend", "record", "--artifact", "findings.md", "--target", "methodology"],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert not (paper_dir / "docs").exists()
+    entries = sorted((tmp_path / "docs" / "research" / "defend-log").iterdir())
+    assert len(entries) == 1
+    assert json.loads(result.stdout)["log_entry"] == str(entries[0])
+
+
 def test_cli_record_transcript_from_stdin(tmp_path: Path) -> None:
     artifact = _artifact(tmp_path)
     result = runner.invoke(
