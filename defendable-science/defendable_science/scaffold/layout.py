@@ -45,6 +45,29 @@ STAGED_DOCUMENTS: dict[str, str] = {
     "kappa.md": "thesis",
 }
 
+#: The one staged document per level that carries the *authoritative* verdict /
+#: readiness / sign-off block. The others may carry their own lighter
+#: ``understanding`` and ``last-updated`` (written by ``defend``), which
+#: ``progress`` surfaces but never treats as the adjudication source.
+#:
+#: A thesis is adjudicated by ``kappa.md``: that is where the shipped template
+#: marks ``signed-off-by`` *REQUIRED for defensibility*, and ``aims.md``'s own
+#: template says the sign-off is not there. ``aims.md`` keeps a different job —
+#: it owns the aim list each paper's ``covers:`` is matched against — so both
+#: are read, for different reasons. Before a kappa exists the thesis is
+#: legitimately framing-only and is projected from ``aims.md``
+#: (``progress.collect``'s furthest-stage rule).
+#:
+#: Written out rather than derived from :data:`STAGED_DOCUMENTS`' order, which
+#: it currently coincides with: which document adjudicates is a fact about the
+#: methodology, not about a position in a list, and a new staged document
+#: appended to a level must not silently become its verdict source.
+AUTHORITATIVE_DOCUMENTS: dict[str, str] = {
+    "hypothesis": "findings.md",
+    "paper": "decision.md",
+    "thesis": "kappa.md",
+}
+
 
 class LayoutError(ValueError):
     """Raised on an invalid ``layout:`` block."""

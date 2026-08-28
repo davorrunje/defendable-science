@@ -43,7 +43,7 @@ same files at the paths it recorded.
 |---|---|---|
 | `papers.md` | `defendable-science init` | `docs/research/papers.md` |
 | `portfolio-backlog.md` | `defendable-science init` | `docs/research/portfolio-backlog.md` |
-| `dashboard.md` | `defendable-science init` (a stub saying it has not been generated); `progress` regenerates it | `docs/research/dashboard.md` |
+| `dashboard.md` | `defendable-science init` (a stub saying it has not been generated); `defendable-science progress dashboard` generates it, and is its only writer | `docs/research/dashboard.md` |
 | `references.json` | `defendable-science init` (empty CSL-JSON) | `docs/research/literature/references.json` |
 | `triage.yml` | `defendable-science init` | `docs/research/literature/triage.yml` |
 | `datasets.yml` | `defendable-science init`; the `dataset` skill's `register` verb appends entries | `datasets.yml` |

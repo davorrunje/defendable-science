@@ -1452,12 +1452,30 @@ def test_a_dashboard_missing_a_live_artifact_is_a_gap() -> None:
 
 
 def test_a_dashboard_naming_an_artifact_that_is_gone_is_a_gap() -> None:
+    # Built by the renderer that writes the real file, so this can never drift
+    # into asserting on a dashboard format nothing produces (#130).
+    from defendable_science.progress.model import Artifact, Projection
+    from defendable_science.progress.render import render_dashboard
+
     files = _scaffolded()
-    files[LAYOUT.dashboard] = "# Research dashboard\n\n- paper `ghost` — drafting\n"
+    files[LAYOUT.dashboard] = render_dashboard(
+        Projection(
+            artifacts=(
+                Artifact(
+                    level="paper",
+                    label="ghost",
+                    link="ghost/paper/pitch.md",
+                    artifact_id="ghost",
+                ),
+            )
+        )
+    )
 
     findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
 
-    assert any("ghost" in f.message for f in findings)
+    assert [f.message for f in findings] == [
+        "dashboard mentions artifact 'ghost', which does not exist"
+    ]
 
 
 def test_the_ungenerated_dashboard_stub_is_not_stale_on_an_empty_repo() -> None:
@@ -1651,3 +1669,30 @@ def test_run_checks_no_finding_appears_twice_with_same_severity_file_message() -
         # This assertion proves no duplicate was preserved
         assert key not in seen, f"Duplicate finding: {key}"
         seen.add(key)
+
+
+def test_an_unsigned_defensible_thesis_is_a_gap() -> None:
+    """A thesis carries `verdict: n/a`, so rule 1's verdict arm cannot see it."""
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="defensible")
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    unsigned = [f for f in findings if "defensible" in f.message]
+    assert [f.severity for f in unsigned] == ["gap"]
+    assert "`signed-off-by` is null" in unsigned[0].message
+    assert unsigned[0].file == "docs/research/thesis/aims.md"
+
+
+def test_a_signed_defensible_thesis_is_not_a_gap() -> None:
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc(
+        "thesis",
+        id="t",
+        readiness="defensible",
+        **{"signed-off-by": "D. Runje", "signed-off-date": "2026-08-20"},
+    )
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    assert [f for f in findings if "defensible" in f.message] == []

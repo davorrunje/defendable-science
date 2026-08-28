@@ -13,6 +13,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`progress dashboard` — the dashboard finally has a generator** (#130).
+  `dashboard.md` has always carried a GENERATED, never-hand-edited banner, but
+  nothing generated it: an agent retyped the file on every `progress`
+  invocation, so the rule had no mechanism behind it and model-authored prose
+  landed in the research record. `defendable-science progress dashboard
+  [--root PATH] [--dry-run]` now projects it from the `status:` frontmatter of
+  every hypothesis, paper and thesis artifact, and the `progress` skill calls
+  the command *instead of* projecting — one writer, so two projections can no
+  longer disagree. A table per level plus an indented detail line only where
+  there is something to say: coverage, named blockers, uncovered aims,
+  unresolved understanding. **No totals, no scores, no percentages**, `refuted`
+  and `no-go` render exactly as `confirmed` and `publish` do, and an unset field
+  reads `—` rather than zero. A material decision no named human has signed
+  reads `(unsigned)` — and that follows the *decision axis*, not the `verdict`
+  field: a thesis carries `verdict: n/a` and is adjudicated by
+  `readiness: defensible`, so `scaffold.status.SIGNED_READINESS` names the
+  readiness values that carry the sign-off requirement and `check` grew the
+  matching rule, which its `verdict: n/a` exemption had been hiding.
+  There is deliberately **no timestamp in the file**: two runs
+  over an unchanged repo are byte-identical, which is what makes `check`'s
+  stale-dashboard comparison enforceable — `check` now takes **both** sides of
+  that comparison from `progress` (the ids a dashboard claims, and the ids a
+  fresh regeneration would claim), and its remedy names the command. The unit on
+  both sides is the **artifact**, not the staged document: an artifact's id
+  falls back to whichever of its documents names one, `last-updated` is the
+  newest anywhere in it, and `covers`/`blockers` are unioned across it, so a
+  paper whose id and aims live in `pitch.md` while `decision.md` is still a stub
+  is neither reported stale nor reported as leaving its aim uncovered. A thesis
+  is adjudicated by its `kappa.md` — where the shipped template marks the
+  defensibility sign-off REQUIRED — falling back to `aims.md` before a kappa
+  exists; `aims.md` keeps owning the aim list that `covers:` is matched against.
+  The thesis gate list is read from `thesis/milestones.yml` verbatim, never
+  assumed from the packaged starting list. A document that cannot be read keeps
+  its row, visibly `unknown`, and exits `1`: a projection that silently dropped
+  an artifact would be a projection that lies.
 - **`digest` gains an extraction mode — breadth reading for a survey**
   (`digest extract axes | record | sample | render`;
   [ADR-0040](decisions/0040-digest-extraction-mode.md)). Depth mode costs an hour

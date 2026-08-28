@@ -51,6 +51,18 @@ READINESS: dict[str, frozenset[str]] = {
     "thesis": frozenset({"framing", "synthesis", "defensible"}),
 }
 
+#: Readiness values that are themselves a **material decision**, and so carry
+#: the named-human sign-off requirement of meta-spec §2.1 exactly as a verdict
+#: does. A thesis has no verdict axis (``verdict: n/a``), so ``defensible`` *is*
+#: its decision — the highest-stakes claim in the methodology, and the one that
+#: read as complete with nobody having signed anything until this existed.
+#:
+#: ``published`` is deliberately absent: ``drafting → under-review → published``
+#: are sub-states of a paper's *done*, not extra gates, and the paper's decision
+#: is its ``verdict: publish|no-go``. Written here, beside the enums, because
+#: both ``check`` and ``progress`` must apply one rule.
+SIGNED_READINESS: frozenset[str] = frozenset({"defensible"})
+
 #: The base block per level. Anything absent renders ``null`` — absence means
 #: "not yet set," never zero, and never a ``<placeholder>`` string.
 LEVEL_DEFAULTS: dict[str, dict[str, str]] = {
