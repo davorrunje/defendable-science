@@ -1659,48 +1659,6 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
 CONFIG_CHECK = "config"
 
 
-def _cache_dir_in_gitignore(cache_dir: str, gitignore_text: str) -> bool:
-    """Check if a cache_dir entry is covered by .gitignore rules.
-
-    Handles three covering cases:
-    1. Exact match after normalizing trailing slashes.
-    2. A parent directory (e.g., ``.defendable-science/`` covers
-       ``.defendable-science/cache/``).
-
-    Skips blank lines and comment lines (first non-space character is ``#``).
-    Does NOT evaluate gitignore glob or wildcard patterns — only literal
-    matches and parent-directory containment.
-
-    :param cache_dir: The configured cache directory (e.g.,
-        ``.defendable-science/cache/``).
-    :param gitignore_text: The ``.gitignore`` file contents.
-    :returns: ``True`` if the cache_dir is covered by an active rule, else
-        ``False``.
-    """
-    # Normalize cache_dir by removing trailing slash for comparison
-    normalized_cache = cache_dir.rstrip("/")
-
-    for line in gitignore_text.splitlines():
-        stripped = line.strip()
-        # Skip blank lines and comments
-        if not stripped or stripped[0] == "#":
-            continue
-
-        # Normalize the gitignore line by removing trailing slash
-        normalized_line = stripped.rstrip("/")
-
-        # Check exact match
-        if normalized_cache == normalized_line:
-            return True
-
-        # Check parent directory covering
-        # e.g., ".defendable-science/" covers ".defendable-science/cache/"
-        if normalized_cache.startswith(normalized_line + "/"):
-            return True
-
-    return False
-
-
 def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     """Report problems with the project configuration.
 
@@ -1708,16 +1666,22 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     1. The config file is readable.
     2. The file is valid YAML and contains a mapping.
     3. The ``layout:`` block (if present) contains only valid keys.
-    4. The ``cache_dir`` is gitignored.
+    4. The ``cache_dir`` is gitignored — evaluated with real gitignore
+       semantics via ``git check-ignore`` (:meth:`Probe.is_gitignored`,
+       #138), not a literal-line matcher. When that question cannot be
+       answered (git absent, or the repo is not a git work tree), coverage is
+       reported as ``unreadable`` rather than silently passing or being told
+       apart as ``invalid`` — an uncertain condition is not a confirmed one.
     5. The ``.gitignore`` file exists.
     6. The ``experiment_backend`` is bound (a null backend is a gap).
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
     :returns: Findings for each issue: ``invalid`` for structural errors,
-        ``unreadable`` for read failures, and ``gap`` for an unbound backend.
-        None at all if the config file is absent or is a directory: there is
-        nothing to read, and :func:`check_layout` already reports it.
+        ``unreadable`` for read failures (including an undeterminable
+        cache_dir coverage), and ``gap`` for an unbound backend. None at all
+        if the config file is absent or is a directory: there is nothing to
+        read, and :func:`check_layout` already reports it.
     """
     findings: list[Finding] = []
 
@@ -1763,14 +1727,15 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     gitignore_path = layout.repo_root / ".gitignore"
     rel_gitignore = str(layout.rel(gitignore_path))
 
-    # Read .gitignore
+    # Read .gitignore — just to confirm it is readable; coverage itself is
+    # answered by git, not by parsing this text (see `probe.is_gitignored`).
     if probe.exists(gitignore_path):
         gitignore_text = read_or_finding(gitignore_path, layout, probe, CONFIG_CHECK)
         if isinstance(gitignore_text, Finding):
             findings.append(gitignore_text)
         else:
-            # Check if cache_dir is covered by .gitignore
-            if not _cache_dir_in_gitignore(cache_dir_config, gitignore_text):
+            covered = probe.is_gitignored(layout.repo_root, cache_dir_config)
+            if covered is False:
                 findings.append(
                     Finding(
                         severity="invalid",
@@ -1781,6 +1746,24 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
                             f"but it is not in .gitignore"
                         ),
                         remedy=(f"add this line to .gitignore:\n{cache_dir_config}"),
+                    )
+                )
+            elif covered is None:
+                findings.append(
+                    Finding(
+                        severity="unreadable",
+                        check=CONFIG_CHECK,
+                        file=rel_gitignore,
+                        message=(
+                            "could not determine whether cache_dir "
+                            f"{cache_dir_config!r} is covered by .gitignore "
+                            "(git is unavailable, or the repository root is "
+                            "not a git work tree)"
+                        ),
+                        remedy=(
+                            "ensure git is installed and the repository root is a "
+                            "git work tree, then re-run `defendable-science check`"
+                        ),
                     )
                 )
     else:

@@ -98,6 +98,19 @@ def test_fs_probe_read_text_raises_oserror_for_a_missing_file(tmp_path: Path) ->
         FsProbe().read_text(tmp_path / "absent.md")
 
 
+def test_fs_probe_is_gitignored_delegates_to_git_check_ignore(tmp_path: Path) -> None:
+    """`FsProbe.is_gitignored` is a thin call to the real `git check-ignore` (#138)."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # nosec B603 B607
+    probe = FsProbe()
+
+    assert probe.is_gitignored(tmp_path, "cache/") is False
+
+    (tmp_path / ".gitignore").write_text("**/cache/\n", encoding="utf-8")
+    assert probe.is_gitignored(tmp_path, "cache/") is True
+
+
 def test_fs_probe_read_text_raises_oserror_for_a_binary_file(tmp_path: Path) -> None:
     # `UnicodeDecodeError` subclasses `ValueError`, not `OSError`, so it would
     # sail past every `except OSError:` in the checks and surface as a raw
@@ -149,10 +162,19 @@ class FakeProbe:
         files: dict[Path, str],
         unreadable: set[Path] | None = None,
         dirs: set[Path] | None = None,
+        gitignore: dict[str, bool | None] | None = None,
     ):
         self.files = files
         self.unreadable = unreadable or set()
         self.dirs = set(dirs or ())
+        #: Canned `is_gitignored` answers, keyed by the queried path. A path
+        #: not in here falls back to literal-line matching against whatever
+        #: ``.gitignore`` text lives in `files` — a best-effort stand-in for
+        #: real gitignore semantics, good enough for every test that does not
+        #: itself exercise glob/wildcard/anchoring patterns (#138). Real
+        #: coverage of those lives in `core/gitignore.py`'s own tests, which
+        #: exercise `git check-ignore` for real.
+        self.gitignore = gitignore or {}
 
     def _directories(self) -> set[Path]:
         """Every path that is a directory: the explicit ones and all ancestors."""
@@ -190,6 +212,38 @@ class FakeProbe:
             for p in {*self.files, *self._directories()}
             if root in p.parents and _matches(p.relative_to(root).parts, pat)
         )
+
+    def is_gitignored(self, root: Path, path: str) -> bool | None:
+        """Return the canned answer for `path`, or a literal-line fallback.
+
+        The fallback mirrors the pre-#138 production matcher exactly, so
+        every test that seeds a plain ``.gitignore`` and never configures
+        `gitignore` keeps its original outcome unmodified.
+        """
+        if path in self.gitignore:
+            return self.gitignore[path]
+        return _literal_gitignore_covers(path, self.files.get(root / ".gitignore", ""))
+
+
+def _literal_gitignore_covers(entry: str, gitignore_text: str) -> bool:
+    """Literal-line + parent-directory match — the matcher #138 removed.
+
+    Kept here, test-only, as `FakeProbe`'s default `is_gitignored` fallback:
+    good enough for tests that do not themselves exercise real gitignore
+    glob/wildcard/anchoring semantics, without duplicating a second
+    git-semantics evaluator in production code.
+    """
+    normalized_entry = entry.rstrip("/")
+    for line in gitignore_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] == "#":
+            continue
+        normalized_line = stripped.rstrip("/")
+        if normalized_entry == normalized_line:
+            return True
+        if normalized_entry.startswith(normalized_line + "/"):
+            return True
+    return False
 
 
 ROOT = Path("/repo")
@@ -1821,6 +1875,75 @@ def test_config_check_ignores_commented_out_gitignore_entries() -> None:
         f for f in findings if "cache" in f.message and f.severity == "invalid"
     ]
     assert len(cache_missing) == 1
+
+
+# --- real gitignore semantics via `Probe.is_gitignored` (#138) ---------------
+#
+# These pin the acceptance criteria directly: a `.gitignore` that covers
+# cache_dir through a pattern a literal-line matcher cannot read (`**/`, a
+# leading `/`, a wildcard) must never produce the `invalid` finding. The fake
+# is configured with the canned answer a real `git check-ignore` would give;
+# `core/gitignore.py`'s own tests pin that git really does answer this way.
+
+
+@pytest.mark.parametrize(
+    "gitignore_line",
+    [
+        "**/.defendable-science/cache/",
+        "/.defendable-science/cache/",
+    ],
+)
+def test_config_check_accepts_a_pattern_a_literal_matcher_cannot_read(
+    gitignore_line: str,
+) -> None:
+    files = _scaffolded()
+    files[ROOT / ".gitignore"] = gitignore_line + "\n"
+    probe = FakeProbe(files, gitignore={r.DEFAULT_CACHE_DIR: True})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    assert not any("cache" in f.message for f in findings)
+
+
+def test_config_check_accepts_a_wildcard_gitignore_pattern() -> None:
+    files = _scaffolded()
+    files[LAYOUT.config_file] = "cache_dir: .cache/\nexperiment_backend: bench\n"
+    files[ROOT / ".gitignore"] = "*.cache/\n"
+    probe = FakeProbe(files, gitignore={".cache/": True})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    assert not any("cache" in f.message for f in findings)
+
+
+def test_config_check_still_flags_a_genuine_gitignore_miss_via_the_probe() -> None:
+    """The true-negative regression guard, now driven through `is_gitignored`."""
+    files = _scaffolded()
+    files[ROOT / ".gitignore"] = "__pycache__/\n"
+    probe = FakeProbe(files, gitignore={r.DEFAULT_CACHE_DIR: False})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    cache_not_ignored = [
+        f
+        for f in findings
+        if ".defendable-science/cache" in f.message and f.severity == "invalid"
+    ]
+    assert len(cache_not_ignored) == 1
+    assert ".gitignore" in cache_not_ignored[0].remedy
+
+
+def test_config_check_reports_undeterminable_coverage_as_its_own_outcome() -> None:
+    """Git absent / not a work tree must never collapse into `invalid` (#138)."""
+    files = _scaffolded()
+    probe = FakeProbe(files, gitignore={r.DEFAULT_CACHE_DIR: None})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    coverage_findings = [f for f in findings if "cache_dir" in f.message]
+    assert [f.severity for f in coverage_findings] == ["unreadable"]
+    assert "could not determine" in coverage_findings[0].message
+    assert "not in .gitignore" not in coverage_findings[0].message
 
 
 # --- cross-artifact checks -------------------------------------------------------

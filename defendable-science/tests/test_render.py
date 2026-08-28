@@ -223,6 +223,31 @@ def test_merge_gitignore_from_empty() -> None:
     assert merged == "# defendable-science\n.defendable-science/keys.json\n"
 
 
+def test_merge_gitignore_skips_entries_already_covered_by_git() -> None:
+    """`already_covered` (#139) — an entry not literally present is still skipped."""
+    existing = "**/.defendable-science/cache/\n"
+
+    merged = r.merge_gitignore(
+        existing,
+        r.gitignore_entries(".defendable-science/cache/"),
+        already_covered=[".defendable-science/cache/"],
+    )
+
+    # Only the two entries git-check-ignore did NOT already cover are appended.
+    assert merged.count(".defendable-science/cache/") == 1  # the original line only
+    assert ".defendable-science/rclone.conf" in merged
+    assert ".defendable-science/keys.json" in merged
+
+
+def test_merge_gitignore_is_a_noop_when_everything_is_already_covered() -> None:
+    existing = ".defendable-science/\n"
+    entries = r.gitignore_entries(".defendable-science/cache/")
+
+    merged = r.merge_gitignore(existing, entries, already_covered=entries)
+
+    assert merged == existing
+
+
 def test_rendered_config_records_a_divergent_layout(tmp_path: Path) -> None:
     """The block it writes must be the block `resolve_layout` reads back (#133)."""
     path = tmp_path / "config.yml"

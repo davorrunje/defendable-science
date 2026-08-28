@@ -277,18 +277,37 @@ def gitignore_entries(cache_dir: str) -> list[str]:
     ]
 
 
-def merge_gitignore(existing: str, entries: Sequence[str]) -> str:
+def merge_gitignore(
+    existing: str, entries: Sequence[str], *, already_covered: Sequence[str] = ()
+) -> str:
     """Append missing `entries` to an existing ``.gitignore``, verbatim otherwise.
 
     Append-only on purpose: a consumer's ``.gitignore`` is their file, and
     rewriting it to a template would discard rules the repo depends on.
 
+    This function stays pure (text in, text out, no filesystem or subprocess
+    access) so it is directly unit-testable. The literal stripped-line
+    membership test below is a fast, good-enough-on-its-own pure-text layer —
+    it is `already_covered` that carries the real gitignore-semantics answer
+    (``**/`` prefixes, leading ``/`` anchoring, wildcards, a covering parent
+    directory, ...), computed by the caller via
+    :func:`defendable_science.core.gitignore.check_ignore` against the real
+    ``.gitignore`` on disk (#138, #139), since that needs a real work tree
+    this function does not have.
+
     :param existing: The current file contents (``""`` when absent).
     :param entries: The entries that must be present.
+    :param already_covered: The subset of `entries` a caller has already
+        confirmed are gitignored by some other rule (equivalent-but
+        differently-spelled or a covering parent), so they must not be
+        appended again even though they are not a literal line here.
     :returns: The merged contents; `existing` unchanged when nothing is missing.
     """
     present = {line.strip() for line in existing.splitlines()}
-    missing = [entry for entry in entries if entry not in present]
+    covered = set(already_covered)
+    missing = [
+        entry for entry in entries if entry not in present and entry not in covered
+    ]
     if not missing:
         return existing
     prefix = existing

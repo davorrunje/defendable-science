@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from defendable_science.core.gitignore import check_ignore
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status
 from defendable_science.scaffold.layout import recorded_layout
@@ -94,10 +95,25 @@ def _mkdir(path: Path, actions: list[Action], *, dry_run: bool) -> None:
 def _merge_gitignore(
     layout: Layout, cache_dir: str, actions: list[Action], *, dry_run: bool
 ) -> None:
-    """Append any missing ignore entries to ``.gitignore``."""
+    """Append any missing ignore entries to ``.gitignore``.
+
+    An entry already covered by git — under any spelling, not just a literal
+    line — is not appended again (#139). ``check_ignore`` needs a real work
+    tree; when `layout.repo_root` is not one (``init`` may run before
+    ``git init``), it answers ``None`` for every entry, which degrades to
+    exactly the pre-#139 literal-membership behaviour: append if not
+    literally present. That must never error or silently skip the merge.
+    """
     path = layout.repo_root / ".gitignore"
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-    merged = r.merge_gitignore(existing, r.gitignore_entries(cache_dir))
+    already_covered = [
+        entry
+        for entry in r.gitignore_entries(cache_dir)
+        if check_ignore(layout.repo_root, entry) is True
+    ]
+    merged = r.merge_gitignore(
+        existing, r.gitignore_entries(cache_dir), already_covered=already_covered
+    )
     if merged == existing:
         actions.append(Action(path=path, status="exists"))
         return
