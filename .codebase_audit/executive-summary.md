@@ -372,6 +372,12 @@ which is precisely what an ADR set exists to make possible.
 | [`coverage.md`](coverage.md) | The measured result, then coverage *quality*: weak/strong per module, all six pragmas, the live suite, fixture realism, edge cases, and a mutation spot-check |
 | [`plugin-tech-debt.md`](plugin-tech-debt.md) | The markdown deliverable — 11 findings: the bootstrap, domain-neutrality, ADR hygiene, doc staleness, packaging, skill structure |
 
+Plus [`AUDIT-PROMPT.md`](AUDIT-PROMPT.md) — the spec that produced these reports,
+kept so the audit can be **re-run after fixes** and the results compared. It
+carries the stack remapping, the calibration rules, the known-good sites not to
+churn, the sanctioned decisions, and a re-run mode that classifies every prior
+finding as fixed / persisting / new.
+
 ---
 
 ## Closing assessment
