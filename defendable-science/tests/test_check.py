@@ -10,6 +10,7 @@ import pytest
 from defendable_science.check import checks as c
 from defendable_science.check import model as m
 from defendable_science.check.probe import FsProbe
+from defendable_science.core.gitignore import literal_covers
 from defendable_science.digest import artifact as art
 from defendable_science.digest import extraction as ex
 from defendable_science.scaffold import render as r
@@ -222,28 +223,7 @@ class FakeProbe:
         """
         if path in self.gitignore:
             return self.gitignore[path]
-        return _literal_gitignore_covers(path, self.files.get(root / ".gitignore", ""))
-
-
-def _literal_gitignore_covers(entry: str, gitignore_text: str) -> bool:
-    """Literal-line + parent-directory match — the matcher #138 removed.
-
-    Kept here, test-only, as `FakeProbe`'s default `is_gitignored` fallback:
-    good enough for tests that do not themselves exercise real gitignore
-    glob/wildcard/anchoring semantics, without duplicating a second
-    git-semantics evaluator in production code.
-    """
-    normalized_entry = entry.rstrip("/")
-    for line in gitignore_text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped[0] == "#":
-            continue
-        normalized_line = stripped.rstrip("/")
-        if normalized_entry == normalized_line:
-            return True
-        if normalized_entry.startswith(normalized_line + "/"):
-            return True
-    return False
+        return literal_covers(path, self.files.get(root / ".gitignore", ""))
 
 
 ROOT = Path("/repo")
@@ -1934,8 +1914,14 @@ def test_config_check_still_flags_a_genuine_gitignore_miss_via_the_probe() -> No
 
 
 def test_config_check_reports_undeterminable_coverage_as_its_own_outcome() -> None:
-    """Git absent / not a work tree must never collapse into `invalid` (#138)."""
+    """Git absent / not a work tree must never collapse into `invalid` (#138).
+
+    Uses a ``.gitignore`` that does not literally name ``cache_dir`` either,
+    so the literal-match fallback (below) cannot rescue this case — it is the
+    genuine "cannot tell at all" outcome.
+    """
     files = _scaffolded()
+    files[ROOT / ".gitignore"] = "__pycache__/\n"
     probe = FakeProbe(files, gitignore={r.DEFAULT_CACHE_DIR: None})
 
     findings = c.check_config(LAYOUT, probe)
@@ -1944,6 +1930,22 @@ def test_config_check_reports_undeterminable_coverage_as_its_own_outcome() -> No
     assert [f.severity for f in coverage_findings] == ["unreadable"]
     assert "could not determine" in coverage_findings[0].message
     assert "not in .gitignore" not in coverage_findings[0].message
+
+
+def test_config_check_falls_back_to_a_literal_match_when_git_cannot_tell() -> None:
+    """The regression #138's review caught: right after `init`, before `git init`.
+
+    A freshly-scaffolded repo's ``.gitignore`` literally names `cache_dir` —
+    ``init`` wrote it verbatim — but is not yet a git work tree, so
+    `Probe.is_gitignored` cannot answer. That must not be reported as
+    `unreadable`: the line is demonstrably there.
+    """
+    files = _scaffolded()
+    probe = FakeProbe(files, gitignore={r.DEFAULT_CACHE_DIR: None})
+
+    findings = c.check_config(LAYOUT, probe)
+
+    assert not any("cache_dir" in f.message for f in findings)
 
 
 # --- cross-artifact checks -------------------------------------------------------

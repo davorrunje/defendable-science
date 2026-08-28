@@ -79,3 +79,37 @@ def check_ignore(
     if proc.returncode in (0, 1):
         return proc.returncode == 0
     return None
+
+
+def literal_covers(entry: str, gitignore_text: str) -> bool:
+    """Return whether `gitignore_text` literally names `entry` or a parent of it.
+
+    A narrower, git-free fallback for exactly one situation: :func:`check_ignore`
+    returned ``None`` because `entry`'s repository is not (yet) a git work
+    tree — the ordinary state of a repo between ``defendable-science init``
+    writing its ``.gitignore`` and the human running ``git init``
+    (`skills/research-init/SKILL.md`'s documented first-run order). In that
+    window a `.gitignore` can still trivially, literally cover a path — `init`
+    wrote the exact line itself — and reporting that as "cannot determine"
+    would regress a repo that demonstrably has no problem into looking
+    unusable. This never claims more than a literal reading can support: it
+    does not understand ``**/``, wildcards, or anchoring, so a caller must
+    still treat a ``False`` result from this function as "cannot rule out
+    git-only coverage", not as a confirmed negative.
+
+    :param entry: The path to look for (e.g. a configured ``cache_dir``).
+    :param gitignore_text: The ``.gitignore`` file's contents.
+    :returns: ``True`` if an active (non-comment, non-blank) line matches
+        `entry` exactly, or names a parent directory of it.
+    """
+    normalized_entry = entry.rstrip("/")
+    for line in gitignore_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] == "#":
+            continue
+        normalized_line = stripped.rstrip("/")
+        if normalized_entry == normalized_line:
+            return True
+        if normalized_entry.startswith(normalized_line + "/"):
+            return True
+    return False
