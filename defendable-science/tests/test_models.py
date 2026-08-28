@@ -14,39 +14,43 @@ class _Sealed(models.OwnedModel):
     name: str
 
 
-class _Boom(Exception):
+class _BoomError(Exception):
     """A stand-in for a module's own domain error."""
 
 
 def test_parse_obj_returns_the_model() -> None:
-    got = models.parse_obj(_Widget, {"name": "a", "count": 2}, source="s", error=_Boom)
+    got = models.parse_obj(
+        _Widget, {"name": "a", "count": 2}, source="s", error=_BoomError
+    )
     assert got.name == "a"
     assert got.count == 2
 
 
 def test_parse_obj_ignores_unknown_fields_on_an_external_model() -> None:
     got = models.parse_obj(
-        _Widget, {"name": "a", "surprise": 1}, source="s", error=_Boom
+        _Widget, {"name": "a", "surprise": 1}, source="s", error=_BoomError
     )
     assert got.name == "a"
 
 
 def test_parse_obj_rejects_unknown_fields_on_an_owned_model() -> None:
-    with pytest.raises(_Boom, match=r"store\.json: surprise: "):
+    with pytest.raises(_BoomError, match=r"store\.json: surprise: "):
         models.parse_obj(
-            _Sealed, {"name": "a", "surprise": 1}, source="store.json", error=_Boom
+            _Sealed, {"name": "a", "surprise": 1}, source="store.json", error=_BoomError
         )
 
 
 def test_parse_obj_is_strict_about_scalar_types() -> None:
     # The defect-4 guarantee: a stringified number is rejected, not coerced.
-    with pytest.raises(_Boom, match=r"count: "):
-        models.parse_obj(_Widget, {"name": "a", "count": "2"}, source="s", error=_Boom)
+    with pytest.raises(_BoomError, match=r"count: "):
+        models.parse_obj(
+            _Widget, {"name": "a", "count": "2"}, source="s", error=_BoomError
+        )
 
 
 def test_parse_obj_names_the_source_and_every_bad_field() -> None:
-    with pytest.raises(_Boom) as caught:
-        models.parse_obj(_Widget, {"count": "x"}, source="api/works", error=_Boom)
+    with pytest.raises(_BoomError) as caught:
+        models.parse_obj(_Widget, {"count": "x"}, source="api/works", error=_BoomError)
     message = str(caught.value)
     assert message.startswith("api/works: ")
     assert "name: " in message
@@ -58,28 +62,28 @@ def test_parse_obj_reports_a_nested_field_path() -> None:
     class _Outer(models.ExternalModel):
         inner: _Widget
 
-    with pytest.raises(_Boom, match=r"inner\.name: "):
-        models.parse_obj(_Outer, {"inner": {}}, source="s", error=_Boom)
+    with pytest.raises(_BoomError, match=r"inner\.name: "):
+        models.parse_obj(_Outer, {"inner": {}}, source="s", error=_BoomError)
 
 
 def test_parse_obj_reports_a_non_object_payload_at_the_root() -> None:
-    with pytest.raises(_Boom, match=r"s: <root>: "):
-        models.parse_obj(_Widget, [1, 2], source="s", error=_Boom)
+    with pytest.raises(_BoomError, match=r"s: <root>: "):
+        models.parse_obj(_Widget, [1, 2], source="s", error=_BoomError)
 
 
 def test_parse_json_parses_text() -> None:
-    got = models.parse_json(_Widget, '{"name": "a"}', source="s", error=_Boom)
+    got = models.parse_json(_Widget, '{"name": "a"}', source="s", error=_BoomError)
     assert got.name == "a"
 
 
 def test_parse_json_folds_a_decode_error_into_the_domain_error() -> None:
-    with pytest.raises(_Boom, match=r"f\.json: invalid JSON: "):
-        models.parse_json(_Widget, "{oops", source="f.json", error=_Boom)
+    with pytest.raises(_BoomError, match=r"f\.json: invalid JSON: "):
+        models.parse_json(_Widget, "{oops", source="f.json", error=_BoomError)
 
 
 def test_parse_json_folds_a_validation_error_into_the_domain_error() -> None:
-    with pytest.raises(_Boom, match=r"f\.json: name: "):
-        models.parse_json(_Widget, "{}", source="f.json", error=_Boom)
+    with pytest.raises(_BoomError, match=r"f\.json: name: "):
+        models.parse_json(_Widget, "{}", source="f.json", error=_BoomError)
 
 
 def test_parse_each_keeps_the_valid_and_counts_the_skipped() -> None:
@@ -103,7 +107,7 @@ def test_validation_error_is_caught_in_exactly_one_module() -> None:
 
     root = pathlib.Path(models.__file__).parent.parent
     out = subprocess.run(
-        ["grep", "-rln", "ValidationError", str(root)],
+        ["grep", "-rln", "--include=*.py", "ValidationError", str(root)],
         capture_output=True,
         text=True,
         check=False,

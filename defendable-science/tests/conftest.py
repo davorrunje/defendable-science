@@ -6,22 +6,12 @@ never touches a real developer's home directory.
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING
 
 import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Importing a module during collection would otherwise compile it to a
-# `__pycache__/*.pyc`, and that compiled file embeds the module's string
-# constants verbatim. `test_models.py::test_validation_error_is_caught_in_
-# exactly_one_module` greps the source tree for the literal `ValidationError`
-# to enforce ADR-0043 decision point 4 (translated in exactly one module); a
-# stray `models.cpython-*.pyc` would double-count as a second match and make
-# that assertion flaky depending on whether a prior run left bytecode behind.
-sys.dont_write_bytecode = True
 
 
 @pytest.fixture(autouse=True)

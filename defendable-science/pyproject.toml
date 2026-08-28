@@ -173,8 +173,6 @@ ignore = [
     "PLR2004",  # magic-value-comparison
     "S101",     # use assert
     "N806",     # uppercase variable names
-    "N818",     # exception name should end in "Error" — a test double standing
-                # in for a module's own domain error, deliberately named short
 ]
 "../tools/*.py" = [
     "T20",      # flake8-print — a build/maintainer CLI tool; print() is its output, not debug noise
