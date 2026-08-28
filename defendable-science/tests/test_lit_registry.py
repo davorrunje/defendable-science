@@ -554,3 +554,12 @@ def test_patch_triage_keeps_a_non_string_citekey_addressable(tmp_path: Path) -> 
     rows = reg.load_triage(path)
     assert rows["2020"].disposition == "inbox"
     assert rows["k"].disposition == "screened"
+
+
+def test_triage_mapping_is_public_and_returns_the_raw_rows() -> None:
+    from pathlib import Path
+
+    assert reg.triage_mapping(Path("triage.yml"), "a: include\nb: {x: 1}\n") == {
+        "a": "include",
+        "b": {"x": 1},
+    }

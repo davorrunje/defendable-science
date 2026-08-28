@@ -80,9 +80,10 @@ def registry_dumps(preamble: str = _REGISTRY_PREAMBLE) -> str:
     """Render an empty-but-valid ``papers.md``.
 
     The header is rendered from :data:`REGISTRY_COLUMNS`, so a column added there
-    cannot leave scaffolding behind — an invented 4th column is exactly why
-    ``promote --scaffold`` could not register a paper into a hand-written
-    registry.
+    cannot leave scaffolding behind: a scaffolded registry can never be *missing*
+    a required column, which is the one thing that stops
+    :func:`append_papers_registry` — and so ``promote --scaffold`` — registering a
+    paper. Columns beyond the profile are the author's, and are preserved.
 
     :param preamble: Host prose to place above the table.
     :returns: The whole document.

@@ -1221,7 +1221,7 @@ def test_an_explicit_research_root_is_still_rendered_against_the_repo_root(
 def test_registry_dumps_produces_a_registry_append_papers_registry_accepts(
     tmp_path: Path,
 ) -> None:
-    """The 4th `state` column an agent invented is why promote could not register."""
+    """The registry header includes only required columns; extra columns are author extensions."""
     papers = tmp_path / "papers.md"
     papers.write_text(b.registry_dumps(), encoding="utf-8")
 

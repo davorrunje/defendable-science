@@ -298,19 +298,18 @@ def _decode_entry(raw: Any, index: int) -> DatasetEntry:
     )
 
 
-def load(path: str | Path = "datasets.yml") -> Manifest:
-    """Parse ``datasets.yml`` into a :class:`Manifest`.
+def load_text(text: str, path: str | Path = "datasets.yml") -> Manifest:
+    """Parse ``datasets.yml`` from text into a :class:`Manifest`.
 
-    :param path: Path to the manifest file.
+    :param text: The YAML text to parse.
+    :param path: Path to the manifest file (for error messages).
     :returns: The decoded manifest.
-    :raises ManifestError: If the file is missing, is not a YAML mapping, or an
-        entry is structurally malformed. The message names the offending entry.
+    :raises ManifestError: If the text is not a YAML mapping, or an entry is
+        structurally malformed. The message names the offending entry.
     """
     manifest_path = Path(path)
-    if not manifest_path.is_file():
-        raise ManifestError(f"{manifest_path}: no such file")
     try:
-        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ManifestError(f"{manifest_path}: invalid YAML: {exc}") from exc
     if data is None:
@@ -335,6 +334,20 @@ def load(path: str | Path = "datasets.yml") -> Manifest:
         mirror=mirror,
         datasets=[_decode_entry(entry, i) for i, entry in enumerate(datasets_raw)],
     )
+
+
+def load(path: str | Path = "datasets.yml") -> Manifest:
+    """Parse ``datasets.yml`` into a :class:`Manifest`.
+
+    :param path: Path to the manifest file.
+    :returns: The decoded manifest.
+    :raises ManifestError: If the file is missing, is not a YAML mapping, or an
+        entry is structurally malformed. The message names the offending entry.
+    """
+    manifest_path = Path(path)
+    if not manifest_path.is_file():
+        raise ManifestError(f"{manifest_path}: no such file")
+    return load_text(manifest_path.read_text(encoding="utf-8"), manifest_path)
 
 
 # --- validation -------------------------------------------------------------

@@ -160,14 +160,14 @@ def _layout_or_exit(root: Path | None = None) -> tuple[dict[str, Any], Layout]:
     """Load the config and resolve the layout, exiting 1 on an invalid block.
 
     :param root: The repository root to resolve against; discovered from the cwd
-        when omitted.
+        when omitted. Must be a canonical path (``resolve()``-d).
     :returns: The config mapping and the resolved layout.
     :raises typer.Exit: Code 1 if ``layout:`` is invalid.
     """
     from defendable_science.core.config import find_repo_root
 
     config = _load_config_or_exit(root)
-    repo_root = root or find_repo_root()
+    repo_root = (root or find_repo_root()).resolve()
     try:
         return config, resolve_layout(config, repo_root)
     except LayoutError as exc:
@@ -306,6 +306,58 @@ def init(
         )
     )
     raise typer.Exit(code=0)
+
+
+# --- check (defendable-science#121) -----------------------------------------------
+
+
+@app.command()
+def check(
+    root: Annotated[
+        str | None,
+        typer.Option("--root", help="Repository root to check; discovered if omitted."),
+    ] = None,
+    text: Annotated[
+        bool,
+        typer.Option("--text", help="Print a human-readable summary instead of JSON."),
+    ] = False,
+) -> None:
+    """Report the repo's validity state as JSON.
+
+    Runs six check families (layout, tables, frontmatter, registries, config,
+    cross-artifact) and emits findings grouped by severity. Exit code is keyed
+    to severity: ``invalid`` or ``unreadable`` → 1; ``gap`` or clean → 0.
+
+    A missing or invalid layout block is fatal — the checker cannot know where
+    anything is — so the check exits 1 with a message and no findings JSON.
+
+    :raises typer.Exit: Code 0 when the repo is valid (gaps alone are OK).
+        Code 1 when any file is invalid or unreadable.
+    """
+    from defendable_science.check import run_checks
+    from defendable_science.check.probe import FsProbe
+
+    _config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    probe = FsProbe()
+    report = run_checks(layout, probe)
+
+    if text:
+        # Human-readable summary
+        typer.echo("defendable-science check")
+        typer.echo(f"  invalid: {report.counts['invalid']}")
+        typer.echo(f"  unreadable: {report.counts['unreadable']}")
+        typer.echo(f"  gap: {report.counts['gap']}")
+        if report.findings:
+            typer.echo("")
+            for finding in report.findings:
+                typer.echo(f"{finding.severity:12}{finding.file} — {finding.message}")
+                for line in finding.remedy.splitlines():
+                    typer.echo(f"  {line}")
+    else:
+        # JSON output
+        typer.echo(json.dumps(report.to_json(), indent=2))
+
+    raise typer.Exit(code=report.exit_code)
 
 
 # --- literature (defendable-science#1) ------------------------------------------------
@@ -1989,8 +2041,8 @@ def list_keys() -> None:
     raise typer.Exit(code=0)
 
 
-@keys.command()
-def check() -> None:
+@keys.command()  # type: ignore[no-redef]
+def check() -> None:  # noqa: F811
     """Report presence/absence and source of each key as JSON (never a value)."""
     compact = [
         {"name": row["name"], "present": row["present"], "source": row["source"]}
