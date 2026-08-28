@@ -142,6 +142,18 @@ store ever sits in a git work tree without being gitignored.
 The `thesis/` tree is optional — scaffold it only when the repo is a
 thesis-by-publication; a plain portfolio repo omits the top level.
 
+Finally, **verify the repo** rather than declaring it working:
+
+```bash
+defendable-science check
+```
+
+Report what it finds. `invalid` and `unreadable` findings mean the repo is not
+yet usable — fix them before handing back. Each finding carries a remedy.
+`gap` findings are honest incomplete states (an unsigned verdict, no bound
+experiment backend) and are reported, not fixed: they are the author's
+decisions to make.
+
 ## Adopt: backfill workflow
 
 `adopt` is an **inventory → propose → confirm → materialize** loop around the
@@ -202,6 +214,18 @@ consumer):
 
 Present proposals as a reviewable diff/table before writing. Anything the skill
 cannot classify with confidence is surfaced as an open question, not decided.
+
+Then, **verify the repo**:
+
+```bash
+defendable-science check
+```
+
+Report what it finds. `invalid` and `unreadable` findings mean the repo is not
+yet usable — fix them before handing back. Each finding carries a remedy.
+`gap` findings are honest incomplete states (an unsigned verdict, no bound
+experiment backend) and are reported, not fixed: they are the author's
+decisions to make.
 
 ## Composition
 

@@ -40,8 +40,8 @@ compute a completion percentage — those are firewall/anti-Goodhart violations
 
 | Verb | What it does |
 |---|---|
-| `status <level> [id]` | Read the frontmatter for one artifact (`id` given) or every artifact at a level (`hypothesis` \| `paper` \| `thesis` \| `literature`), roll it up per the rules below, and print a coverage + blockers view. No files written. |
-| `dashboard` | Regenerate `docs/research/dashboard.md` as a **pure projection** of all status frontmatter. The only file progress writes — and it is machine-owned, never hand-edited. |
+| `status <level> [id]` | Run `defendable-science check` first. Then read the frontmatter for one artifact (`id` given) or every artifact at a level (`hypothesis` \| `paper` \| `thesis` \| `literature`), roll it up per the rules below, and print a coverage + blockers view. No files written. |
+| `dashboard` | Run `defendable-science check` first. Then regenerate `docs/research/dashboard.md` as a **pure projection** of all status frontmatter. The only file progress writes — and it is machine-owned, never hand-edited. |
 
 - `status` is the everyday verb; run it freely, it mutates nothing.
 - `dashboard` overwrites the generated file wholesale from current frontmatter. If
@@ -183,6 +183,10 @@ Load-bearing constraints, not preferences.
 - **No scores, ever** (see Anti-Goodhart). If a future request asks for a
   percentage, a velocity, a burndown, or a success rate, decline and point here —
   this is a design invariant, not a missing feature.
+- **An unreadable artifact is reported as unreadable, never as absent.** `check`
+  distinguishes "failed to read" from "valid and empty"; a dashboard that
+  silently drops an artifact it could not parse would be a projection that lies.
+  Surface the finding and leave the row visibly unknown.
 
 ## Commit attribution
 
