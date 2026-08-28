@@ -765,6 +765,8 @@ def test_registries_check_flags_invalid_triage_yaml() -> None:
 
 
 def test_registries_check_reports_every_manifest_error() -> None:
+    from defendable_science.dataset import manifest as mf
+
     files = _scaffolded()
     files[LAYOUT.datasets_manifest] = "datasets:\n  - id: cifar10\n    files: []\n"
 
@@ -776,8 +778,19 @@ def test_registries_check_reports_every_manifest_error() -> None:
     messages = " ".join(f.message for f in error_findings)
     assert "version" in messages
     assert "license" in messages
-    # Should have at least 5 errors (version, tier, license, redistributable, access)
-    assert len(error_findings) >= 5
+
+    # Validate the same manifest to bound against the actual rules
+    manifest = mf.load_text(
+        "datasets:\n  - id: cifar10\n    files: []\n", "datasets.yml"
+    )
+    report = mf.validate(manifest)
+
+    # No two findings share the same (severity, message) pair (catches double-reports)
+    pairs = [(f.severity, f.message) for f in error_findings]
+    assert len(pairs) == len(set(pairs)), "Duplicate (severity, message) pairs detected"
+
+    # Exact count matches validator output
+    assert len(error_findings) == len(report.errors)
 
 
 def test_registries_check_flags_an_unparseable_manifest() -> None:
@@ -902,9 +915,11 @@ def test_registries_check_triage_orphan_when_references_unreadable() -> None:
 
 def test_registries_check_reports_manifest_warnings() -> None:
     """Test that manifest validation warnings become gap findings."""
+    from defendable_science.dataset import manifest as mf
+
     files = _scaffolded()
     # Incomplete DataCite tuple (warning, not error)
-    files[LAYOUT.datasets_manifest] = (
+    manifest_text = (
         "datasets:\n"
         "  - id: cifar10\n"
         "    version: 1.0\n"
@@ -920,12 +935,23 @@ def test_registries_check_reports_manifest_warnings() -> None:
         "      title: My Dataset\n"  # Missing creator, publisher, identifier, publication_year
         "      resource_type: Dataset\n"
     )
+    files[LAYOUT.datasets_manifest] = manifest_text
 
     findings = c.check_registries(LAYOUT, FakeProbe(files))
 
     gap_findings = [f for f in findings if f.severity == "gap"]
-    assert len(gap_findings) >= 1
     assert any("citation" in f.message for f in gap_findings)
+
+    # Validate the same manifest to bound against the actual rules
+    manifest = mf.load_text(manifest_text, "datasets.yml")
+    report = mf.validate(manifest)
+
+    # No two findings share the same (severity, message) pair (catches double-reports)
+    pairs = [(f.severity, f.message) for f in gap_findings]
+    assert len(pairs) == len(set(pairs)), "Duplicate (severity, message) pairs detected"
+
+    # Exact count matches validator output for warnings
+    assert len(gap_findings) == len(report.warnings)
 
 
 def test_registries_check_handles_manifest_with_mirror() -> None:
