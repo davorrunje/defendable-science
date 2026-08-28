@@ -13,6 +13,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`digest` gains an extraction mode — breadth reading for a survey**
+  (`digest extract axes | record | sample | render`). Depth mode costs an hour
+  or two per paper, which makes it unusable for the forty-paper set its sibling
+  skill triages, so extraction reads each paper against exactly the axes
+  `literature position --level paper` already put in the concept matrix, and
+  stops. `axes` prints the question set and refuses a matrix that is not ready
+  to be extracted against — unreplaced `<attr N>` placeholders, no table, a
+  duplicated heading, more than one table in the section, a duplicate column
+  name — rather than letting forty papers be read against `<attr 1>`. `record`
+  is the *only* writer and validates inseparably: every cell carries a
+  shape-checked locator, or the distinguished value `not-addressed` with a
+  justification; every header axis must be accounted for, so an axis an agent
+  found hard cannot simply be omitted; an invented axis is refused; and
+  rejection is per paper, so one bad cell does not abort a forty-paper sweep.
+  The `not-addressed` count is reported per paper and in aggregate as the
+  anti-gaming signal. `sample` draws a deterministic sample — seeded from the
+  sorted batch, so nobody can re-roll until an easy draw comes up — and records
+  the **human's** verdict; the agent never checks its own extraction. `render`
+  merges the cells into the positioning document's concept matrix, inserting
+  and updating only, never deleting.
+  **The claim is deliberately weaker than depth mode's, and is kept separate in
+  the data**: extraction writes `status.extraction`, never
+  `status.understanding`, and `progress` reports `extracted N / digested M` as
+  two rows that are never summed — a paper with cells extracted has not been
+  read. A failed sample is evidence about the *batch*: `batch-check: failed`
+  lands on every artifact in the run, sampled or not, and the caught cell is
+  not quietly repaired. A `verified` verdict is refused outright when a drawn
+  paper's cells could not be read, and `--all` aborts before drawing when
+  membership cannot be determined, because the draw is a function of membership
+  and a silently dropped member re-rolls the sample. On the triage sidecar,
+  `record` writes exactly `extracted` and `extraction-cells` — never
+  `disposition`, which stays the human's decision.
 - **`literature fetch | confirm | verify | mirror`** — the literature registry
   now closes the same PDF-provenance loop `dataset` already had: `fetch`
   acquires a paper's PDF through a generic acquisition ladder (OpenAlex

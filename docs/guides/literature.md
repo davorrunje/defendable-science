@@ -85,7 +85,12 @@ overwritten.
 **`triage.yml` is your decision layer**, keyed by citekey, one mapping per paper:
 `role` (anchor / rival / prior-art / support / contrast / neighbor),
 `disposition` (`inbox → screened → interesting → acting → acted-on → dismissed`),
-`rationale`, `priority`, `notes`, reviewer, date.
+`rationale`, `priority`, `notes`, reviewer, date. Two further fields are written
+by the tooling rather than by hand: `extracted` (the date `digest extract
+record` last recorded cells for the paper) and `extraction-cells` (how many).
+Extraction writes those two and **nothing else** — in particular it never
+touches `disposition`, which is your decision state machine, not a fact about a
+run.
 
 ```yaml
 sill1997monotonic:

@@ -2865,9 +2865,12 @@ def extract_render(
     for is left exactly as it is, and a paper leaving the survey is removed by
     hand — automatic deletion is the one operation here with no safe failure
     mode. ``**This paper**`` is likewise never touched: it is the author's own
-    delta. Rows are keyed by citekey in the matrix's first column, so a
-    hand-edited row *label* is what a re-render overwrites; that is the price
-    of the row being a projection of the cells (spec §5).
+    delta. Rows are keyed by citekey in the matrix's first column, matched on
+    exact equality, so a hand-edited row *label* is not overwritten — it stops
+    matching, and this command adds a **second** row for that paper. Restore
+    the label rather than re-editing it. Two smaller costs of the row being a
+    projection (spec §5): the matrix is re-emitted canonically, so hand-aligned
+    column padding is collapsed and GFM alignment specifiers are dropped.
 
     A paper whose artifact cannot be read is reported and its row left alone —
     the rest of the batch still lands, because skipping it changes nothing on
