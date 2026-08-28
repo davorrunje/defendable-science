@@ -275,9 +275,14 @@ def cell_from_mapping(item: Mapping[str, Any]) -> Cell:
 
 # --- locators -----------------------------------------------------------------
 
-#: Locator forms accepted out of the box. Extended or replaced via
+#: Locator forms accepted out of the box. **Extended, never replaced**, via
 #: ``literature.extraction.locator_patterns`` — a set built around §/Eq./Thm.
-#: encodes one citation culture, and this plugin forbids domain assumptions.
+#: encodes one citation culture, and this plugin forbids domain assumptions, so
+#: a survey of trials or case law adds the forms it locates claims by. Configured
+#: patterns are appended to these (:func:`compile_locator_patterns`); there is
+#: deliberately no way to drop a default. Widening the accepted set only ever
+#: costs a shape that would otherwise have been rejected — never a false
+#: negative on a locator the author meant.
 #:
 #: A configured pattern must not rely on its own group numbering: the set is
 #: concatenated into one alternation, so a numbered backreference like
@@ -305,7 +310,8 @@ def compile_locator_patterns(extra: list[str] | None = None) -> list[re.Pattern[
     comma-separated list, so ``"§3, Eq. (4)"`` is accepted while
     ``"somewhere in §3"`` is not — a partial match would defeat the check.
 
-    :param extra: Additional raw patterns from configuration.
+    :param extra: Additional raw patterns from configuration, **appended** to
+        `DEFAULT_LOCATOR_PATTERNS` rather than replacing them.
     :returns: One compiled pattern matching any comma-joined combination.
     :raises ExtractionError: If a configured pattern is not valid regex, or if
         the configured set cannot be combined (e.g. two patterns reusing one

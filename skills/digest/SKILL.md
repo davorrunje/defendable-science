@@ -212,12 +212,12 @@ defendable-science digest extract axes
 
 Prints `{"positioning": …, "axes": [...]}` — the matrix header minus its first
 column. Run it **first**. It refuses (exit 1) rather than letting a batch be
-read against a matrix that is not ready: no concept-matrix section, more than
-one section with that heading, no table in the section, a missing `|---|`
-separator, ragged rows, unreplaced `<attr N>` placeholders, an unnamed column,
-no axes beyond the row label, or two columns sharing a name. Every refusal
-names the file and the repair. Fix the matrix with the human; do not work
-around it.
+read against a matrix that is not ready. The refusals, in full: no
+concept-matrix section; more than one section carrying that heading; no table
+in the section; **more than one table inside the section**; a missing `|---|`
+separator; ragged rows; unreplaced `<attr N>` placeholders; an unnamed column;
+no axes beyond the row label; two columns sharing a name. Every refusal names
+the file and the repair. Fix the matrix with the human; do not work around it.
 
 The `**This paper**` row is the author's own delta, never a paper to extract.
 
@@ -265,11 +265,13 @@ the only writer. The rules:
 
 Default locator shapes: `§3` / `§3.2.1`, `Section 3` / `Sec. 3`, `p. 7` /
 `pp. 7-9`, `Eq. (4)` / `Equation 4`, `Table 2`, `Fig. 5`, `Alg. 1`, `Thm. 2` /
-`Lemma 3` / `Def. 1`, and comma-joined combinations. Extend or replace them
-under `literature.extraction.locator_patterns` in
-`.defendable-science/config.yml` — a set built around `§` and `Eq.` encodes one
-citation culture, and a survey of trials or case law locates claims
-differently.
+`Lemma 3` / `Def. 1`, and comma-joined combinations. **Extend** them under
+`literature.extraction.locator_patterns` in `.defendable-science/config.yml` —
+a set built around `§` and `Eq.` encodes one citation culture, and a survey of
+trials or case law locates claims differently. Configured patterns are
+**appended to the defaults, never replacing them**: there is no way to drop
+`§`/`Eq.`/`Thm.` from the accepted set. The cost of that is only extra accepted
+shapes, never a rejected locator the author meant.
 
 **`not-addressed` and the anti-gaming count.** "The paper does not address this
 axis" is a legitimate, common cell value, and demanding a locator for it is
@@ -397,17 +399,31 @@ the last two are irreversible-by-hand tidying:
 1. **A hand-edited row label is not overwritten — it is orphaned.** Row lookup
    is exact label equality, so an edited label stops matching and the next
    render adds a **second** row for that paper. Nothing you wrote is lost, but
-   the matrix now has a duplicate. The remedy is to **restore the label**, not
-   to re-edit it. (A citekey that ends up on two rows is a refusal on the run
-   after that: which row is *the* row cannot be guessed.)
+   the matrix now has two rows about one paper. The remedy is to **restore the
+   label**, not to re-edit it. **Nothing detects this for you**: the two rows
+   carry different labels, so no later run refuses, warns, or reconciles them.
+   The duplicate simply stays until a human notices it.
 2. **The matrix is re-emitted canonically**, so hand-aligned column padding is
    collapsed.
 3. **GFM alignment specifiers (`|:---:|`) are dropped** from the separator row.
 
-Refusals leave the file byte-identical rather than writing at a guess: two
-sections carrying the concept-matrix heading, more than one table inside that
-section, or a header with a duplicate column name (two columns of one name
-collapse into a single cell, which would destroy the row labels).
+Four refusals leave the file **byte-identical** rather than writing at a guess:
+
+- two sections carrying the concept-matrix heading;
+- more than one table inside that section;
+- a header with a duplicate column name — two columns of one name collapse into
+  a single cell, which would destroy the row labels;
+- **a recorded cell naming an axis the matrix no longer has.** This is the one
+  you will actually hit: rename or delete a column between `record` and
+  `render` and the whole merge refuses, because writing the cell would need a
+  column that does not exist and dropping it would lose a recorded cell
+  silently. The remedy is the human's call — restore the column name, or
+  re-extract against the new axes — so surface it rather than guessing.
+
+Two further refusals, on the same byte-identical terms: asking to render the
+`**This paper**` row (the author's own delta), and two rows in the file already
+carrying the **same** citekey — which row is *the* row cannot be guessed, so
+merge or delete the duplicates by hand first.
 
 A paper whose artifact cannot be read is reported in `errors[]` and its row
 left alone — the rest of the batch still lands, because skipping it changes

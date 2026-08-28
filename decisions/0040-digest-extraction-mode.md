@@ -53,6 +53,52 @@ one. #97 filed that as the harm, not as a theoretical risk.
 - **Never lose an author's work.** `positioning.md` is hand-written prose with a
   table in it. #94 is a live reminder of how a table writer loses work quietly.
 
+## Considered options
+
+Five axes, each with a genuinely plausible alternative. Chosen options marked;
+each rejection is argued in *Rejected alternatives* below.
+
+**Where extraction lives.**
+
+1. A third `literature` mode.
+2. A new, fourth skill.
+3. **A second mode of the existing `digest` skill.** *(chosen)*
+
+**How the weaker claim is represented.**
+
+1. One `status.understanding` key with a `mode:` discriminator.
+2. A separate `status.extraction` key with a single `sampled:` field.
+3. **A separate `status.extraction` key with `in-sample` and `batch-check` as
+   two fields, plus a second, never-summed `progress` row.** *(chosen)*
+
+**Who checks the sample.**
+
+1. The agent re-reads its own extraction and checks it.
+2. Nobody — record the cells and rely on the mandatory locator alone.
+3. **The human, asked per cell whether the source at that locator says this.**
+   *(chosen)*
+
+**How the sample is drawn, and how the verdict is given.**
+
+1. A fresh random draw per run, with an interactive CLI prompt for the verdict.
+2. A caller-supplied membership file (`--batch FILE|-`) seeding the draw.
+3. **A draw seeded from the sorted membership set, with the verdict as a second
+   invocation of the same command.** *(chosen)*
+
+**What a failed sample means.**
+
+1. A finding about the caught cell: repair it and continue.
+2. A finding about the sampled papers only.
+3. **A finding about the batch: `batch-check: failed` on every artifact in the
+   run, with no route to repair the caught cell.** *(chosen)*
+
+**How the rules are enforced** (the mechanisms recorded under decision 5).
+
+1. A SKILL.md instruction the agent is asked to follow.
+2. A separate validator the skill is told to run before writing.
+3. **Validation fused to the only writer, with a locator pattern set that is
+   extensible but not replaceable.** *(chosen)*
+
 ## Decision
 
 Five material decisions, each recorded with its rejected alternative because
@@ -127,8 +173,10 @@ sample of three probably produced more in the other thirty-seven. Every artifact
 in the run — sampled or not — gets `batch-check: failed`, and there is
 deliberately **no route** to repair the one caught cell.
 
-Two further mechanisms follow the same logic and are recorded here because they
-are what make the above enforceable rather than aspirational:
+Two further mechanisms are recorded here — not because they follow from
+batch-condemnation, which they do not, but because they are what answer the
+*enforcement over documentation* and *agency* drivers, and because without them
+the five decisions above are aspirational rather than enforced:
 
 - **Validation and writing are one command.** The validating command is the
   *only* writer; there is no code path that records an unvalidated cell. Same
@@ -194,6 +242,19 @@ are what make the above enforceable rather than aspirational:
   draw would change on every invocation while passing every same-process test.)
 - **The agent checking its own extraction.** Self-attestation; certifies
   nothing.
+- **No check at all — the mandatory locator as the whole guarantee.** A locator
+  is shape-checked, not resolved: nothing in the pipeline opens the paper to see
+  whether the cell's claim is at `§3`. Without a human check, extraction's claim
+  collapses to "an agent wrote some strings in a well-formed shape", which is
+  not worth a status key.
+- **Treating a failed sample as a finding about the sampled papers only.**
+  Splits the batch into checked-and-failed and unchecked-and-unmarked, which is
+  the same misleading state a single `sampled:` field produces, one level up: a
+  reader sees thirty-seven papers carrying no failure and infers they are fine,
+  when the sample is precisely the evidence that they are not.
+- **A SKILL.md instruction to include a locator, with no enforcement.** What
+  #100 was filed against. It constrains nothing about what actually gets
+  written, and the constraint's absence is invisible in the artifact.
 - **An interactive CLI prompt for the verdict.** Puts the agent between the
   human and the sources, and makes the command unscriptable and untestable.
 - **`--batch FILE|-` as the sample's membership input** (the original sketch).
@@ -210,10 +271,15 @@ are what make the above enforceable rather than aspirational:
   exactly what #100 asked to move past.
 - **A non-empty-string locator check.** Satisfied by `"see paper"`, which an
   agent filling 320 cells discovers immediately.
-- **A fixed locator pattern set.** A domain assumption in a plugin that forbids
-  them; the set ships as a default and is replaceable via
+- **A closed locator pattern set.** A domain assumption in a plugin that forbids
+  them; the set ships as a default and is **extensible** via
   `literature.extraction.locator_patterns`, for the same reason
-  `venue_resolvers` is (ADR-0038).
+  `venue_resolvers` is (ADR-0038). Extension is additive only — configured
+  patterns are appended, and there is deliberately no way to *drop* a default.
+  Widening the accepted set can only admit a shape that would otherwise have
+  been rejected; letting a consumer remove `§` or `Eq.` would let a
+  misconfiguration reject locators their own authors wrote, which is the
+  costlier direction of the two.
 - **Making `not-addressed` simply locator-exempt.** 8 axes × 40 papers is 320
   chances to write "not addressed" and skip the hard part. A justification plus
   a visible count prices it instead.
