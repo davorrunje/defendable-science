@@ -2313,6 +2313,14 @@ def extract_record(
     certifies located cells checked by sample, which is a weaker claim than
     verified comprehension, and the two must not share a field (spec §3.2).
 
+    Each recorded paper then gets ``extracted`` and ``extraction-cells`` on its
+    ``triage.yml`` row — facts about the run, never ``disposition``, which is
+    the human's decision. The cells are written first, so a triage refusal (a
+    hand-annotated sidecar :func:`~.literature.registry.patch_triage` will not
+    rewrite) cannot discard an extraction that already landed; the refusal is
+    reported under ``triage_not_updated``, apart from ``errors``, and still
+    exits 1.
+
     :param cells: The cells to record — a JSON-array file path, or ``-`` for
         stdin.
     :param paper: The paper id whose concept matrix the cells are validated
@@ -2324,8 +2332,9 @@ def extract_record(
         directory, and a cwd-relative default would bury the run's evidence
         there, where no reviewer would look for it.
     :raises typer.Exit: Code 0 when every paper was recorded; code 1 when
-        anything was rejected, a write failed, or the input, matrix or config is
-        unusable; code 2 if the paper cannot be resolved.
+        anything was rejected, a write failed, a triage row could not be
+        updated, or the input, matrix or config is unusable; code 2 if the
+        paper cannot be resolved.
     """
     config, layout, path = _positioning_context(paper, positioning)
     log_root = (
@@ -2333,7 +2342,9 @@ def extract_record(
         if log_dir is not None
         else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
     )
-    patterns = _locator_patterns(_lit_block(config))
+    lit = _lit_block(config)
+    patterns = _locator_patterns(lit)
+    _registry_path, triage_path = _lit_registry_paths(lit, layout)
     try:
         axes = extraction_mod.axes_from_positioning(path)
         raw = sys.stdin.read() if cells == "-" else Path(cells).read_text("utf-8")
@@ -2346,6 +2357,7 @@ def extract_record(
     date = date_cls.today().isoformat()
     recorded: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    triage_not_updated: list[dict[str, str]] = []
     for citekey, paper_cells in sorted(accepted.items()):
         artifact = layout.digest(citekey)
         try:
@@ -2381,24 +2393,44 @@ def extract_record(
                 "log_entry": str(log_entry),
             }
         )
+        # Second, and only once the cells are on disk: a refusal here must not
+        # discard an extraction that already landed (spec §7.5). Two factual
+        # scalars, never `disposition` — the disposition state machine is the
+        # human's decision, and a machine advancing it would be exactly the
+        # agency violation this tool exists to prevent.
+        try:
+            triage_path.parent.mkdir(parents=True, exist_ok=True)
+            registry_mod.patch_triage(
+                triage_path,
+                citekey,
+                {"extracted": date, "extraction-cells": len(paper_cells)},
+            )
+        except (registry_mod.RegistryError, OSError) as exc:
+            # Not a write *failure* — `patch_triage` refuses a hand-annotated
+            # sidecar rather than destroy its PRISMA rationales. So it is
+            # reported apart from `errors`, where it would read as a lost
+            # artifact, and the message names the fields to set by hand.
+            typer.echo(f"triage not updated for {citekey}: {exc}", err=True)
+            triage_not_updated.append({"citekey": citekey, "reason": str(exc)})
 
     for rejection in rejections:
         typer.echo(extraction_mod.render_rejection(rejection), err=True)
     typer.echo(
         json.dumps(
             {
-                "ok": not (rejections or errors),
+                "ok": not (rejections or errors or triage_not_updated),
                 "positioning": str(path.resolve()),
                 "axes": axes,
                 "recorded": recorded,
                 "rejected": [dataclasses.asdict(r) for r in rejections],
                 "errors": errors,
+                "triage_not_updated": triage_not_updated,
                 "not_addressed": sum(r["not_addressed"] for r in recorded),
             },
             indent=2,
         )
     )
-    raise typer.Exit(code=1 if rejections or errors else 0)
+    raise typer.Exit(code=1 if rejections or errors or triage_not_updated else 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

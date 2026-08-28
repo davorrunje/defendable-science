@@ -21,7 +21,9 @@ from typer.testing import CliRunner
 from defendable_science import cli as cli_mod
 from defendable_science.cli import app
 from defendable_science.core.frontmatter import split_frontmatter
+from defendable_science.digest import artifact as artifact_mod
 from defendable_science.digest.artifact import read_cells
+from defendable_science.literature import registry as registry_mod
 from defendable_science.scaffold.layout import Layout
 
 if TYPE_CHECKING:
@@ -565,6 +567,206 @@ def test_record_reports_what_landed_when_one_paper_fails_to_write(
     # The good paper really did land, exactly as the report says.
     assert layout.digest("sill1997monotonic").is_file()
     assert len(list((root / "log").iterdir())) == 1
+
+
+# --- record: the triage writeback --------------------------------------------------
+
+
+def _triage(root: Path) -> dict[str, Any]:
+    """Load the triage sidecar the default layout names."""
+    text = Layout.default(root.resolve()).triage.read_text(encoding="utf-8")
+    loaded = yaml.safe_load(text)
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def _write_triage(root: Path, text: str) -> Path:
+    """Seed the triage sidecar with `text`, creating its directory."""
+    target = Layout.default(root.resolve()).triage
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return target
+
+
+def test_record_writes_the_extraction_facts_to_triage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A recorded paper leaves two factual scalars on its triage row."""
+    root = _repo(tmp_path)
+    result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
+    assert result.exit_code == 0, result.stderr
+    row = _triage(root)["sill1997monotonic"]
+    assert row["extraction-cells"] == 2
+    # The same date the artifact carries — one value per run, not a second clock.
+    artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
+    fm_lines, _body = split_frontmatter(artifact.read_text(encoding="utf-8"))
+    last_updated = yaml.safe_load("\n".join(fm_lines))["status"]["last-updated"]
+    assert row["extracted"] == str(last_updated)
+    assert isinstance(row["extracted"], str)
+    assert json.loads(result.stdout)["triage_not_updated"] == []
+
+
+def test_record_creates_a_triage_row_for_a_paper_that_had_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sidecar need not exist yet, and existing rows must survive."""
+    root = _repo(tmp_path)
+    _write_triage(root, "other1997:\n  disposition: interesting\n")
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 0
+    loaded = _triage(root)
+    assert loaded["other1997"] == {"disposition": "interesting"}
+    assert set(loaded["sill1997monotonic"]) == {"extracted", "extraction-cells"}
+
+
+def test_record_never_touches_disposition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`disposition` is the human's decision state machine — extraction is not.
+
+    A machine advancing ``screened -> interesting`` would be exactly the agency
+    violation this plugin exists to prevent, so the negative is pinned twice:
+    an existing value is left alone, and no key is invented where none was.
+    """
+    root = _repo(tmp_path)
+    _write_triage(
+        root,
+        "sill1997monotonic:\n"
+        "  disposition: screened\n"
+        "  rationale: matches the inclusion criteria\n"
+        "zz2021:\n"
+        "  rationale: queued\n",
+    )
+    cells = [
+        *GOOD_CELLS,
+        {"citekey": "zz2021", "axis": "guarantee type", "value": "v", "locator": "§1"},
+        {
+            "citekey": "zz2021",
+            "axis": "partial monotonicity",
+            "value": "w",
+            "locator": "§2",
+        },
+    ]
+    result = _record(root, cells, monkeypatch=monkeypatch)
+    assert result.exit_code == 0, result.stderr
+    loaded = _triage(root)
+    assert loaded["sill1997monotonic"]["disposition"] == "screened"
+    assert loaded["sill1997monotonic"]["rationale"] == "matches the inclusion criteria"
+    assert "disposition" not in loaded["zz2021"]
+    assert loaded["zz2021"]["extraction-cells"] == 2
+
+
+def test_record_writes_the_cells_before_it_touches_triage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordering is load-bearing: a triage refusal must not discard cells."""
+    root = _repo(tmp_path)
+    calls: list[str] = []
+    real_write = artifact_mod.write_extraction
+    real_patch = registry_mod.patch_triage
+
+    def spy_write(*args: Any, **kwargs: Any) -> Any:
+        calls.append("write_extraction")
+        return real_write(*args, **kwargs)
+
+    def spy_patch(*args: Any, **kwargs: Any) -> None:
+        calls.append("patch_triage")
+        real_patch(*args, **kwargs)
+
+    monkeypatch.setattr(artifact_mod, "write_extraction", spy_write)
+    monkeypatch.setattr(registry_mod, "patch_triage", spy_patch)
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 0
+    assert calls == ["write_extraction", "patch_triage"]
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "wanted"),
+    [
+        pytest.param(
+            "# screened 2026-08-01 against the protocol\n"
+            "sill1997monotonic:\n"
+            "  disposition: screened\n"
+            "  rationale: the PRISMA audit trail lives in this comment\n",
+            "carries comments",
+            id="comments",
+        ),
+        pytest.param(
+            "other1997: include\nsill1997monotonic:\n  disposition: screened\n",
+            "not mappings",
+            id="non-mapping-row",
+        ),
+    ],
+)
+def test_record_reports_a_refused_triage_and_leaves_it_byte_identical(
+    sidecar: str, wanted: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is visible and non-zero-exit — and the cells still landed.
+
+    `patch_triage` refuses rather than destroy a hand-authored sidecar. That
+    refusal is not a write *failure*, so it gets its own report key: a reader
+    must not conclude the artifact failed when it did not.
+    """
+    root = _repo(tmp_path)
+    triage = _write_triage(root, sidecar)
+    before = triage.read_bytes()
+    result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert "Traceback" not in (result.stdout + result.stderr)
+    assert "triage not updated for sill1997monotonic" in result.stderr
+    # Nothing was rewritten, and nothing stripped the comments to get around it.
+    assert triage.read_bytes() == before
+    assert not list(triage.parent.glob("*.tmp"))
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["errors"] == []
+    assert [t["citekey"] for t in payload["triage_not_updated"]] == [
+        "sill1997monotonic"
+    ]
+    assert wanted in payload["triage_not_updated"][0]["reason"]
+    assert str(triage) in payload["triage_not_updated"][0]["reason"]
+    # The extraction itself is intact: refusing the sidecar discards nothing.
+    assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
+    artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
+    assert len(read_cells(artifact)) == 2
+
+
+def test_record_reports_an_unwritable_triage_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An OS-level failure on the sidecar is reported, not raised."""
+    root = _repo(tmp_path)
+    triage = Layout.default(root.resolve()).triage
+    triage.mkdir(parents=True)  # a directory where the sidecar should be
+    result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert "Traceback" not in (result.stdout + result.stderr)
+    payload = json.loads(result.stdout)
+    assert [t["citekey"] for t in payload["triage_not_updated"]] == [
+        "sill1997monotonic"
+    ]
+    assert payload["errors"] == []
+    assert Layout.default(root.resolve()).digest("sill1997monotonic").is_file()
+
+
+def test_record_honours_a_configured_triage_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path, config="literature:\n  triage: notes/decisions.yml\n")
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 0
+    loaded = yaml.safe_load((root / "notes" / "decisions.yml").read_text("utf-8"))
+    assert loaded["sill1997monotonic"]["extraction-cells"] == 2
+    assert not Layout.default(root.resolve()).triage.exists()
+
+
+def test_record_does_not_touch_triage_for_a_paper_that_failed_to_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No cells, no claim: a failed artifact must leave no extraction facts."""
+    root = _repo(tmp_path)
+    artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("no frontmatter here\n", encoding="utf-8")
+    assert _record(root, GOOD_CELLS, monkeypatch=monkeypatch).exit_code == 1
+    assert not Layout.default(root.resolve()).triage.exists()
 
 
 # --- record: malformed input -------------------------------------------------------
