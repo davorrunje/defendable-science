@@ -29,7 +29,7 @@ So this page can never be misread, it uses exactly two conventions:
 
 ```bash
 # Anything in a shell block is a real command, verbatim.
-defendable-science dataset verify --manifest datasets.yml
+defendable-science dataset verify
 ```
 
 Note the asymmetry with the skill's verb table in
@@ -43,6 +43,12 @@ methodology's; the command names are the tool's.
 `datasets.yml` is the registry and the source of truth. It is committed, public,
 and holds **no secrets and no blobs above Tier A** — metadata, checksums, tiers,
 licenses, retrieval recipes, and datasheet links.
+
+Every `dataset` command finds it for you: the path comes from the repo layout
+(`layout.datasets_manifest` in `.defendable-science/config.yml`, defaulting to
+`datasets.yml` at the repo root), so no command in this guide passes
+`--manifest`. The flag still exists and still wins when you pass it — use it to
+point at a manifest that is not this repo's.
 
 > **Ask the assistant.** Scaffold the dataset registry for this repo
 > (`dataset` in `init` mode) — I want `datasets.yml`, the gitignored cache dir,
@@ -128,7 +134,7 @@ make a cited number defensible:
 To check what you already have, offline and without touching the network:
 
 ```bash
-defendable-science dataset verify --manifest datasets.yml
+defendable-science dataset verify
 ```
 
 `verify` never downloads. That is the point: it answers "do the bytes on this
@@ -158,7 +164,7 @@ rather than silently reporting "not mirrored".
 ## 6. `audit`: the one command to run before you publish
 
 ```bash
-defendable-science dataset audit --manifest datasets.yml
+defendable-science dataset audit
 ```
 
 `audit` is the whole-manifest sweep, and it checks more than fixity:

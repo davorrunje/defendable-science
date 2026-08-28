@@ -61,11 +61,14 @@ environment changes** (installing `uv`/Python is the user's call), **honest stop
 - **Version pinning:** the plugin and the `defendable-science` package are versioned
   **independently** (ADR-0026). The plugin pins a *compatible range* (currently
   `>=0.3.0,<0.4.0`), not an exact string-lock — the lower bound is the minimum
-  package version the plugin's skills need (bump it deliberately when a skill
-  starts using a new CLI capability — the `literature fetch | confirm | verify
-  | mirror` verbs are why the lower bound moved past `0.2.x`), the upper bound
-  the next incompatible boundary. The package's own releases (PEP 440, `v*`
-  tags → PyPI) proceed on their own cadence.
+  package version the plugin's skills need, the upper bound the next incompatible
+  boundary. Bump the lower bound deliberately, when a skill starts calling a CLI
+  capability an earlier release did not have. **Why it reads `0.3.0`:** the
+  `literature fetch | confirm | verify | mirror` verbs moved it past `0.2.x`, and
+  the same unreleased `0.3.0` is where `research-init`'s `defendable-science init`
+  (and the forthcoming `check`) land — so the bound already covers them and does
+  not move again for them. The package's own releases (PEP 440, `v*` tags → PyPI)
+  proceed on their own cadence.
 - **rclone** (the private-mirror engine) is a separate single static binary — **not
   a Python dependency**; `defendable-science` shells out to it. It is **optional**: only
   private-mirror operations need it (Tier-A git/LFS and Tier-B `pooch` fetch do
