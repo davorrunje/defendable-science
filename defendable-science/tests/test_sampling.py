@@ -212,6 +212,8 @@ def test_sample_reports_the_draw_and_changes_nothing(
     assert payload["batch"] == sorted(BATCH)
     assert payload["size"] == 3
     assert payload["verdict"] is None
+    assert payload["verdict_requested"] is None
+    assert payload["error"] is None
     # Drawing is not recording: nothing on disk moved.
     assert {k: _digest(root, k).read_bytes() for k in BATCH} == before
 
@@ -274,6 +276,7 @@ def test_all_over_an_empty_digests_directory_fails_loudly(
     assert payload["ok"] is False
     assert payload["sample"] == []
     assert "no extracted papers" in result.stderr
+    assert "no extracted papers" in payload["error"]
 
 
 def test_all_without_a_digests_directory_fails_loudly(
@@ -323,7 +326,10 @@ def test_all_refuses_to_draw_at_all_when_an_artifact_is_unreadable(
     assert payload["sample"] == []
     assert payload["batch"] == []
     assert payload["updated"] == []
+    assert payload["verdict"] is None
+    assert payload["verdict_requested"] == "verified"
     assert "cannot be determined" in result.stderr
+    assert "cannot be determined" in payload["error"]
     for citekey in good:
         assert _block(root, citekey)["extraction"]["batch-check"] == "pending"
         assert _block(root, citekey)["extraction"]["in-sample"] is False
@@ -349,7 +355,10 @@ def test_a_failed_verdict_marks_every_member_and_touches_no_cell(
     )
     assert result.exit_code == 0, result.stdout + result.stderr
     payload = json.loads(result.stdout)
+    # A verdict that landed is reported under both keys; they only differ when
+    # the request was refused.
     assert payload["verdict"] == "failed"
+    assert payload["verdict_requested"] == "failed"
     assert payload["updated"] == sorted(BATCH)
     unsampled = [k for k in sorted(BATCH) if k not in EXPECTED_SAMPLE]
     assert unsampled  # the assertion below is only meaningful if some exist
@@ -454,6 +463,14 @@ def test_a_verified_verdict_is_refused_when_a_drawn_paper_was_never_shown(
     assert payload["updated"] == []
     assert payload["log_entries"] == []
     assert "refusing to record a verified batch" in result.stderr
+    # The report must not read as a verified batch on its own terms: a key
+    # called `verdict` is what a careless reader takes for the outcome, so it
+    # carries what was *recorded* — nothing — and the request lives elsewhere.
+    assert payload["verdict"] is None
+    assert payload["verdict"] != "verified"
+    assert payload["verdict_requested"] == "verified"
+    assert payload["ok"] is False
+    assert "refusing to record a verified batch" in payload["error"]
     for citekey in ("a1", "b2"):
         assert _block(root, citekey)["extraction"]["batch-check"] == "pending"
         assert _block(root, citekey)["extraction"]["in-sample"] is False
@@ -612,6 +629,22 @@ def test_a_member_without_an_artifact_is_reported_and_the_rest_still_land(
     assert [e["citekey"] for e in payload["errors"]] == ["ghost"]
     assert payload["updated"] == ["a1", "b2"]
     assert _block(root, "a1")["extraction"]["batch-check"] == "failed"
+
+
+def test_a_verdict_that_landed_on_nobody_is_not_reported_as_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`verdict` names what was written; no member took it, so it is null."""
+    root = _repo(tmp_path, [])
+    result = _run(
+        root, "--citekey", "ghost", "--verdict", "failed", monkeypatch=monkeypatch
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["updated"] == []
+    assert payload["verdict"] is None
+    assert payload["verdict_requested"] == "failed"
 
 
 def test_a_sampled_paper_with_no_cells_block_is_reported(

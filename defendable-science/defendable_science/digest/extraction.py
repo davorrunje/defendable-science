@@ -425,6 +425,23 @@ def _paper_rejections(
     citekey: str, cells: list[Cell], axes: list[str], patterns: list[re.Pattern[str]]
 ) -> list[Rejection]:
     """Return every rejection for one paper's cells (spec §7.2 rules 1-3)."""
+    if citekey.strip() == SELF_ROW:
+        # `render` refuses this row too, but only at the far end and for the
+        # *whole* merge: a recorded `**This paper**` artifact would then block
+        # every other paper's cells from landing, with a message about the
+        # author's own delta rather than about the artifact that poisoned the
+        # batch. Caught here it is one rejected paper, like any other, and the
+        # rest of the batch records. Returned alone — the missing-axis and
+        # locator reasons below would only bury the one that matters.
+        return [
+            Rejection(
+                citekey,
+                None,
+                f"citekey {SELF_ROW} is the matrix's self-reference row — the "
+                "author's own delta, not an extracted paper; record it by hand "
+                "in the positioning document and drop these cells",
+            )
+        ]
     rejections = [
         Rejection(citekey, cell.axis, problem)
         for cell in cells
@@ -466,6 +483,9 @@ def validate(
     accepted cells at all, so no partial row is ever written, while the rest of
     the batch continues — one bad entry must not abort a 40-paper sweep, and
     nothing may half-land (rule 4, the ``fetch_all`` posture).
+
+    A paper whose citekey is `SELF_ROW` is rejected whole for that reason
+    alone: it is the author's own delta, not an extracted paper.
 
     :param cells: Every extracted cell, for any number of papers.
     :param axes: The concept matrix's axes, from :func:`axes_from_positioning`.

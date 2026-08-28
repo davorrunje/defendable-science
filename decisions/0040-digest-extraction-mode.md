@@ -183,7 +183,9 @@ the five decisions above are aspirational rather than enforced:
   move that made `_bind` the single writer of an asset spine in ADR-0037.
   Rules: a shape-checked locator, or the distinguished value `not-addressed`
   with a justification; **every** header axis accounted for per paper; no
-  invented axes; rejection per paper, not per batch. `not-addressed` is counted
+  invented axes; the `**This paper**` self-reference row refused as a citekey,
+  since it is the author's own delta rather than an extracted paper; rejection
+  per paper, not per batch. `not-addressed` is counted
   per paper and in aggregate — that count is the anti-gaming signal, and it is
   cheaper and more honest than asking a checker to adjudicate whether an absence
   is real, which it cannot do without reading the paper.

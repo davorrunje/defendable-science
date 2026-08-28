@@ -961,6 +961,173 @@ def test_record_refuses_bad_locator_pattern_config(
     assert not Layout.default(root.resolve()).digest("sill1997monotonic").exists()
 
 
+# --- the shared report shape (fix: one contract across the four verbs) -------------
+
+
+def test_axes_reports_ok_and_no_error_on_the_happy_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ok`` agrees with the exit code here exactly as it does for the others."""
+    root = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    result = runner.invoke(app, ["digest", "extract", "axes", "--paper", "p1"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["error"] is None
+
+
+def test_axes_still_emits_a_report_when_the_matrix_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal is a report, and ``axes: null`` is not "a matrix with no axes"."""
+    root = _repo(tmp_path, positioning=PLACEHOLDER_POSITIONING)
+    monkeypatch.chdir(root)
+    result = runner.invoke(app, ["digest", "extract", "axes", "--paper", "p1"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    # The negative: a caller must not be able to read the refusal as an empty
+    # question set and go on to extract nothing against it.
+    assert payload["axes"] is None
+    assert payload["axes"] != []
+    assert "template placeholders" in payload["error"]
+    assert payload["positioning"].endswith("positioning.md")
+
+
+def test_record_still_emits_a_report_when_the_input_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The parse failure is a run outcome, so it gets the run's report."""
+    root = _repo(tmp_path)
+    target = root / "cells.json"
+    target.write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(root)
+    result = runner.invoke(
+        app,
+        ["digest", "extract", "record", "--paper", "p1", "--cells", str(target)],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["axes"] is None
+    assert payload["recorded"] == []
+    assert payload["not_addressed"] == 0
+    assert "empty array" in payload["error"]
+
+
+def test_record_reports_no_error_when_everything_landed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["error"] is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["digest", "extract", "axes", "--paper", "p1"], id="axes"),
+        pytest.param(["digest", "extract", "render", "--paper", "p1"], id="render"),
+        pytest.param(["digest", "extract", "sample", "--all"], id="sample"),
+        pytest.param(
+            ["digest", "extract", "record", "--paper", "p1", "--cells", "cells.json"],
+            id="record",
+        ),
+    ],
+)
+def test_every_verb_reports_ok_agreeing_with_its_exit_code(
+    argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One contract for a caller scripting all four: JSON, and ``ok == exit 0``.
+
+    Run against a repo where each verb fails, because the failing paths are the
+    ones that used to disagree — two of them emitted no JSON at all.
+    """
+    root = _repo(tmp_path, positioning=PLACEHOLDER_POSITIONING)
+    (root / "docs" / "research" / "literature" / "digests").mkdir(parents=True)
+    (root / "cells.json").write_text(json.dumps(GOOD_CELLS), encoding="utf-8")
+    monkeypatch.chdir(root)
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]
+
+
+# --- record: the self-reference row is never an extracted paper ---------------------
+
+
+SELF_CELLS: list[dict[str, Any]] = [
+    {
+        "citekey": "**This paper**",
+        "axis": "guarantee type",
+        "value": "architectural",
+        "locator": "§1",
+    },
+    {
+        "citekey": "**This paper**",
+        "axis": "partial monotonicity",
+        "value": "yes",
+        "locator": "§2",
+    },
+]
+
+
+def test_record_refuses_the_self_row_as_a_citekey(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise the artifact lands and poisons every later ``render --all``.
+
+    Every cell here is individually valid, so nothing but this rule stops it.
+    """
+    root = _repo(tmp_path)
+    result = _record(
+        root, SELF_CELLS, "--log-dir", str(root / "log"), monkeypatch=monkeypatch
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["recorded"] == []
+    assert [r["citekey"] for r in payload["rejected"]] == ["**This paper**"]
+    # A whole-paper problem, so no axis is named — and it is the *only* reason
+    # reported, not buried under per-axis noise.
+    assert payload["rejected"][0]["axis"] is None
+    assert "author's own delta" in payload["rejected"][0]["reason"]
+    assert "**This paper**" in result.stderr
+    # Nothing on disk: no artifact to poison a later merge, no log entry.
+    digests = root / "docs" / "research" / "literature" / "digests"
+    assert not list(digests.glob("*.md"))
+    assert not (root / "log").exists()
+
+
+def test_the_self_row_is_rejected_per_paper_and_the_rest_still_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rejection is per paper, not per batch — and the merge still runs.
+
+    The defect this pins: caught only at ``render``, one poisoned artifact
+    refuses the *whole* batch's merge, forever, with a message about the
+    author's own delta rather than about the artifact.
+    """
+    root = _repo(tmp_path)
+    result = _record(root, [*SELF_CELLS, *GOOD_CELLS], monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
+    assert [r["citekey"] for r in payload["rejected"]] == ["**This paper**"]
+    layout = Layout.default(root.resolve())
+    assert layout.digest("sill1997monotonic").is_file()
+    assert not layout.digest("**This paper**").exists()
+    # And the merge the poisoned artifact would have blocked still succeeds.
+    merge = runner.invoke(app, ["digest", "extract", "render", "--paper", "p1"])
+    assert merge.exit_code == 0, merge.stdout + merge.stderr
+    assert json.loads(merge.stdout)["rendered"] == ["sill1997monotonic"]
+
+
 # --- exit codes --------------------------------------------------------------------
 
 

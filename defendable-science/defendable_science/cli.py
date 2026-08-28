@@ -18,7 +18,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date as date_cls
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
@@ -2233,15 +2233,30 @@ def extract_axes(paper: _PaperOpt = None, positioning: _PositioningOpt = None) -
         resolved.
     """
     _config, _layout, path = _positioning_context(paper, positioning)
+    axes: list[str] | None = None
+    error: str | None = None
     try:
         axes = extraction_mod.axes_from_positioning(path)
     except extraction_mod.ExtractionError as exc:
         typer.echo(f"digest extract axes failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
-    # Reported absolute whichever branch resolved it: a consumer keying or
-    # diffing runs must not see two shapes for one document.
-    typer.echo(json.dumps({"positioning": str(path.resolve()), "axes": axes}, indent=2))
-    raise typer.Exit(code=0)
+        error = str(exc)
+    # Emitted on the refusal too, and `axes` is then `null` rather than `[]`:
+    # all four verbs report the same way, and a caller must never be able to
+    # read a matrix this run could not parse as a matrix with no axes.
+    # `positioning` is reported absolute whichever branch resolved it: a
+    # consumer keying or diffing runs must not see two shapes for one document.
+    typer.echo(
+        json.dumps(
+            {
+                "ok": error is None,
+                "positioning": str(path.resolve()),
+                "axes": axes,
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if error is None else 1)
 
 
 def _parse_cells(raw: str) -> list[extraction_mod.Cell]:
@@ -2285,6 +2300,60 @@ def _parse_cells(raw: str) -> list[extraction_mod.Cell]:
                 f"--cells item {index}: {exc}"
             ) from exc
     return cells
+
+
+def _emit_record_report(
+    positioning: Path,
+    *,
+    axes: list[str] | None,
+    error: str | None = None,
+    recorded: list[dict[str, Any]] | None = None,
+    rejected: list[extraction_mod.Rejection] | None = None,
+    errors: list[dict[str, str]] | None = None,
+    triage_not_updated: list[dict[str, str]] | None = None,
+) -> NoReturn:
+    """Print ``record``'s JSON report and exit.
+
+    Emitted on every outcome, the unusable-input one included — a caller
+    scripting the four ``extract`` verbs must not have to special-case a run
+    that produced no JSON at all. ``error`` carries the whole-run failure that
+    stopped the command before it could validate anything; the per-paper
+    failures stay in their own three buckets, which mean different things and
+    must not be conflated. ``axes`` is ``null``, never ``[]``, when the matrix
+    could not be read: a matrix with no axes is a different fact.
+
+    :param positioning: The positioning document, reported absolute.
+    :param axes: The matrix's axes, or ``None`` if they could not be read.
+    :param error: The whole-run failure, if any.
+    :param recorded: The papers whose cells landed.
+    :param rejected: The validation refusals.
+    :param errors: The papers whose artifact write failed.
+    :param triage_not_updated: The papers whose cells landed but whose triage
+        row did not.
+    :raises typer.Exit: Code 0 when everything landed; code 1 otherwise.
+    """
+    recorded = recorded or []
+    rejected = rejected or []
+    errors = errors or []
+    triage_not_updated = triage_not_updated or []
+    ok = not (error or rejected or errors or triage_not_updated)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "positioning": str(positioning.resolve()),
+                "axes": axes,
+                "recorded": recorded,
+                "rejected": [dataclasses.asdict(r) for r in rejected],
+                "errors": errors,
+                "triage_not_updated": triage_not_updated,
+                "not_addressed": sum(r["not_addressed"] for r in recorded),
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
 
 
 @extract.command(name="record")
@@ -2354,7 +2423,7 @@ def extract_record(
         parsed = _parse_cells(raw)
     except (extraction_mod.ExtractionError, OSError) as exc:
         typer.echo(f"digest extract record failed: {exc}", err=True)
-        raise typer.Exit(code=1) from exc
+        _emit_record_report(path, axes=None, error=str(exc))
 
     accepted, rejections = extraction_mod.validate(parsed, axes, patterns)
     date = date_cls.today().isoformat()
@@ -2427,22 +2496,14 @@ def extract_record(
 
     for rejection in rejections:
         typer.echo(extraction_mod.render_rejection(rejection), err=True)
-    typer.echo(
-        json.dumps(
-            {
-                "ok": not (rejections or errors or triage_not_updated),
-                "positioning": str(path.resolve()),
-                "axes": axes,
-                "recorded": recorded,
-                "rejected": [dataclasses.asdict(r) for r in rejections],
-                "errors": errors,
-                "triage_not_updated": triage_not_updated,
-                "not_addressed": sum(r["not_addressed"] for r in recorded),
-            },
-            indent=2,
-        )
+    _emit_record_report(
+        path,
+        axes=axes,
+        recorded=recorded,
+        rejected=rejections,
+        errors=errors,
+        triage_not_updated=triage_not_updated,
     )
-    raise typer.Exit(code=1 if rejections or errors or triage_not_updated else 0)
 
 
 #: The verdicts a human may record on a sampled check. Deliberately not
@@ -2593,12 +2654,13 @@ def _emit_sample_report(
     members: list[str],
     verdict: str | None,
     errors: list[dict[str, str]],
+    error: str | None = None,
     sample: list[str] | None = None,
     sampled: list[dict[str, Any]] | None = None,
     not_shown: list[str] | None = None,
     updated: list[str] | None = None,
     log_entries: list[str] | None = None,
-) -> None:
+) -> NoReturn:
     """Print the run's JSON report and exit.
 
     ``size`` counts the papers *drawn*; ``sampled`` lists the ones whose cells
@@ -2607,9 +2669,19 @@ def _emit_sample_report(
     leaving a reader to diff two lists — the report must not imply the run
     established more than it did.
 
+    ``verdict`` is what was **recorded**, not what was asked for: a run that
+    refused a ``verified`` verdict reports ``null`` there and names the request
+    under ``verdict_requested``. The two are separate keys because a key called
+    ``verdict`` reading ``verified`` on a run that wrote nothing is one careless
+    read away from being taken for the outcome — and the outcome is what a
+    verdict key will be read as, whatever the neighbouring keys say.
+
     :param members: The batch.
-    :param verdict: The verdict recorded, if any.
-    :param errors: Everything that failed.
+    :param verdict: The verdict asked for, if any; reported as recorded only
+        when it actually landed on a member.
+    :param errors: Everything that failed, per paper.
+    :param error: The whole-run failure that stopped the command, if any —
+        an unknowable batch, an empty one, or a refused ``verified`` verdict.
     :param sample: The drawn citekeys.
     :param sampled: The drawn papers whose cells were read, with those cells.
     :param not_shown: Drawn papers whose cells could not be read.
@@ -2618,7 +2690,8 @@ def _emit_sample_report(
     :raises typer.Exit: Code 0 when the batch is non-empty and nothing failed;
         code 1 otherwise.
     """
-    ok = bool(members) and not errors
+    written = updated or []
+    ok = bool(members) and not errors and error is None
     typer.echo(
         json.dumps(
             {
@@ -2626,12 +2699,16 @@ def _emit_sample_report(
                 "batch": members,
                 "size": len(sample or []),
                 "sample": sample or [],
-                "verdict": verdict,
+                # Non-null only if it landed somewhere: a verdict nobody
+                # recorded is a request, and belongs under the other key.
+                "verdict": verdict if written else None,
+                "verdict_requested": verdict,
                 "sampled": sampled or [],
                 "not_shown": not_shown or [],
-                "updated": updated or [],
+                "updated": written,
                 "log_entries": log_entries or [],
                 "errors": errors,
+                "error": error,
             },
             indent=2,
         )
@@ -2749,15 +2826,21 @@ def extract_sample(
         # feature built to prevent that. And a verdict recorded here would be a
         # statement about a population the run has just admitted it cannot
         # determine.
-        typer.echo(
+        unknowable = (
             f"digest extract sample failed: {len(errors)} artifact(s) under "
             f"{layout.digests_dir} could not be read, so the batch cannot be "
             "determined; nothing was drawn and nothing was written — repair "
-            "them, or name the batch explicitly with --citekey",
-            err=True,
+            "them, or name the batch explicitly with --citekey"
         )
-        _emit_sample_report(members=[], verdict=verdict, errors=errors)
+        typer.echo(unknowable, err=True)
+        _emit_sample_report(
+            members=[], verdict=verdict, errors=errors, error=unknowable
+        )
 
+    # The headline of a whole-run failure, reported in the JSON as well as on
+    # stderr: a caller reading only the report must not have to infer why an
+    # empty draw is empty.
+    error: str | None = None
     sample: list[str] = []
     if members:
         sample = sampling_mod.select_sample(
@@ -2767,12 +2850,12 @@ def extract_sample(
     else:
         # Not a passed sample of size zero: no paper was checked, and saying so
         # is the whole point of the command.
-        typer.echo(
+        error = (
             f"digest extract sample failed: no extracted papers under "
             f"{layout.digests_dir} — nothing was sampled and nothing was "
-            "checked; run `digest extract record` first",
-            err=True,
+            "checked; run `digest extract record` first"
         )
+        typer.echo(error, err=True)
     drawn_cells, sampled = _read_sampled_cells(layout, sample, errors)
     not_shown = [key for key in sample if key not in drawn_cells]
 
@@ -2783,14 +2866,14 @@ def extract_sample(
         # and the check it claims did not happen for these papers. Exit 1 alone
         # would not do: the exit code is transient, and the artifact is what
         # every downstream reader consults.
-        typer.echo(
+        error = (
             "digest extract sample: refusing to record a verified batch — "
             f"{len(not_shown)} of the {len(sample)} drawn papers "
             f"({', '.join(not_shown)}) could not be shown to the human, so the "
             "verification the verdict claims did not happen; repair them and "
-            "re-run, or record `failed`",
-            err=True,
+            "re-run, or record `failed`"
         )
+        typer.echo(error, err=True)
     elif verdict is not None:
         updated, log_entries = _apply_verdict(
             layout,
@@ -2805,6 +2888,7 @@ def extract_sample(
         members=members,
         sample=sample,
         verdict=verdict,
+        error=error,
         sampled=sampled,
         not_shown=not_shown,
         updated=updated,
@@ -2890,6 +2974,11 @@ def extract_render(
     """
     _config, layout, path = _positioning_context(paper, positioning)
     errors: list[dict[str, str]] = []
+    # The headline of a whole-run failure — an unknowable batch, an empty one,
+    # or a refused merge — reported in the JSON as well as on stderr, so that a
+    # caller reading only the report is never left with an unexplained
+    # ``ok: false``.
+    error: str | None = None
     if citekey:
         batch = sorted(set(citekey))
     else:
@@ -2900,24 +2989,25 @@ def extract_render(
         # "run `digest extract record`" would be the wrong repair. The headline
         # sentence has to say which of the two happened, not just the errors
         # underneath it.
-        typer.echo(
+        error = (
             f"digest extract render failed: {len(errors)} artifact(s) under "
             f"{layout.digests_dir} could not be read and none could be loaded, "
             "so whether any paper has been extracted is unknown; nothing was "
-            f"rendered and {path} was not touched — repair them and re-run",
-            err=True,
+            f"rendered and {path} was not touched — repair them and re-run"
         )
+        typer.echo(error, err=True)
     elif not batch:
         # Not "rendered zero rows": no paper was extracted, and the matrix is
         # left alone rather than rewritten to say so.
-        typer.echo(
+        error = (
             f"digest extract render failed: no extracted papers under "
             f"{layout.digests_dir} — nothing was rendered and {path} was not "
-            "touched; run `digest extract record` first",
-            err=True,
+            "touched; run `digest extract record` first"
         )
+        typer.echo(error, err=True)
     rows = _cells_to_render(layout, batch, errors)
     changed = False
+    rendered = sorted(rows)
     if rows:
         try:
             before = path.read_text(encoding="utf-8")
@@ -2926,22 +3016,28 @@ def extract_render(
                 path.write_text(merged, encoding="utf-8")
                 changed = True
         except (extraction_mod.ExtractionError, OSError) as exc:
-            typer.echo(f"digest extract render failed: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
+            # The refusal leaves the document byte-identical, so no paper was
+            # merged: `rendered` is emptied rather than left naming the papers
+            # this run *would* have written.
+            error = f"digest extract render failed: {exc}"
+            typer.echo(error, err=True)
+            rendered = []
+    ok = bool(batch) and not errors and error is None
     typer.echo(
         json.dumps(
             {
-                "ok": bool(batch) and not errors,
+                "ok": ok,
                 "positioning": str(path.resolve()),
                 "batch": batch,
-                "rendered": sorted(rows),
+                "rendered": rendered,
                 "changed": changed,
                 "errors": errors,
+                "error": error,
             },
             indent=2,
         )
     )
-    raise typer.Exit(code=0 if batch and not errors else 1)
+    raise typer.Exit(code=0 if ok else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

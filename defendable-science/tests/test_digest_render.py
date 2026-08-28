@@ -410,6 +410,41 @@ def test_render_refuses_a_placeholder_matrix_without_writing(
     assert _positioning(root).read_bytes() == before
 
 
+def test_render_still_emits_a_report_when_the_merge_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused merge is a run outcome, so it gets the run's report too.
+
+    And the report must not claim the papers it *would* have written: the
+    document is byte-identical, so nothing was rendered.
+    """
+    placeholder = (
+        "# Positioning\n\n## Concept matrix\n\n| Method | <attr 1> |\n|---|---|\n"
+    )
+    root = _repo(tmp_path, placeholder)
+    _extract(root, "x2020", {"guarantee type": "v", "partial monotonicity": "no"})
+    before = _positioning(root).read_bytes()
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["batch"] == ["x2020"]
+    assert payload["rendered"] == []
+    assert payload["changed"] is False
+    assert "template placeholders" in payload["error"]
+    assert _positioning(root).read_bytes() == before
+
+
+def test_render_reports_no_error_when_the_merge_lands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path)
+    _extract(root, "x2020", {"guarantee type": "v", "partial monotonicity": "no"})
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["error"] is None
+
+
 def test_render_reports_a_write_failure_rather_than_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

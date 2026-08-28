@@ -297,6 +297,35 @@ def test_one_bad_paper_does_not_reject_a_good_one() -> None:
     assert {r.citekey for r in rejections} == {"bad"}
 
 
+def test_the_self_row_citekey_rejects_the_whole_paper() -> None:
+    """`**This paper**` is the author's own delta, never an extracted paper.
+
+    Caught here rather than only at the merge: an artifact recorded under this
+    citekey makes every later ``render --all`` refuse the *whole* batch.
+    """
+    accepted, rejections = ex.validate(_full(ex.SELF_ROW), AXES, PATTERNS)
+    assert accepted == {}
+    assert [r.citekey for r in rejections] == [ex.SELF_ROW]
+    # One reason, and a whole-paper one: no axis, and no per-axis noise on top.
+    assert rejections[0].axis is None
+    assert "author's own delta" in rejections[0].reason
+
+
+def test_the_self_row_is_rejected_per_paper_not_per_batch() -> None:
+    """The established posture: one bad paper must not take the batch with it."""
+    accepted, rejections = ex.validate(
+        [*_full("good"), *_full(ex.SELF_ROW)], AXES, PATTERNS
+    )
+    assert set(accepted) == {"good"}
+    assert {r.citekey for r in rejections} == {ex.SELF_ROW}
+
+
+def test_a_padded_self_row_citekey_is_rejected_too() -> None:
+    """Whitespace must not be a way past the rule."""
+    _, rejections = ex.validate(_full(f"  {ex.SELF_ROW} "), AXES, PATTERNS)
+    assert [r.axis for r in rejections] == [None]
+
+
 def test_not_addressed_needs_a_justification_not_a_locator() -> None:
     cells = [
         _cell(),

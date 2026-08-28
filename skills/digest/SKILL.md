@@ -204,15 +204,31 @@ defendable-science digest extract render [--citekey KEY ...] [--paper ID] [--pos
 when omitted (ADR-0039); pass them only when running from outside a paper
 directory or against a document the layout does not own.
 
+**One report shape across the four.** Every verb prints a JSON report on
+**every** outcome, refusals included, and every report carries:
+
+- `ok` — `true` exactly when the command exited 0. Never read success off any
+  other key.
+- `error` — `null`, or the one whole-run failure that stopped the command
+  (an unusable matrix, an unusable input, an unknowable batch, a refused
+  merge). Per-item failures live in each verb's own buckets (`rejected[]`,
+  `errors[]`, `triage_not_updated[]`) and are **not** duplicated here.
+
+Exit 2 is Click's, and only Click's: a usage error (an unknown option, a
+missing required one, `--paper` unresolvable) prints a usage message, not a
+report. Anything else prints one.
+
 ### 1. `axes` — get the question set, before reading anything
 
 ```
 defendable-science digest extract axes
 ```
 
-Prints `{"positioning": …, "axes": [...]}` — the matrix header minus its first
-column. Run it **first**. It refuses (exit 1) rather than letting a batch be
-read against a matrix that is not ready. The refusals, in full: **no
+Prints `{"ok": true, "positioning": …, "axes": [...], "error": null}` — the
+matrix header minus its first column. Run it **first**. It refuses (exit 1)
+rather than letting a batch be read against a matrix that is not ready; the
+refusal still prints a report, with `axes: null` — **never `[]`**, which would
+say the matrix has no axes rather than that this run could not read it. The refusals, in full: **no
 positioning document at that path**; no concept-matrix section; more than one
 section carrying that heading; no table in the section; **more than one table
 inside the section**; a missing `|---|` separator; ragged rows; unreplaced
@@ -260,7 +276,12 @@ the only writer. The rules:
    counted.
 3. An axis that is not in the header is refused — it would silently widen the
    matrix.
-4. **Rejection is per paper, not per batch.** A paper with one bad cell is
+4. **`**This paper**` is refused as a citekey.** It is the matrix's
+   self-reference row — the author's own delta, not an extracted paper. Record
+   it by hand in the positioning document. (`render` refuses it too, but by
+   then the artifact exists and refuses the *whole* batch's merge, so the
+   refusal belongs here.)
+5. **Rejection is per paper, not per batch.** A paper with one bad cell is
    rejected whole (no partial row, no artifact, no log entry) and the rest of
    the batch still lands.
 
@@ -303,6 +324,10 @@ conflate**:
 
 Report all three. "3 cells rejected" sends the reader hunting; name the paper
 and the axis.
+
+A run that could not read the matrix or parse `--cells` at all validated
+nothing, so it fills none of the three: it reports `error` with the reason,
+`axes: null`, and empty buckets. That is not a clean run.
 
 **What `record` writes to `triage.yml`**: exactly two factual fields per
 recorded paper — `extracted: <date>` and `extraction-cells: <int>`. It **never
@@ -351,6 +376,12 @@ Reading the sample report: `size` counts the papers *drawn*, `sampled[]` lists
 the ones whose cells could actually be shown, and `not_shown[]` names the
 difference. Do not diff two lists to find it, and do not report a draw as a
 check.
+
+**`verdict` is what was recorded; `verdict_requested` is what was asked for.**
+They are two keys because they come apart: a refused `verified` verdict, or one
+no member could be written, reports `verdict: null` next to
+`verdict_requested: "verified"`, with `updated: []` and the reason in `error`.
+Read the outcome off `verdict` (and `ok`), never off the request.
 
 **A failed sample is evidence about the batch, not about one paper.** A process
 that produced one confidently-wrong cell in a sample of three probably produced
@@ -422,12 +453,18 @@ cases — plus three of its own:
   re-extract against the new axes — so surface it rather than guessing;
 - two rows in the file already carrying the **same** citekey — which row is
   *the* row cannot be guessed, so merge or delete the duplicates by hand first;
-- asking to render the `**This paper**` row, which is the author's own delta.
+- asking to render the `**This paper**` row, which is the author's own delta —
+  a backstop only, since `record` refuses that citekey before an artifact for
+  it can exist.
 
 A paper whose artifact cannot be read is reported in `errors[]` and its row
 left alone — the rest of the batch still lands, because skipping it changes
 nothing on disk while refusing the whole merge would strand every other
 paper's cells.
+
+A refused merge still prints its report, with the reason in `error` and
+`rendered: []` — the document is byte-identical, so no paper was merged, and
+the report must not name the ones this run *would* have written.
 
 ### The extraction artifact
 
