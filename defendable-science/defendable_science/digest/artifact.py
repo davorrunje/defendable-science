@@ -271,6 +271,35 @@ def _load_payload(payload: str, path: Path) -> tuple[str, list[Any]]:
     return citekey, items
 
 
+def cells_markers_present(text: str, path: Path) -> bool:
+    """Whether `text`'s body carries delimited cells markers, sound or not.
+
+    Distinguishes "no cells were ever recorded" (a legitimate absence,
+    ``False``) from "cells were recorded, but the markers are malformed" (a
+    defect, raised) — the split :func:`~.check.checks.check_extraction`
+    needs to validate a depth-sourced cells block (an artifact with no
+    ``status.extraction`` block, defendable-science#142) without treating
+    "nothing recorded yet" as a finding (defendable-science#167).
+    :func:`cells_from_text` cannot answer this alone: it raises the same
+    `ExtractionError` type whether the markers are simply absent or present
+    but broken, and a caller needs to tell those two apart before deciding
+    whether silence is correct.
+
+    :param text: The artifact's full contents, already read.
+    :param path: The artifact's path, named in any raised error.
+    :returns: Whether cells markers are present. Their *content* may still be
+        malformed — call :func:`cells_from_text` to find out once this
+        returns ``True``.
+    :raises ExtractionError: If `text` has no frontmatter, or the markers are
+        present but not a single well-ordered pair.
+    """
+    try:
+        _, body = split_frontmatter(text)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    return _locate_block(body, path) is not None
+
+
 def cells_from_text(text: str, path: Path) -> list[Cell]:
     """Parse a paper's recorded cells out of already-read artifact `text`.
 

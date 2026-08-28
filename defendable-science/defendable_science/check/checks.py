@@ -1246,7 +1246,7 @@ def _check_extraction_cells(
 
 
 def check_extraction(layout: Layout, probe: Probe) -> list[Finding]:
-    """Report every digest artifact whose ``status.extraction`` block is unsound.
+    """Report every digest artifact whose recorded cells are unsound.
 
     Extraction mode (#100) writes a second status contract into a paper's
     digest artifact — ``status.extraction`` — that ``progress`` reads into its
@@ -1258,28 +1258,38 @@ def check_extraction(layout: Layout, probe: Probe) -> list[Finding]:
 
     Reuses the writer's own parsers
     (:func:`~.artifact.extraction_status_from_text`,
-    :func:`~.artifact.cells_from_text`) and the extraction library's own
-    rules (:func:`~.extraction.is_valid_locator`,
+    :func:`~.artifact.cells_markers_present`, :func:`~.artifact.cells_from_text`)
+    and the extraction library's own rules (:func:`~.extraction.is_valid_locator`,
     :data:`~.artifact.BATCH_CHECK_VERDICTS`) rather than reimplementing them,
     so a block this reports as sound can never be one the writer, or
     ``digest extract sample``, would refuse.
 
-    An artifact with no ``status.extraction`` block is not a finding at all —
-    it may be a depth-mode-only reading record, or a paper never digested,
-    and both are legitimately silent here. An artifact carrying both
+    A ``status.extraction`` block, when present, is validated in full:
+    ``batch-check``/``locators``/``in-sample`` (:func:`_check_extraction_fields`)
+    and the claimed ``cells`` count against the actual block
+    (:func:`_check_extraction_cells`). A depth-sourced cells block — one with
+    **no** ``status.extraction`` at all (ADR-0042, defendable-science#142) —
+    has no such count to claim, so it is validated per-cell only
+    (:func:`_check_cell`: locator shape, ``NOT_ADDRESSED`` justification),
+    the same rigor an extraction-sourced cell gets (defendable-science#167).
+    An artifact with **neither** a ``status.extraction`` block **nor** any
+    cells recorded is not a finding at all — it may be a depth-mode-only
+    reading record with no matrix cells yet, or a paper never digested, and
+    both are legitimately silent here. An artifact carrying both
     ``understanding`` and ``extraction`` is validated only against
     ``extraction``'s own rules; ``understanding`` is a different, stronger
     claim this check does not touch.
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: Findings for each unsound ``status.extraction`` block.
-        ``unreadable`` for a digest artifact that could not be read at all;
-        ``invalid`` for every other defect — a malformed frontmatter block, a
-        cells-block mismatch, a bad enum, a wrong type, or a cell missing its
-        locator or justification. Every one of these is a structurally wrong
-        value in a machine-read contract, never a legitimately-incomplete
-        state, so none is a ``gap``.
+    :returns: Findings for each unsound recorded-cells block, extraction- or
+        depth-sourced. ``unreadable`` for a digest artifact that could not be
+        read at all; ``invalid`` for every other defect — a malformed
+        frontmatter block, malformed cells markers, a cells-block mismatch, a
+        bad enum, a wrong type, or a cell missing its locator or
+        justification. Every one of these is a structurally wrong value in a
+        machine-read contract, never a legitimately-incomplete state, so none
+        is a ``gap``.
     """
     findings: list[Finding] = []
     patterns: list[re.Pattern[str]] | None = None
@@ -1307,16 +1317,97 @@ def check_extraction(layout: Layout, probe: Probe) -> list[Finding]:
                 )
             )
             continue
-        if extraction is None:
+        if extraction is not None:
+            if patterns is None:
+                patterns = _extraction_locator_patterns(layout, probe)
+            findings.extend(_check_extraction_fields(rel, extraction))
+            findings.extend(
+                _check_extraction_cells(rel, path, text, extraction, patterns)
+            )
             continue
 
-        if patterns is None:
-            patterns = _extraction_locator_patterns(layout, probe)
-
-        findings.extend(_check_extraction_fields(rel, extraction))
-        findings.extend(_check_extraction_cells(rel, path, text, extraction, patterns))
+        depth_findings, depth_patterns = _check_depth_sourced_cells(
+            layout, probe, rel, path, text, patterns
+        )
+        findings.extend(depth_findings)
+        if depth_patterns is not None:
+            patterns = depth_patterns
 
     return findings
+
+
+def _check_depth_sourced_cells(
+    layout: Layout,
+    probe: Probe,
+    rel: str,
+    path: Path,
+    text: str,
+    patterns: list[re.Pattern[str]] | None,
+) -> tuple[list[Finding], list[re.Pattern[str]] | None]:
+    """Validate a cells block on an artifact with no ``status.extraction`` (#167).
+
+    Either nothing has been recorded for this paper at all (legitimately
+    silent), or it carries a depth-sourced cells block (#142) — no
+    ``status.extraction.cells`` count to cross-check against, but every cell
+    still owes the same locator/justification rigor an extraction-sourced one
+    is held to (:func:`_check_cell`).
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :param rel: The artifact's repo-relative path, for the findings.
+    :param path: The artifact's absolute path, for the parsers' own errors.
+    :param text: The artifact's full contents, already read through `probe`.
+    :param patterns: The locator patterns computed so far, or ``None`` if none
+        have been needed yet.
+    :returns: The findings for this artifact, and the locator patterns to
+        carry forward (``None`` if this artifact never needed them).
+    """
+    try:
+        has_cells = artifact_mod.cells_markers_present(text, path)
+    except extraction_mod.ExtractionError as exc:
+        return (
+            [
+                Finding(
+                    severity="invalid",
+                    check=EXTRACTION_CHECK,
+                    file=rel,
+                    message=str(exc),
+                    remedy=(
+                        f"fix the extracted-cells markers in {rel}, or delete "
+                        "the block by hand"
+                    ),
+                )
+            ],
+            patterns,
+        )
+    if not has_cells:
+        return [], patterns
+
+    if patterns is None:
+        patterns = _extraction_locator_patterns(layout, probe)
+    try:
+        cells = artifact_mod.cells_from_text(text, path)
+    except extraction_mod.ExtractionError as exc:
+        return (
+            [
+                Finding(
+                    severity="invalid",
+                    check=EXTRACTION_CHECK,
+                    file=rel,
+                    message=str(exc),
+                    remedy=(
+                        f"{rel} has a cells block with no `status.extraction` "
+                        "(depth-sourced), but its content is malformed; "
+                        "repair it or re-run `digest depth cells record`"
+                    ),
+                )
+            ],
+            patterns,
+        )
+    findings: list[Finding] = []
+    for cell in cells:
+        findings.extend(_check_cell(rel, cell, patterns))
+    return findings, patterns
 
 
 # --- registries checks -------------------------------------------------------

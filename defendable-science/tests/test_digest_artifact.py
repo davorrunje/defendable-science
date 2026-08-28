@@ -1217,3 +1217,31 @@ def test_has_understanding_without_cells_refuses_unparseable_frontmatter(
     target.write_text("not a digest at all\n", encoding="utf-8")
     with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
         art.has_understanding_without_cells(target)
+
+
+def test_cells_markers_present_is_false_with_no_markers_at_all(tmp_path: Path) -> None:
+    path = tmp_path / f"{CITEKEY}.md"
+    assert (
+        art.cells_markers_present("---\nstatus:\n---\n\nno cells here\n", path) is False
+    )
+
+
+def test_cells_markers_present_is_true_for_a_well_formed_block(tmp_path: Path) -> None:
+    path = tmp_path / f"{CITEKEY}.md"
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(DEPTH_ARTIFACT, encoding="utf-8")
+    _write_depth(target, tmp_path / "log")
+    assert art.cells_markers_present(target.read_text(encoding="utf-8"), path) is True
+
+
+def test_cells_markers_present_raises_on_duplicated_markers(tmp_path: Path) -> None:
+    path = tmp_path / f"{CITEKEY}.md"
+    text = f"---\nstatus:\n---\n\n{art.CELLS_BEGIN}\n{art.CELLS_END}\n{art.CELLS_BEGIN}\n{art.CELLS_END}\n"
+    with pytest.raises(ex.ExtractionError, match="malformed"):
+        art.cells_markers_present(text, path)
+
+
+def test_cells_markers_present_refuses_unparseable_frontmatter(tmp_path: Path) -> None:
+    path = tmp_path / f"{CITEKEY}.md"
+    with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
+        art.cells_markers_present("not a digest at all\n", path)
