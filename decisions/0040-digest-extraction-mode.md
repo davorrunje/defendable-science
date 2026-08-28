@@ -55,7 +55,7 @@ one. #97 filed that as the harm, not as a theoretical risk.
 
 ## Considered options
 
-Five axes, each with a genuinely plausible alternative. Chosen options marked;
+Six axes, each with a genuinely plausible alternative. Chosen options marked;
 each rejection is argued in *Rejected alternatives* below.
 
 **Where extraction lives.**

@@ -212,11 +212,12 @@ defendable-science digest extract axes
 
 Prints `{"positioning": …, "axes": [...]}` — the matrix header minus its first
 column. Run it **first**. It refuses (exit 1) rather than letting a batch be
-read against a matrix that is not ready. The refusals, in full: no
-concept-matrix section; more than one section carrying that heading; no table
-in the section; **more than one table inside the section**; a missing `|---|`
-separator; ragged rows; unreplaced `<attr N>` placeholders; an unnamed column;
-no axes beyond the row label; two columns sharing a name. Every refusal names
+read against a matrix that is not ready. The refusals, in full: **no
+positioning document at that path**; no concept-matrix section; more than one
+section carrying that heading; no table in the section; **more than one table
+inside the section**; a missing `|---|` separator; ragged rows; unreplaced
+`<attr N>` placeholders; an unnamed column; no axes beyond the row label; two
+columns sharing a name. Every refusal names
 the file and the repair. Fix the matrix with the human; do not work around it.
 
 The `**This paper**` row is the author's own delta, never a paper to extract.
@@ -407,23 +408,21 @@ the last two are irreversible-by-hand tidying:
    collapsed.
 3. **GFM alignment specifiers (`|:---:|`) are dropped** from the separator row.
 
-Four refusals leave the file **byte-identical** rather than writing at a guess:
+Refusals leave the file **byte-identical** rather than writing at a guess.
+`render` reads the matrix the same way `axes` does, so it performs **every
+refusal in the `axes` list above** — including a missing document, unreplaced
+`<attr N>` placeholders, a duplicate column name, and both ambiguous-matrix
+cases — plus three of its own:
 
-- two sections carrying the concept-matrix heading;
-- more than one table inside that section;
-- a header with a duplicate column name — two columns of one name collapse into
-  a single cell, which would destroy the row labels;
 - **a recorded cell naming an axis the matrix no longer has.** This is the one
   you will actually hit: rename or delete a column between `record` and
   `render` and the whole merge refuses, because writing the cell would need a
   column that does not exist and dropping it would lose a recorded cell
   silently. The remedy is the human's call — restore the column name, or
-  re-extract against the new axes — so surface it rather than guessing.
-
-Two further refusals, on the same byte-identical terms: asking to render the
-`**This paper**` row (the author's own delta), and two rows in the file already
-carrying the **same** citekey — which row is *the* row cannot be guessed, so
-merge or delete the duplicates by hand first.
+  re-extract against the new axes — so surface it rather than guessing;
+- two rows in the file already carrying the **same** citekey — which row is
+  *the* row cannot be guessed, so merge or delete the duplicates by hand first;
+- asking to render the `**This paper**` row, which is the author's own delta.
 
 A paper whose artifact cannot be read is reported in `errors[]` and its row
 left alone — the rest of the batch still lands, because skipping it changes
