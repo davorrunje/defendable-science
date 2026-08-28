@@ -215,3 +215,92 @@ def test_repo_root_with_dotdot_is_canonicalized() -> None:
     assert out.rel(out.literature_dir) == Path("writing/literature")
     assert out.rel(out.datasets_manifest) == Path("datasets.yml")
     assert out.rel(out.thesis_dir) == Path("writing/thesis")
+
+
+# --- recording a layout back into config.yml (#133) ------------------------
+
+
+def test_a_default_layout_records_nothing() -> None:
+    """ADR-0039's defaults-omitted rule: a matching repo records no key."""
+    assert lay.recorded_layout(lay.Layout.default(Path("/repo"))) == {}
+
+
+def test_recording_omits_the_keys_that_derive_from_the_research_root() -> None:
+    """`literature_dir` and `thesis_dir` follow a moved research root."""
+    out = lay.layout_from_overrides({"research_root": "writing"}, Path("/repo"))
+
+    assert lay.recorded_layout(out) == {"research_root": "writing"}
+
+
+def test_recording_keeps_every_divergent_key() -> None:
+    out = lay.layout_from_overrides(
+        {
+            "research_root": "writing/",
+            "literature_dir": "bib/",
+            "datasets_manifest": "data/datasets.yml",
+            "thesis_dir": "phd/",
+        },
+        Path("/repo"),
+    )
+
+    assert lay.recorded_layout(out) == {
+        "research_root": "writing",
+        "literature_dir": "bib",
+        "datasets_manifest": "data/datasets.yml",
+        "thesis_dir": "phd",
+    }
+
+
+def test_overrides_reuse_the_containment_rule() -> None:
+    with pytest.raises(lay.LayoutError) as excinfo:
+        lay.layout_from_overrides({"literature_dir": "../bib"}, Path("/repo"))
+
+    assert "layout.literature_dir" in str(excinfo.value)
+    assert "stay inside the repository" in str(excinfo.value)
+
+
+def test_overrides_of_nothing_are_the_default_layout() -> None:
+    assert lay.layout_from_overrides({}, Path("/repo")) == lay.Layout.default(
+        Path("/repo")
+    )
+
+
+def test_no_conflict_when_the_requested_keys_agree_with_the_recorded_ones() -> None:
+    recorded = lay.resolve_layout(
+        {"layout": {"research_root": "writing"}}, Path("/repo")
+    )
+    requested = lay.layout_from_overrides({"research_root": "writing/"}, Path("/repo"))
+
+    assert lay.layout_conflicts(recorded, requested, ["research_root"]) == []
+
+
+def test_a_conflict_names_the_key_and_both_values() -> None:
+    recorded = lay.Layout.default(Path("/repo"))
+    requested = lay.layout_from_overrides(
+        {"research_root": "writing", "literature_dir": "bib"}, Path("/repo")
+    )
+
+    conflicts = lay.layout_conflicts(
+        recorded, requested, ["research_root", "literature_dir"]
+    )
+
+    assert conflicts == [
+        lay.LayoutConflict(
+            key="research_root",
+            recorded=Path("/repo/docs/research"),
+            requested=Path("/repo/writing"),
+        ),
+        lay.LayoutConflict(
+            key="literature_dir",
+            recorded=Path("/repo/docs/research/literature"),
+            requested=Path("/repo/bib"),
+        ),
+    ]
+
+
+def test_only_the_named_keys_are_compared() -> None:
+    """An option the author did not pass cannot conflict with anything."""
+    recorded = lay.Layout.default(Path("/repo"))
+    requested = lay.layout_from_overrides({"thesis_dir": "phd"}, Path("/repo"))
+
+    assert lay.layout_conflicts(recorded, requested, ["research_root"]) == []

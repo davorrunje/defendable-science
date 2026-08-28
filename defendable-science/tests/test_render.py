@@ -211,3 +211,40 @@ def test_merge_gitignore_from_empty() -> None:
     merged = r.merge_gitignore("", [".defendable-science/keys.json"])
 
     assert merged == "# defendable-science\n.defendable-science/keys.json\n"
+
+
+def test_rendered_config_records_a_divergent_layout(tmp_path: Path) -> None:
+    """The block it writes must be the block `resolve_layout` reads back (#133)."""
+    path = tmp_path / "config.yml"
+    path.write_text(
+        r.render_config(
+            layout_block={"research_root": "writing", "literature_dir": "my bib: 1"}
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config["layout"] == {
+        "research_root": "writing",
+        "literature_dir": "my bib: 1",
+    }
+    assert config["cache_dir"] == r.DEFAULT_CACHE_DIR
+
+
+def test_a_recorded_layout_round_trips_through_the_resolver(tmp_path: Path) -> None:
+    from defendable_science.scaffold import layout as lay
+
+    resolved = lay.layout_from_overrides(
+        {"research_root": "writing", "literature_dir": "bib"}, tmp_path
+    )
+    path = tmp_path / "config.yml"
+    path.write_text(
+        r.render_config(layout_block=lay.recorded_layout(resolved)), encoding="utf-8"
+    )
+
+    assert lay.resolve_layout(load_config(path), tmp_path) == resolved
+
+
+def test_an_empty_layout_block_renders_the_default_config() -> None:
+    assert r.render_config(layout_block={}) == r.render_config()

@@ -55,6 +55,8 @@ then:
 ```bash
 defendable-science init              # add --thesis for a thesis-by-publication repo
 defendable-science init --dry-run    # report what a real run would do, write nothing
+defendable-science init --research-root writing   # scaffold into, and record, a
+                                                  # divergent root (see Adopt, step 2)
 ```
 
 `init` is **idempotent and non-destructive**: a file already present is reported
@@ -178,16 +180,30 @@ consumer):
    ignore. *The author confirms the block* — recording where material already
    lives is the proposal, and **relocating files to the default tree stays
    available as the author's choice**, no longer the only option.
-   Sequencing, given that `init` renders `config.yml` itself and never rewrites
-   an existing one: run `defendable-science init --dry-run` first — it writes
-   nothing and reports every path it *would* touch. With no `layout:` block
-   recorded yet, those are the **default** paths, so read them back as the
-   proposal the block is about to override, not as a preview of where files will
-   end up. Then run `init`, add the confirmed block to the `config.yml` it
-   rendered, and run `init` once more so anything still missing lands in the
-   recorded locations. Finally delete the empty registries the first run left
-   behind **for the keys the block moved** — a key the block leaves at its
-   default has its live file exactly where the first run put it.
+
+   Once the author has confirmed the divergences, pass them straight to `init` —
+   one run scaffolds into those paths *and* records them in the `config.yml` it
+   renders, so nothing is left at the default locations to clean up afterwards:
+
+   ```bash
+   defendable-science init --dry-run --research-root writing --literature-dir bib
+   defendable-science init --research-root writing --literature-dir bib
+   ```
+
+   One option per recordable key: `--research-root`, `--literature-dir`,
+   `--datasets-manifest`, `--thesis-dir`. Only the confirmed divergences are
+   passed; a value equal to the default is not recorded. Each must be a
+   repo-relative path inside the work tree — an absolute path or one escaping
+   the repo is refused with a message, never a partial scaffold. Run the same
+   command with `--dry-run` first to show the author exactly where files will
+   land; unlike a bare `--dry-run`, this previews the *proposed* tree.
+
+   If `.defendable-science/config.yml` **already exists**, `init` will not
+   rewrite it. Options that agree with the layout it records are fine and the
+   scaffold lands at the recorded paths; an option that contradicts it exits 1
+   naming the key and both values, rather than being silently ignored. Resolve
+   that by editing the `layout:` block in `config.yml` (the author's file to
+   change), then re-run.
 
 3. **Literature.** Reference PDFs + digests + any existing bibliography →
    `literature/references.json` (CSL-JSON) + `triage.yml`, with **roles tagged**

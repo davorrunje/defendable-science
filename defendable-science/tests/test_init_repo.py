@@ -280,3 +280,35 @@ def test_a_fresh_scaffold_survives_the_whole_backlog_flow(
     validated = runner.invoke(app, ["dataset", "validate"])
     assert validated.exit_code == 0, validated.output
     assert json.loads(validated.stdout)["ok"] is True
+
+
+def test_the_scaffolded_config_records_a_divergent_layout(repo: Path) -> None:
+    """One `init` run lands the tree *and* records where it landed (#133)."""
+    layout = Layout(
+        repo_root=repo,
+        research_root=repo / "writing",
+        literature_dir=repo / "bib",
+        datasets_manifest=repo / "data" / "datasets.yml",
+        thesis_dir=repo / "phd",
+    )
+
+    init_repo(layout)
+
+    config = yaml.safe_load(
+        (repo / ".defendable-science" / "config.yml").read_text(encoding="utf-8")
+    )
+    assert config["layout"] == {
+        "research_root": "writing",
+        "literature_dir": "bib",
+        "datasets_manifest": "data/datasets.yml",
+        "thesis_dir": "phd",
+    }
+
+
+def test_the_scaffolded_config_of_a_default_repo_records_no_layout(repo: Path) -> None:
+    _init(repo)
+
+    config = yaml.safe_load(
+        (repo / ".defendable-science" / "config.yml").read_text(encoding="utf-8")
+    )
+    assert "layout" not in config
