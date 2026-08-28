@@ -128,14 +128,17 @@ actionable message, matching the config-error convention ADR-0031 established
   resolved from the layout (an explicit value still wins), and the literature
   registry/triage defaults now come from the layout rather than from module-level
   path literals.
-- **`datasets_manifest` is recordable but not yet routed.** The `dataset`
-  commands still take the manifest as an argument defaulting to the literal
-  `datasets.yml`, so a repo that records `datasets_manifest: data/datasets.yml`
-  is validated and resolved correctly and then ignored by the only commands that
-  read a manifest. Recording a key the tooling does not honour is precisely the
-  failure this ADR exists to end, so it is tracked as
-  [#124](https://github.com/davorrunje/defendable-science/issues/124) rather than
-  left implied by the key's existence.
+- **`datasets_manifest` is routed into the `dataset` commands.** When this ADR
+  was written it was recordable but ignored: the commands took the manifest as
+  an argument defaulting to the literal `datasets.yml`, so a repo recording
+  `datasets_manifest: data/datasets.yml` had it validated, resolved, and then
+  ignored by the only commands that read a manifest — precisely the failure this
+  ADR exists to end. That gap was tracked as
+  [#124](https://github.com/davorrunje/defendable-science/issues/124) and closed
+  by [#126](https://github.com/davorrunje/defendable-science/pull/126):
+  `cli.py`'s `_manifest_path()` now falls back to `layout.datasets_manifest`, so
+  an omitted `--manifest` resolves to the recorded path from any directory,
+  while an explicit value still wins and is honoured exactly as typed.
 - **The asymmetry with `cache_dir` has since been resolved, not left standing.**
   When this ADR was written, `layout:` keys were confined to the repository while
   `cache_dir` was only *anchored* to it, so `cache_dir: ../../elsewhere` still

@@ -61,10 +61,13 @@ _LAYOUT_STUB = """\
 """
 
 #: Precedes a recorded block, so the author reading the file knows why it is
-#: there and what an omitted key means.
+#: there and what an omitted key means. Carries the stub's key list too: the
+#: author whose repo already diverges is the one most likely to add a second
+#: key, and this is the only place in the file that says which keys exist.
 _RECORDED_LAYOUT_PREAMBLE = """\
 # This repo diverges from the default tree, so the divergent roots are recorded
-# here. Omitted keys fall back to the default; an unknown key is an error.
+# here. Keys: research_root, literature_dir, datasets_manifest, thesis_dir.
+# Omitted keys fall back to the default; an unknown key is an error.
 """
 
 

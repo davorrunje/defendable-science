@@ -12,6 +12,7 @@ from defendable_science.core.config import load_config
 from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.exploration import backlog as b
 from defendable_science.literature import registry as reg
+from defendable_science.scaffold import layout as lay
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold.layout import Layout
 
@@ -233,8 +234,6 @@ def test_rendered_config_records_a_divergent_layout(tmp_path: Path) -> None:
 
 
 def test_a_recorded_layout_round_trips_through_the_resolver(tmp_path: Path) -> None:
-    from defendable_science.scaffold import layout as lay
-
     resolved = lay.layout_from_overrides(
         {"research_root": "writing", "literature_dir": "bib"}, tmp_path
     )

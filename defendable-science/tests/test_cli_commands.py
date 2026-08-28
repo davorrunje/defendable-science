@@ -846,6 +846,9 @@ def test_init_refuses_an_absolute_layout_option(
     assert result.exit_code == 1
     assert "is absolute" in result.output
     assert "Traceback" not in result.output
+    assert result.stdout.strip() == ""
+    assert not (repo / "docs").exists()
+    assert not (tmp_path / "writing").exists()
 
 
 def test_init_accepts_layout_options_that_agree_with_the_recorded_layout(

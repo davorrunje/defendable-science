@@ -55,9 +55,13 @@ then:
 ```bash
 defendable-science init              # add --thesis for a thesis-by-publication repo
 defendable-science init --dry-run    # report what a real run would do, write nothing
-defendable-science init --research-root writing   # scaffold into, and record, a
-                                                  # divergent root (see Adopt, step 2)
 ```
+
+**In `adopt`, settle the layout before the first real `init` run.** `init`
+renders `config.yml` and never rewrites it, so a bare run records the default
+layout — after which a divergence costs an edit plus a cleanup (Adopt, step 2),
+where deciding first costs one command. Inventory, confirm the divergences, then
+run `init` once with them as options.
 
 `init` is **idempotent and non-destructive**: a file already present is reported
 `exists` and left exactly as the author wrote it. There is deliberately no
@@ -202,8 +206,19 @@ consumer):
    rewrite it. Options that agree with the layout it records are fine and the
    scaffold lands at the recorded paths; an option that contradicts it exits 1
    naming the key and both values, rather than being silently ignored. Resolve
-   that by editing the `layout:` block in `config.yml` (the author's file to
-   change), then re-run.
+   that by adding or editing the `layout:` block in `config.yml` (the author's
+   file to change), then re-run.
+
+   On that path — and only that path — there is cleanup, because the config only
+   exists if an earlier `init` already scaffolded at the previous locations. The
+   re-run lands a second set of registries at the newly recorded paths and leaves
+   the first set orphaned; an empty registry at a stale location is a perfectly
+   valid file, so `check` will not flag it. **Delete the empty registries the
+   earlier run left behind, for the keys the block moved** — a key the block
+   leaves at its default has its live file exactly where the earlier run put it,
+   and must not be touched. Confirm each deletion with the author, and delete
+   only files that are still empty: a registry with content is the author's work,
+   and the move is then theirs to make.
 
 3. **Literature.** Reference PDFs + digests + any existing bibliography →
    `literature/references.json` (CSL-JSON) + `triage.yml`, with **roles tagged**

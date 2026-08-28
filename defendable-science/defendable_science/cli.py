@@ -335,8 +335,9 @@ def _layout_with_options_or_exit(
             "init never rewrites an existing .defendable-science/config.yml, so "
             "this option cannot take effect:\n"
             f"{detail}\n"
-            "Edit the layout: block in .defendable-science/config.yml to record "
-            "the new path, or drop the option, then re-run.",
+            "Add or edit the layout: block in .defendable-science/config.yml to "
+            "record the new path (a config with no block records the default), "
+            "or drop the option, then re-run.",
             err=True,
         )
         raise typer.Exit(code=1)
