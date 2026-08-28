@@ -88,8 +88,9 @@ reader, the shipped template under `resources/templates/`, and the rule in `chec
   entangled with `resources/templates/` and `check/checks.py`; collapsing that four-way drift
   is a larger design task deserving its own issue once the JSON idiom has settled.
 - **A general model layer.** Converting existing `dataclasses` is explicitly out (§3.2).
-- **Modelling `enrich_work`'s output** as a CLI response envelope. Real drift, bigger problem,
-  separate issue (§3.4).
+- **Modelling `enrich_work`'s output** as a CLI response envelope. Real drift, and §3.2 forbids
+  a Pydantic model over emit-only data; it needs a stdlib dataclass instead. Filed as
+  [#174](https://github.com/davorrunje/defendable-science/issues/174).
 - **Rewriting `docs/superpowers/plans/*.md`.** Five of them restate "no Pydantic"; they are
   dated historical plans and editing them would falsify the record.
 
