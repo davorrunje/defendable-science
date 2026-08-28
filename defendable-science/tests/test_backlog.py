@@ -1253,3 +1253,50 @@ def test_registry_dumps_carries_a_heading_and_no_data_rows() -> None:
     assert "| paper-id | root | backend |" in text
     assert "|---" in text
     assert text.count("\n|") == 2  # header + separator only
+
+
+_REGISTRY_WITH_FENCED_EXAMPLE = """# Papers
+
+Register a paper by adding a row:
+
+```markdown
+| paper-id | root | backend |
+|---|---|---|
+| example | docs/research/example | bench |
+```
+
+| paper-id | root | backend |
+|---|---|---|
+| first | docs/research/first | bench |
+
+## Scope notes
+"""
+
+
+def test_registry_row_never_lands_in_a_fenced_example(tmp_path: Path) -> None:
+    """A how-to fence is documentation, not the registry (ruling AG)."""
+    papers = tmp_path / "papers.md"
+    papers.write_text(_REGISTRY_WITH_FENCED_EXAMPLE, encoding="utf-8")
+    b.append_papers_registry(papers, "second", "docs/research/second", "sim")
+    text = papers.read_text(encoding="utf-8")
+    fence = _REGISTRY_WITH_FENCED_EXAMPLE[
+        _REGISTRY_WITH_FENCED_EXAMPLE.index(
+            "```markdown"
+        ) : _REGISTRY_WITH_FENCED_EXAMPLE.index("\n\n| paper-id")
+    ]
+    assert fence in text  # byte-identical, example row and all
+    assert text == _REGISTRY_WITH_FENCED_EXAMPLE.replace(
+        "| first | docs/research/first | bench |\n",
+        "| first | docs/research/first | bench |\n| second | docs/research/second | sim |\n",
+    )
+
+
+def test_backlog_loads_past_a_fenced_example_table(tmp_path: Path) -> None:
+    """`Backlog.loads` reads the real table, not the one in the code fence."""
+    text = (
+        "# Backlog\n\nFormat:\n\n```\n| id | title |\n|---|---|\n| X1 | example |\n"
+        "```\n\n| id | status |\n|---|---|\n| h1 | parked |\n"
+    )
+    backlog = b.Backlog.loads(text, "hypothesis")
+    assert [row["id"] for row in backlog.rows] == ["h1"]
+    assert "| X1 | example |" in backlog.preamble

@@ -17,6 +17,46 @@ Row = dict[str, str]
 #: A markdown heading of any level, with its title text.
 _HEADING = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$")
 
+#: A CommonMark fenced-code-block marker: up to three spaces of indent, then at
+#: least three backticks or tildes, then the info string.
+_FENCE = re.compile(r"^ {0,3}(?P<fence>`{3,}|~{3,})(?P<info>.*)$")
+
+
+def _fenced(lines: list[str]) -> list[bool]:
+    """Return, per line, whether it belongs to a fenced code block.
+
+    A document that *illustrates* a table inside a code fence is entirely
+    ordinary, and without this the illustration is indistinguishable from the
+    real table — :func:`parse_document` would select it and :func:`splice`
+    would then overwrite the author's example (the #94 failure class through a
+    different door). The fence markers themselves count as inside, so nothing
+    in the block is ever read as content.
+
+    Closing follows CommonMark: the same character as the opening fence, at
+    least as long, and no info string. An unclosed fence runs to the end.
+
+    :param lines: The document's lines.
+    :returns: One flag per line, ``True`` when the line is fenced.
+    """
+    mask = [False] * len(lines)
+    marker: str | None = None
+    for i, line in enumerate(lines):
+        match = _FENCE.match(line.rstrip("\n"))
+        if marker is None:
+            if match is not None:
+                marker = match.group("fence")
+                mask[i] = True
+            continue
+        mask[i] = True
+        if (
+            match is not None
+            and match.group("fence")[0] == marker[0]
+            and len(match.group("fence")) >= len(marker)
+            and not match.group("info").strip()
+        ):
+            marker = None
+    return mask
+
 
 class TableError(ValueError):
     """Raised when a document's table is malformed (a ragged data row)."""
@@ -116,7 +156,9 @@ def _collect_rows(
     return rows, end
 
 
-def _section_bounds(lines: list[str], title: str) -> tuple[int, int] | None:
+def _section_bounds(
+    lines: list[str], title: str, fenced: list[bool]
+) -> tuple[int, int] | None:
     """Return ``(start, end)`` line indices for the section under `title`.
 
     The section runs from the line after its heading to the line before the
@@ -124,11 +166,16 @@ def _section_bounds(lines: list[str], title: str) -> tuple[int, int] | None:
 
     :param lines: The document's lines.
     :param title: The heading text to find, compared case-insensitively.
+    :param fenced: Per-line fence flags from :func:`_fenced`; a ``#``-prefixed
+        line inside a code block is a comment or a shell prompt, not a heading,
+        and must neither open nor close a section.
     :returns: The bounds, or ``None`` when no such heading exists.
     """
     want = title.strip().casefold()
     start: int | None = None
     for i, line in enumerate(lines):
+        if fenced[i]:
+            continue
         match = _HEADING.match(line)
         if match is None:
             continue
@@ -159,9 +206,10 @@ def parse_document(
     :raises TableError: If a data row is ragged (see :func:`_collect_rows`).
     """
     lines = text.splitlines(keepends=True)
+    fenced = _fenced(lines)
     window = (0, len(lines))
     if under_heading is not None:
-        bounds = _section_bounds(lines, under_heading)
+        bounds = _section_bounds(lines, under_heading, fenced)
         if bounds is None:
             return Document(preamble=text)
         window = bounds
@@ -171,7 +219,9 @@ def parse_document(
     saw_table_shape = False
     for offset, line in enumerate(lines[window[0] : window[1]]):
         i = window[0] + offset
-        if "|" not in line:
+        if fenced[i] or "|" not in line:
+            # Fenced content is an illustration, not the document's table; it
+            # breaks a pending candidate exactly as prose does.
             candidate = None  # prose breaks a pending header candidate
             pending = 0
             continue

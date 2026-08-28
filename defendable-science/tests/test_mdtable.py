@@ -129,3 +129,103 @@ def test_is_separator_rejects_an_empty_cell() -> None:
 def test_splice_terminates_a_preamble_that_lacks_a_newline() -> None:
     out = md.splice("intro", "", ["a"], [{"a": "1"}])
     assert out == "intro\n| a |\n|---|\n| 1 |\n"
+
+
+# --- fenced code blocks (task-8 ruling AG) --------------------------------------
+
+FENCED_EXAMPLE = """# Positioning
+
+A matrix looks like this:
+
+```markdown
+| Method | example axis |
+|---|---|
+| someone2020 | illustrative |
+```
+
+## Concept matrix
+
+| Method | guarantee |
+|---|---|
+| sill1997 | architectural |
+"""
+
+
+def test_a_fenced_pipe_table_before_the_real_one_is_not_selected() -> None:
+    doc = md.parse_document(FENCED_EXAMPLE)
+    assert doc.header == ["Method", "guarantee"]
+    assert doc.rows == [{"Method": "sill1997", "guarantee": "architectural"}]
+
+
+def test_splicing_never_writes_into_a_fenced_example_table() -> None:
+    """The write lands on the real table; the fence is byte-identical."""
+    doc = md.parse_document(FENCED_EXAMPLE)
+    assert doc.header is not None
+    rows = [*doc.rows, {"Method": "new2026", "guarantee": "learned"}]
+    out = md.splice(doc.preamble, doc.postamble, doc.header, rows)
+    fence = FENCED_EXAMPLE[
+        FENCED_EXAMPLE.index("```markdown") : FENCED_EXAMPLE.index("## Concept")
+    ]
+    assert fence in out
+    assert out == FENCED_EXAMPLE.replace(
+        "| sill1997 | architectural |\n",
+        "| sill1997 | architectural |\n| new2026 | learned |\n",
+    )
+
+
+def test_a_document_whose_only_table_is_fenced_has_no_table() -> None:
+    text = "# Doc\n\n```\n| a | b |\n|---|---|\n| 1 | 2 |\n```\n\nprose\n"
+    doc = md.parse_document(text)
+    assert doc.header is None
+    assert doc.preamble == text
+    assert not doc.saw_table_shape
+
+
+def test_a_heading_inside_a_fence_does_not_open_a_section() -> None:
+    text = (
+        "# Doc\n\n```\n## Concept matrix\n\n| a |\n|---|\n| fake |\n```\n\n"
+        "## Concept matrix\n\n| b |\n|---|\n| real |\n"
+    )
+    doc = md.parse_document(text, under_heading="Concept matrix")
+    assert doc.header == ["b"]
+    assert doc.rows == [{"b": "real"}]
+
+
+def test_a_heading_inside_a_fence_does_not_close_a_section() -> None:
+    text = "## A\n\n```\n## B\n```\n\n| x |\n|---|\n| 1 |\n"
+    doc = md.parse_document(text, under_heading="A")
+    assert doc.header == ["x"]
+
+
+def test_a_tilde_fence_is_honoured() -> None:
+    text = "~~~\n| a | b |\n|---|---|\n~~~\n\n| c |\n|---|\n| 1 |\n"
+    assert md.parse_document(text).header == ["c"]
+
+
+def test_a_fence_is_closed_only_by_its_own_character() -> None:
+    # The ~~~ line is content inside the backtick fence, not a close, so the
+    # pipe table that follows it is still fenced.
+    text = "```\n~~~\n| a | b |\n|---|---|\n```\n\n| c |\n|---|\n| 1 |\n"
+    assert md.parse_document(text).header == ["c"]
+
+
+def test_a_shorter_closing_fence_does_not_close() -> None:
+    text = "````\n```\n| a | b |\n|---|---|\n````\n\n| c |\n|---|\n| 1 |\n"
+    assert md.parse_document(text).header == ["c"]
+
+
+def test_a_longer_closing_fence_closes() -> None:
+    text = "```\ntext\n`````\n\n| c |\n|---|\n| 1 |\n"
+    assert md.parse_document(text).header == ["c"]
+
+
+def test_a_closing_fence_may_not_carry_an_info_string() -> None:
+    text = "```\n``` still open\n| a | b |\n|---|---|\n```\n\n| c |\n|---|\n| 1 |\n"
+    assert md.parse_document(text).header == ["c"]
+
+
+def test_an_unclosed_fence_runs_to_the_end_of_the_document() -> None:
+    text = "# Doc\n\n```\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+    doc = md.parse_document(text)
+    assert doc.header is None
+    assert doc.preamble == text
