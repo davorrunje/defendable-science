@@ -694,6 +694,15 @@ def test_record_writes_the_cells_before_it_touches_triage(
             "not mappings",
             id="non-mapping-row",
         ),
+        pytest.param(
+            "a2020: &shared\n"
+            "  disposition: screened\n"
+            "b2021: *shared\n"
+            "sill1997monotonic:\n"
+            "  disposition: screened\n",
+            "same mapping",
+            id="aliased-rows",
+        ),
     ],
 )
 def test_record_reports_a_refused_triage_and_leaves_it_byte_identical(
@@ -730,6 +739,41 @@ def test_record_reports_a_refused_triage_and_leaves_it_byte_identical(
     assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
     artifact = Layout.default(root.resolve()).digest("sill1997monotonic")
     assert len(read_cells(artifact)) == 2
+
+
+def test_record_never_fabricates_an_extraction_record_for_an_aliased_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worst thing this branch could ship, pinned as a negative.
+
+    Rows joined by a YAML anchor are one dict after `yaml.safe_load`, so an
+    unguarded patch of ``sill1997monotonic`` would write ``extracted`` and
+    ``extraction-cells`` onto ``b2021`` and ``c2022`` as well — an extraction
+    record, in the PRISMA audit trail, for two papers this run never touched,
+    at exit 0 and with no diagnostic. The refusal is what prevents that; this
+    fails loudly if it is ever reverted.
+    """
+    root = _repo(tmp_path)
+    triage = _write_triage(
+        root,
+        "sill1997monotonic: &shared\n"
+        "  disposition: screened\n"
+        "b2021: *shared\n"
+        "c2022: *shared\n",
+    )
+    before = triage.read_bytes()
+    result = _record(root, GOOD_CELLS, monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert triage.read_bytes() == before
+    loaded = _triage(root)
+    for citekey in ("sill1997monotonic", "b2021", "c2022"):
+        assert "extracted" not in loaded[citekey]
+        assert "extraction-cells" not in loaded[citekey]
+    payload = json.loads(result.stdout)
+    assert payload["triage_not_updated"][0]["kind"] == "refused"
+    assert "b2021" in payload["triage_not_updated"][0]["reason"]
+    # And the ordering property still holds: the cells landed regardless.
+    assert len(read_cells(Layout.default(root.resolve()).digest("sill1997monotonic")))
 
 
 def test_record_reports_an_unwritable_triage_without_a_traceback(

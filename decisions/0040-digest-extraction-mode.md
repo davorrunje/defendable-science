@@ -190,10 +190,12 @@ the five decisions above are aspirational rather than enforced:
 - **`record` writes exactly two triage fields** — `extracted` and
   `extraction-cells` — and **never `disposition`**. The disposition state
   machine is the human's decision; a machine advancing it is precisely the
-  agency violation this plugin exists to prevent. Where the sidecar carries YAML
-  comments and `patch_triage` refuses (its rationales *are* the PRISMA log), the
-  cells still land, the refusal is reported apart from write errors and carries
-  a `kind` of `refused` or `failed`, and the run exits 1.
+  agency violation this plugin exists to prevent. Where `patch_triage` refuses —
+  the sidecar carries YAML comments (its rationales *are* the PRISMA log), holds
+  a non-mapping row, or joins two citekeys to one anchored mapping, where a
+  single patch would record work never done on the others — the cells still
+  land, the refusal is reported apart from write errors and carries a `kind` of
+  `refused` or `failed`, and the run exits 1.
 
 ## Consequences
 

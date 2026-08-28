@@ -546,6 +546,84 @@ def test_patch_triage_still_writes_when_every_row_is_a_mapping(
     assert rows["b"].disposition == "exclude"
 
 
+# --- the write must not fabricate an audit trail -------------------------------
+#
+# Two rows joined by a YAML anchor (`b2021: *shared`) are ONE dict after
+# `yaml.safe_load`, so patching either one writes the fields onto both — and
+# `safe_dump` re-emits the alias, so the file still looks hand-authored. Through
+# `digest extract record` that invents an extraction record for a paper the run
+# never touched, at exit 0, in the PRISMA audit trail. Identity is the exact test:
+# two rows written out separately are distinct objects even when equal (#143).
+
+
+ALIASED_TRIAGE = (
+    "a2020: &shared\n"
+    "  disposition: screened\n"
+    "  rationale: same protocol arm\n"
+    "b2021: *shared\n"
+    "c2022: *shared\n"
+    "d2023:\n"
+    "  disposition: inbox\n"
+)
+
+
+def test_patch_triage_refuses_rows_that_share_one_mapping(tmp_path: Path) -> None:
+    """The refusal names every row in the shared group, and writes nothing."""
+    path = tmp_path / "t.yml"
+    path.write_text(ALIASED_TRIAGE, encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(reg.RegistryError) as caught:
+        reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+
+    message = str(caught.value)
+    assert "same mapping" in message
+    for citekey in ("a2020", "b2021", "c2022"):
+        assert citekey in message
+    assert "d2023" not in message
+    assert "'extracted'" in message
+    assert path.read_bytes() == before
+    assert not (tmp_path / "t.yml.tmp").exists()
+
+
+def test_patch_triage_refuses_a_shared_mapping_it_was_not_asked_to_patch(
+    tmp_path: Path,
+) -> None:
+    """The sharing is the hazard, not the target: patching `d2023` refuses too.
+
+    Rewriting the file at all re-emits the aliased group, and a later patch of
+    that group would fabricate. The whole file is refused, as with comments.
+    """
+    path = tmp_path / "t.yml"
+    path.write_text(ALIASED_TRIAGE, encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(reg.RegistryError, match="same mapping"):
+        reg.patch_triage(path, "d2023", {"extracted": "2026-08-28"})
+    assert path.read_bytes() == before
+
+
+def test_patch_triage_does_not_refuse_rows_that_merely_look_alike(
+    tmp_path: Path,
+) -> None:
+    """The over-correction guard: equal content is not shared content.
+
+    The check is object identity, which cannot false-positive — two rows written
+    out separately are distinct objects however identical they read.
+    """
+    path = tmp_path / "t.yml"
+    path.write_text(
+        "a2020:\n  disposition: screened\n  rationale: same protocol arm\n"
+        "b2021:\n  disposition: screened\n  rationale: same protocol arm\n",
+        encoding="utf-8",
+    )
+    reg.patch_triage(path, "a2020", {"extracted": "2026-08-28"})
+    rows = reg.load_triage(path)
+    assert rows["a2020"].raw["extracted"] == "2026-08-28"
+    # The negative this guard exists for, from the other side: the lookalike row
+    # must not acquire the field.
+    assert "extracted" not in rows["b2021"].raw
+
+
 def test_patch_triage_keeps_a_non_string_citekey_addressable(tmp_path: Path) -> None:
     """A YAML key that is not a string (``2020:``) is still a row, not a casualty."""
     path = tmp_path / "t.yml"
