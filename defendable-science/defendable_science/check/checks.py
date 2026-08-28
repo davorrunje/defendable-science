@@ -46,6 +46,7 @@ from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status as st
 from defendable_science.scaffold.layout import (
     STAGED_DOCUMENTS,
+    Layout,
     LayoutError,
     resolve_layout,
 )
@@ -56,7 +57,6 @@ if TYPE_CHECKING:
     from defendable_science.check.probe import Probe
     from defendable_science.digest.extraction import Cell
     from defendable_science.exploration.backlog import Level, Row
-    from defendable_science.scaffold.layout import Layout
 
 #: The check family names carried on every finding these two emit.
 LAYOUT_CHECK = "layout"
@@ -261,6 +261,148 @@ def _wrong_type(layout: Layout, path: Path, *, required: str) -> Finding:
     )
 
 
+def _stale_registry_pairs(layout: Layout, probe: Probe) -> list[tuple[Path, Path]]:
+    """Pair every default-location registry with its live path, for moved keys.
+
+    An orphan can only appear where a *previous* layout put a file, and the
+    overwhelmingly common previous layout is the packaged default (#154) — so
+    this stays scoped to :meth:`Layout.default`, never a general repo scan,
+    which would risk flagging an author's own files.
+
+    Each of :data:`~defendable_science.scaffold.layout.LAYOUT_KEYS` owns a
+    disjoint set of registries (``research_root`` → the three under it,
+    ``literature_dir`` → references/triage, ``datasets_manifest`` → itself,
+    ``thesis_dir`` → aims/milestones) *among their own default locations* —
+    but a customised layout can still point one key's *live* path at another
+    key's *default* one (e.g. ``datasets_manifest: docs/research/papers.md``
+    while ``research_root`` moves away from ``docs/research``). A candidate
+    "stale" path that is actually some key's live target is not an orphan —
+    it is exactly the content that key resolves to — so any such candidate is
+    excluded below rather than trusted on the strength of one key having
+    moved.
+
+    ``thesis_dir`` is additionally gated on the *default* thesis directory
+    existing at all: a repo that never had a thesis tree has no orphan to
+    report just because the default thesis path differs from where a moved
+    ``thesis_dir`` now resolves to, mirroring how :func:`_required_files`
+    conditions thesis files on a thesis tree existing at the *resolved*
+    location.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam, asked whether a default thesis tree
+        exists.
+    :returns: ``(stale_default_path, live_resolved_path)`` pairs, one per
+        registry whose owning key has moved away from the default and whose
+        stale candidate path is not itself some key's live target.
+    """
+    default = Layout.default(layout.repo_root)
+    pairs: list[tuple[Path, Path]] = []
+    if layout.research_root != default.research_root:
+        pairs += [
+            (default.papers_registry, layout.papers_registry),
+            (default.portfolio_backlog, layout.portfolio_backlog),
+            (default.dashboard, layout.dashboard),
+        ]
+    if layout.literature_dir != default.literature_dir:
+        pairs += [
+            (default.references, layout.references),
+            (default.triage, layout.triage),
+        ]
+    if layout.datasets_manifest != default.datasets_manifest:
+        pairs.append((default.datasets_manifest, layout.datasets_manifest))
+    if layout.thesis_dir != default.thesis_dir and probe.exists(default.thesis_dir):
+        pairs += [
+            (default.aims, layout.aims),
+            (default.milestones, layout.milestones),
+        ]
+    live_paths = {
+        layout.papers_registry,
+        layout.portfolio_backlog,
+        layout.dashboard,
+        layout.references,
+        layout.triage,
+        layout.datasets_manifest,
+        layout.aims,
+        layout.milestones,
+    }
+    return [(stale, live) for stale, live in pairs if stale not in live_paths]
+
+
+def _orphan_finding(
+    layout: Layout, probe: Probe, stale: Path, live: Path
+) -> Finding | None:
+    """Report `stale` if it still holds a registry the layout no longer reads.
+
+    Severity is chosen deliberately, on content rather than on the key that
+    moved: an **empty** orphan is untidiness, not a defect — nothing is lost,
+    the repo is merely carrying a leftover file, so this is a ``gap`` (matches
+    how an unbound ``experiment_backend`` is a ``gap`` rather than
+    ``invalid`` — see :func:`_check_registered_paper`) and its remedy is safe
+    to say "delete", since there is nothing in the file worth keeping. A
+    **non-empty** orphan is the author's real content sitting somewhere no
+    ``defendable-science`` command will ever read again — closer to a defect
+    than to untidiness — so this is ``invalid``, and the remedy never
+    suggests deleting it: ``check`` is read-only, and #129's planned
+    ``--fix`` mode explicitly refuses to touch anything material.
+
+    "Empty" means exactly zero bytes (``probe.read_text(stale) == ""``), not
+    whitespace-stripped-empty: a file holding only a stray blank line is still
+    something an author put there, and this check must never be the reason a
+    real (if minimal) edit gets silently proposed for deletion. `Probe` has no
+    byte-size method, and none is added for this — reading the text the same
+    way every other check does is enough to make the zero-byte judgement.
+
+    A stale path that cannot be read is reported exactly like any other read
+    failure (:func:`read_or_finding`): "empty" and "could not be read" must
+    never be conflated, since only one of them means deleting the file loses
+    nothing.
+
+    :param layout: The resolved layout, used to render both paths repo-relative.
+    :param probe: The filesystem seam.
+    :param stale: The default-location path a registry used to live at.
+    :param live: The path the resolved layout reads the same registry from
+        now.
+    :returns: ``None`` if `stale` is not a file (already cleaned up, or never
+        existed at the default location); the ``unreadable`` finding if it
+        exists but cannot be read; otherwise a ``gap`` (empty) or ``invalid``
+        (non-empty) finding naming both `stale` and `live`.
+    """
+    if not is_file(probe, stale):
+        return None
+    stale_rel = layout.rel(stale)
+    live_rel = layout.rel(live)
+    text = read_or_finding(stale, layout, probe, LAYOUT_CHECK)
+    if isinstance(text, Finding):
+        return text
+    if text == "":
+        return Finding(
+            severity="gap",
+            check=LAYOUT_CHECK,
+            file=str(stale_rel),
+            message=(
+                f"{stale_rel} is an empty orphan: the layout now resolves "
+                f"this registry to {live_rel}, and nothing at {stale_rel} "
+                "reads it any more"
+            ),
+            remedy=f"delete {stale_rel} — it is empty, so nothing is lost",
+        )
+    return Finding(
+        severity="invalid",
+        check=LAYOUT_CHECK,
+        file=str(stale_rel),
+        message=(
+            f"{stale_rel} is an orphan holding content: the layout now "
+            f"resolves this registry to {live_rel}, but {stale_rel} was "
+            "never moved and no command reads it any more"
+        ),
+        remedy=(
+            f"move {stale_rel}'s content into {live_rel}, or reconsider the "
+            "layout change that stranded it; keep what is there — it is real "
+            "content, not scratch"
+        ),
+    )
+
+
 def check_layout(layout: Layout, probe: Probe) -> list[Finding]:
     """Report every required path this repo does not have in the right shape.
 
@@ -275,12 +417,21 @@ def check_layout(layout: Layout, probe: Probe) -> list[Finding]:
     not an independent fact, and reporting both would make one defect look like
     several.
 
+    Also reports a registry **orphaned** by a moved ``layout:`` key (#154): a
+    file still sitting at the packaged default location for a registry whose
+    key now resolves somewhere else. This is additive, not overlapping, with
+    the required-file check above — that check only ever looks at *resolved*
+    paths, so an orphan at the old default location never also reads as a
+    missing-file finding for the live one. See :func:`_orphan_finding` for the
+    empty/non-empty severity split and why it is chosen that way.
+
     :param layout: The resolved layout — the one definition of where each file
         lives, so a repo with a non-default ``research_root`` is checked where
         its files actually are.
     :param probe: The filesystem seam.
-    :returns: One ``invalid`` finding per defect: mis-typed directories first
-        (outermost first), then the required files in layout order.
+    :returns: Mis-typed directories first (outermost first), then the required
+        files, then any orphaned registries, all ``invalid`` except an empty
+        orphan, which is a ``gap``.
     """
     required = _required_files(layout, probe)
     findings: list[Finding] = []
@@ -306,6 +457,10 @@ def check_layout(layout: Layout, probe: Probe) -> list[Finding]:
                     remedy=remedy,
                 )
             )
+    for stale, live in _stale_registry_pairs(layout, probe):
+        orphan = _orphan_finding(layout, probe, stale, live)
+        if orphan is not None:
+            findings.append(orphan)
     return findings
 
 

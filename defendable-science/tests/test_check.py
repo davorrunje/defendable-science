@@ -15,7 +15,7 @@ from defendable_science.digest import artifact as art
 from defendable_science.digest import extraction as ex
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status as st
-from defendable_science.scaffold.layout import Layout
+from defendable_science.scaffold.layout import Layout, resolve_layout
 
 
 def _finding(severity: str) -> m.Finding:
@@ -329,6 +329,177 @@ def test_layout_check_requires_aims_once_a_thesis_dir_exists() -> None:
     assert any(f.file == "docs/research/thesis/aims.md" for f in findings)
     assert any(f.file == "docs/research/thesis/milestones.yml" for f in findings)
     assert all("--thesis" in f.remedy for f in findings)
+
+
+# --- orphaned registries (#154) -----------------------------------------------
+#
+# A layout: block moving research_root/literature_dir/datasets_manifest/
+# thesis_dir away from the default can leave a real defendable-science-owned
+# file behind at the packaged default location. `check_layout` scopes orphan
+# detection to exactly those default locations, never a general repo scan.
+
+
+def _moved(**overrides: str) -> Layout:
+    """Resolve a layout with `overrides` recorded under a ``layout:`` block."""
+    return resolve_layout({"layout": overrides}, ROOT)
+
+
+def test_layout_check_finds_no_orphans_on_the_default_layout() -> None:
+    """The "obvious way this goes wrong" (#154): a layout that moved nothing."""
+    default_layout = resolve_layout({}, ROOT)
+
+    assert c.check_layout(default_layout, FakeProbe(_scaffolded())) == []
+
+
+def _scaffolded_at(layout: Layout) -> dict[Path, str]:
+    """Return the file map a clean `init` produces, written at `layout`'s locations."""
+    return {
+        layout.papers_registry: r.render_papers_registry(),
+        layout.portfolio_backlog: r.render_portfolio_backlog(),
+        layout.dashboard: r.render_dashboard(),
+        layout.references: r.render_references(),
+        layout.triage: r.render_triage(),
+        layout.datasets_manifest: r.render_datasets_manifest(),
+        layout.config_file: r.render_config(),
+    }
+
+
+def test_layout_check_flags_an_empty_orphan_left_by_a_moved_research_root() -> None:
+    moved = _moved(research_root="writing")
+    files = _scaffolded_at(moved)
+    files[LAYOUT.papers_registry] = ""  # stale, empty, at the old default path
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    finding = findings[0]
+    assert finding.severity == "gap"
+    assert finding.check == "layout"
+    assert finding.file == "docs/research/papers.md"
+    assert "docs/research/papers.md" in finding.message
+    assert "writing/papers.md" in finding.message
+    assert "delete" in finding.remedy
+
+
+def test_layout_check_flags_a_content_orphan_left_by_a_moved_research_root() -> None:
+    """A non-empty orphan is `invalid`, and its remedy never says to delete it."""
+    moved = _moved(research_root="writing")
+    files = _scaffolded_at(moved)
+    files[LAYOUT.papers_registry] = _registry("| p1 | writing/p1 | |\n")
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    finding = findings[0]
+    assert finding.severity == "invalid"
+    assert finding.check == "layout"
+    assert finding.file == "docs/research/papers.md"
+    assert "docs/research/papers.md" in finding.message
+    assert "writing/papers.md" in finding.message
+    assert "delete" not in finding.remedy.lower()
+
+
+def test_layout_check_finds_no_orphan_once_the_stale_file_is_gone() -> None:
+    moved = _moved(research_root="writing")
+    files = _scaffolded_at(moved)  # nothing left at the old default paths
+
+    assert c.check_layout(moved, FakeProbe(files)) == []
+
+
+def test_layout_check_does_not_flag_another_keys_live_target_as_an_orphan() -> None:
+    """A customised layout can point one key's live path at another key's default.
+
+    ``research_root`` moves to ``writing``, and ``datasets_manifest`` is
+    separately pointed at ``docs/research/papers.md`` — exactly the default
+    ``papers_registry`` path. That file is genuinely live content
+    (``datasets_manifest`` resolves there), not an orphan left behind by the
+    ``research_root`` move, even though it sits at ``papers_registry``'s
+    stale default location.
+    """
+    moved = _moved(research_root="writing", datasets_manifest="docs/research/papers.md")
+    files = _scaffolded_at(moved)
+    files[moved.datasets_manifest] = "datasets:\n  - id: foo\n"
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert not any(f.file == "docs/research/papers.md" for f in findings)
+
+
+def test_layout_check_reports_an_unreadable_orphan_as_unreadable() -> None:
+    """A read failure is never conflated with "empty" — the fact is unknown."""
+    moved = _moved(research_root="writing")
+    files = _scaffolded_at(moved)
+    files[LAYOUT.papers_registry] = "stale but unreadable"
+
+    findings = c.check_layout(
+        moved, FakeProbe(files, unreadable={LAYOUT.papers_registry})
+    )
+
+    assert len(findings) == 1, findings
+    assert findings[0].severity == "unreadable"
+    assert findings[0].file == "docs/research/papers.md"
+
+
+def test_layout_check_flags_an_orphan_left_by_a_moved_literature_dir() -> None:
+    moved = _moved(literature_dir="lit")
+    files = _scaffolded_at(moved)
+    files[LAYOUT.references] = ""  # stale, empty
+    # LAYOUT.triage is intentionally absent: already cleaned up, no finding.
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    finding = findings[0]
+    assert finding.severity == "gap"
+    assert finding.file == "docs/research/literature/references.json"
+    assert "lit/references.json" in finding.message
+
+
+def test_layout_check_flags_an_orphan_left_by_a_moved_datasets_manifest() -> None:
+    moved = _moved(datasets_manifest="data/datasets.yml")
+    files = _scaffolded_at(moved)
+    files[LAYOUT.datasets_manifest] = ""  # stale, empty
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    finding = findings[0]
+    assert finding.severity == "gap"
+    assert finding.file == "datasets.yml"
+    assert "data/datasets.yml" in finding.message
+
+
+def test_layout_check_does_not_flag_thesis_orphans_without_a_thesis_tree() -> None:
+    """No thesis tree ever existed, so there is nothing for `thesis_dir` to orphan."""
+    moved = _moved(thesis_dir="framing")
+    files = _scaffolded_at(moved)
+
+    assert c.check_layout(moved, FakeProbe(files)) == []
+
+
+def test_layout_check_flags_orphans_left_by_a_moved_thesis_dir() -> None:
+    moved = _moved(thesis_dir="framing")
+    files = _scaffolded_at(moved)
+    files[moved.aims] = "# Aims\n"
+    files[moved.milestones] = "gates: []\n"
+    # A default thesis tree exists (kappa.md marks it), with stale aims/
+    # milestones left behind: one empty, one with content.
+    files[LAYOUT.thesis_dir / "kappa" / "kappa.md"] = (
+        "---\nstatus:\n  level: thesis\n---\n"
+    )
+    files[LAYOUT.aims] = ""
+    files[LAYOUT.milestones] = "old: true\n"
+
+    findings = c.check_layout(moved, FakeProbe(files))
+
+    by_file = {f.file: f for f in findings}
+    assert set(by_file) == {
+        "docs/research/thesis/aims.md",
+        "docs/research/thesis/milestones.yml",
+    }
+    assert by_file["docs/research/thesis/aims.md"].severity == "gap"
+    assert by_file["docs/research/thesis/milestones.yml"].severity == "invalid"
+    assert "delete" not in by_file["docs/research/thesis/milestones.yml"].remedy.lower()
 
 
 # --- path-type mismatches (#131) ---------------------------------------------
