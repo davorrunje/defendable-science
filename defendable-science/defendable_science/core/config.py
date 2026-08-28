@@ -10,6 +10,54 @@ import yaml
 DEFAULT_CONFIG_PATH = Path(".defendable-science/config.yml")
 
 
+class RootError(ValueError):
+    """Raised when an explicitly-named repository root cannot be used."""
+
+
+def resolve_root(root: str) -> Path:
+    """Resolve an explicitly-named repository root, requiring it to be there.
+
+    The explicit counterpart of :func:`find_repo_root`, and deliberately the
+    stricter of the two. ``Path(root).resolve()`` does not require existence,
+    and ``init``'s writers ``mkdir(parents=True)``, so ``init --root
+    /typo/path`` silently built a whole tree at the typo; ``check --root
+    /typo/path`` reported every required file as missing, which is a verdict on
+    a repository nobody ever looked at (#132). An explicitly-named root is a
+    deliberate statement about an *existing* repository; a non-existent one is
+    almost always a slip of the keyboard, and the genuine "scaffold into a new
+    directory" case is one ``mkdir -p`` away — which is why there is no
+    ``--allow-new-root``: a flag for a rare intent is surface for little value.
+
+    Discovery is untouched. With no ``--root``, :func:`find_repo_root` still
+    walks up for ``.defendable-science/`` and falls back to the current
+    directory, because an un-onboarded directory is exactly where ``init`` is
+    run.
+
+    :param root: The value passed to ``--root``.
+    :returns: The canonical absolute path of the root directory.
+    :raises RootError: If `root` does not exist, or exists as something other
+        than a directory. The two are distinguished: reporting a file as
+        missing would send the author looking for the wrong problem.
+    """
+    path = Path(root).resolve()
+    if path.is_dir():
+        return path
+    if path.exists():
+        msg = (
+            f"--root {path} is not a directory; --root must name an existing "
+            "repository root. Point it at the repository's directory, or omit "
+            "--root to use the repository discovered from the current directory."
+        )
+        raise RootError(msg)
+    msg = (
+        f"--root {path} does not exist; --root must name an existing directory. "
+        f"Correct the path, or create it first (`mkdir -p {path}`) and re-run — "
+        "or omit --root to use the repository discovered from the current "
+        "directory."
+    )
+    raise RootError(msg)
+
+
 def find_repo_root(start: Path | None = None) -> Path:
     """Find the repository root by walking up for ``.defendable-science/``.
 

@@ -219,6 +219,52 @@ def test_check_exits_one_on_an_invalid_layout_block(
     assert "Traceback" not in result.output
 
 
+def test_check_refuses_a_root_that_does_not_exist(tmp_path: Path) -> None:
+    """A typo in ``--root`` is a message, not a repo reported wholly missing.
+
+    ``check`` writes nothing, so the cost is a confusing report rather than a
+    stray tree — but "every required file is missing" is a report about a
+    repository that was never looked at, and an integrity tool must not hand
+    that back as a finding about the author's work (#132).
+    """
+    typo = tmp_path / "typo-root"
+
+    result = runner.invoke(app, ["check", "--root", str(typo)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(typo) in result.output
+    assert "does not exist" in result.output
+    assert result.stdout.strip() == ""
+
+
+def test_check_refuses_a_root_that_is_not_a_directory(tmp_path: Path) -> None:
+    notes = tmp_path / "notes.md"
+    notes.write_text("mine\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["check", "--root", str(notes)])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert str(notes) in result.output
+    assert "not a directory" in result.output
+    assert result.stdout.strip() == ""
+
+
+def test_check_still_discovers_a_root_when_it_is_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery stays as permissive as it was: only ``--root`` is tightened."""
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    nested = tmp_path / "docs" / "research"
+    monkeypatch.chdir(nested)
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 0, result.stdout
+
+
 def test_unreadable_staged_document_is_reported_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

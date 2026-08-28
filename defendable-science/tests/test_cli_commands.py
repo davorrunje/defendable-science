@@ -628,7 +628,7 @@ def test_init_refuses_a_root_that_does_not_exist(
     """
     repo = _fresh_repo(tmp_path)
     monkeypatch.chdir(repo)
-    typo = tmp_path / "reserch"
+    typo = tmp_path / "typo-root"
 
     result = runner.invoke(app, ["init", "--root", str(typo)])
 
