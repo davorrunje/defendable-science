@@ -38,7 +38,7 @@ from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
 from defendable_science.literature import registry as registry_mod
-from defendable_science.scaffold.init_repo import init_repo
+from defendable_science.scaffold.init_repo import RootError, init_repo, resolve_root
 from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
@@ -272,7 +272,11 @@ def init(
     root: Annotated[
         str | None,
         typer.Option(
-            "--root", help="Repository root to scaffold; discovered if omitted."
+            "--root",
+            help=(
+                "Repository root to scaffold; must be an existing directory. "
+                "Discovered from the current directory if omitted."
+            ),
         ),
     ] = None,
     thesis: Annotated[
@@ -298,18 +302,27 @@ def init(
     re-running against a customised repo cannot re-scaffold the default tree
     beside it.
 
-    :param root: The repository root to scaffold; discovered from the cwd when
-        omitted. Authoritative for the whole resolution chain — the config that
-        is read and the cache path that is ignored come from this root too.
+    :param root: The repository root to scaffold, which **must already exist as
+        a directory** (:func:`resolve_root`) — the writers create parents, so a
+        typo would otherwise raise a whole tree at the typo. Discovered from the
+        cwd when omitted, which stays as permissive as it has always been.
+        Authoritative for the whole resolution chain — the config that is read
+        and the cache path that is ignored come from this root too.
     :param thesis: Also scaffold the optional thesis tree (aims, milestones,
         the kappa directory).
     :param dry_run: Report exactly what a real run would do, touching nothing.
-    :raises typer.Exit: Code 1 on an invalid ``.defendable-science/config.yml``,
-        or if a path cannot be written (an unwritable tree, a parent that is a
+    :raises typer.Exit: Code 1 if ``--root`` names something that is not an
+        existing directory, on an invalid ``.defendable-science/config.yml``, or
+        if a path cannot be written (an unwritable tree, a parent that is a
         file). A failed run prints no report: a partial scaffold must never read
         as a completed one.
     """
-    config, layout = _layout_or_exit(Path(root).resolve() if root else None)
+    try:
+        explicit_root = resolve_root(root) if root else None
+    except RootError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    config, layout = _layout_or_exit(explicit_root)
     # Repo-relative and directory-shaped, matching `render.DEFAULT_CACHE_DIR`:
     # this string is written into both config.yml and .gitignore, and an
     # absolute path in either would be wrong (.gitignore) or unportable (config).

@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from defendable_science.cli import app
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status
-from defendable_science.scaffold.init_repo import init_repo
+from defendable_science.scaffold.init_repo import RootError, init_repo, resolve_root
 from defendable_science.scaffold.layout import Layout
 
 runner = CliRunner()
@@ -34,6 +34,45 @@ def repo(tmp_path: Path) -> Path:
 def _init(root: Path, *, thesis: bool = False, dry_run: bool = False) -> list[str]:
     actions = init_repo(Layout.default(root), thesis=thesis, dry_run=dry_run)
     return [f"{a.status}:{a.path.relative_to(root)}" for a in actions]
+
+
+# --- an explicitly-named root (#132) -----------------------------------------
+
+
+def test_resolve_root_returns_the_canonical_path_of_an_existing_directory(
+    repo: Path,
+) -> None:
+    assert resolve_root(str(repo / "." / "")) == repo.resolve()
+
+
+def test_resolve_root_refuses_a_path_that_does_not_exist(repo: Path) -> None:
+    """`init`'s writers `mkdir(parents=True)`, so a typo would build the tree."""
+    typo = repo / "reserch"
+
+    with pytest.raises(RootError) as excinfo:
+        resolve_root(str(typo))
+
+    message = str(excinfo.value)
+    assert str(typo) in message
+    assert "does not exist" in message
+    # Actionable: the genuine "scaffold into a new directory" case, spelled out.
+    assert "mkdir -p" in message
+    assert not typo.exists()
+
+
+def test_resolve_root_refuses_a_path_that_is_not_a_directory(repo: Path) -> None:
+    """Distinct from missing: reporting a file as absent would misdirect."""
+    notes = repo / "notes.md"
+    notes.write_text("mine\n", encoding="utf-8")
+
+    with pytest.raises(RootError) as excinfo:
+        resolve_root(str(notes))
+
+    message = str(excinfo.value)
+    assert str(notes) in message
+    assert "not a directory" in message
+    assert "does not exist" not in message
+    assert notes.read_text(encoding="utf-8") == "mine\n"
 
 
 def test_init_creates_the_default_layout(repo: Path) -> None:
