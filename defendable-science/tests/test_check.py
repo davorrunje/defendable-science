@@ -1172,6 +1172,33 @@ def _strip_cells_block(text: str) -> str:
     return "\n".join(lines[:begin] + lines[end + 1 :]) + "\n"
 
 
+def _depth_cells_artifact(
+    tmp_path: Path,
+    citekey: str = EXTRACT_CITEKEY,
+    cells: list[ex.Cell] | None = None,
+) -> str:
+    """Build a real depth-sourced cells artifact through the actual writer.
+
+    `write_depth_cells` requires a pre-existing `status.understanding` block
+    (defendable-science#142) — seeded here exactly as a real depth digest
+    would carry one — and never writes `status.extraction`, which is the
+    provenance signal `check_extraction` reads (defendable-science#167).
+    """
+    path = tmp_path / f"{citekey}.md"
+    path.write_text(
+        "---\nstatus:\n  understanding: {status: ok, unresolved: []}\n---\n\n"
+        f"# {citekey}\n",
+        encoding="utf-8",
+    )
+    art.write_depth_cells(
+        path,
+        _extraction_cells(citekey) if cells is None else cells,
+        log_dir=tmp_path / "log",
+        date="2026-08-28",
+    )
+    return path.read_text(encoding="utf-8")
+
+
 def test_extraction_check_is_silent_on_a_scaffolded_repo() -> None:
     assert c.check_extraction(LAYOUT, FakeProbe(_scaffolded())) == []
 
@@ -1407,6 +1434,137 @@ def test_extraction_check_uses_configured_locator_patterns(tmp_path: Path) -> No
     files[DIGEST_PATH] = text
     files[LAYOUT.config_file] = (
         "literature:\n  extraction:\n    locator_patterns:\n      - 'Widget-\\d+'\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+# --- depth-sourced cells: no `status.extraction`, still validated (#167) -------
+
+
+def test_extraction_check_accepts_a_sound_depth_sourced_cells_block(
+    tmp_path: Path,
+) -> None:
+    """A depth-sourced row (#142) is validated exactly as an extracted one."""
+    files = _scaffolded()
+    files[DIGEST_PATH] = _depth_cells_artifact(tmp_path)
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_flags_a_depth_sourced_cell_with_no_locator(
+    tmp_path: Path,
+) -> None:
+    text = _depth_cells_artifact(tmp_path).replace("  locator: §2, Eq. (3)\n", "")
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "'guarantee type' cell has no locator" in findings[0].message
+
+
+def test_extraction_check_flags_a_depth_sourced_cell_locator_with_a_bad_shape(
+    tmp_path: Path,
+) -> None:
+    text = _depth_cells_artifact(tmp_path).replace(
+        "locator: §2, Eq. (3)", "locator: somewhere in the middle"
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "matches no known form" in findings[0].message
+
+
+def test_extraction_check_flags_a_depth_sourced_not_addressed_cell_with_no_justification(
+    tmp_path: Path,
+) -> None:
+    text = _depth_cells_artifact(tmp_path).replace(
+        "  justification: scoped to fully-monotone inputs in §1\n", ""
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert (
+        "'scope' cell is 'not-addressed' with no justification" in findings[0].message
+    )
+
+
+def test_extraction_check_does_not_cross_check_a_cells_count_for_depth_sourced_cells(
+    tmp_path: Path,
+) -> None:
+    """No `status.extraction.cells` claim exists for a depth-sourced block.
+
+    Unlike an extraction-sourced artifact, there is nothing here for a
+    hand-edit to desynchronise a count from — `_check_extraction_fields` and
+    the count cross-check in `_check_extraction_cells` must never run against
+    this shape at all.
+    """
+    text = _depth_cells_artifact(tmp_path)
+    assert '"batch-check"' not in text
+    assert '"in-sample"' not in text
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_flags_a_malformed_depth_sourced_cells_block(
+    tmp_path: Path,
+) -> None:
+    """Broken markers on a `status.extraction`-free artifact are still a defect."""
+    text = _depth_cells_artifact(tmp_path).replace("```yaml", "```", 1)
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "no ```yaml fence" in findings[0].message
+
+
+def test_extraction_check_flags_malformed_depth_sourced_cells_markers(
+    tmp_path: Path,
+) -> None:
+    """Duplicated markers (not just missing ones) are also a defect, not silence."""
+    text = _depth_cells_artifact(tmp_path)
+    text += f"\n{art.CELLS_BEGIN}\n{art.CELLS_END}\n"
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "malformed" in findings[0].message
+
+
+def test_extraction_check_reuses_locator_patterns_across_depth_sourced_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Patterns are computed once and reused, mirroring the extraction-sourced path."""
+    other_citekey = "jones2023gadget"
+    files = _scaffolded()
+    files[DIGEST_PATH] = _depth_cells_artifact(tmp_path)
+    files[LAYOUT.digest(other_citekey)] = _depth_cells_artifact(
+        tmp_path, citekey=other_citekey
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_is_silent_on_a_depth_digest_with_no_cells_recorded() -> None:
+    """Neither `status.extraction` nor a cells block: legitimately silent."""
+    files = _scaffolded()
+    files[DIGEST_PATH] = (
+        "---\nstatus:\n  understanding: {status: ok, unresolved: []}\n---\n\n"
+        f"# {EXTRACT_CITEKEY}\n"
     )
 
     assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
