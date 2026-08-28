@@ -67,6 +67,20 @@ sub-caches. `research-init`'s scaffold and prose now reference
   invocation (previously these commands did not touch config at all); a
   malformed `config.yml` now surfaces as a clean exit 1 on those commands too,
   consistent with how `literature` commands already behaved.
+- **A relative `cache_dir` is anchored to the repo root and confined to it; an
+  absolute one is honoured without restriction** (#123). The two halves answer
+  different needs. A relative value is resolved against the repository rather
+  than the cwd, so the cache does not move when a command runs from a
+  subdirectory — before that, `dataset fetch` from `docs/research/<paper>/` wrote
+  into a directory `research-init` had never gitignored. And a *relative* value
+  that escapes the repository (`../../elsewhere`) is refused with a clean exit 1,
+  because it is almost certainly a typo and an integrity tool must not write
+  outside the work tree by accident. An **absolute** value stays unrestricted:
+  the off-repo cache this ADR exists to permit — a scratch volume, a CI mount —
+  is expressed exactly that way, so confining everything would have closed the
+  use case in order to fix the accident. This is the same containment rule
+  `resolve_layout` applies to `layout:` keys (ADR-0039), with absolute paths as
+  the deliberate difference.
 
 ## Rejected alternatives
 
