@@ -42,6 +42,11 @@ if TYPE_CHECKING:
 
     from defendable_science.core.http import HttpClient
 
+
+class CacheDirError(ValueError):
+    """Raised on an invalid ``cache_dir:`` configuration."""
+
+
 app = typer.Typer(
     name="defendable-science",
     help="Supporting tooling for the defendable-science research-workflow plugin.",
@@ -176,7 +181,7 @@ def _layout_or_exit(root: Path | None = None) -> tuple[dict[str, Any], Layout]:
 
 
 def _repo_relative(value: str | Path, root: Path | None = None) -> Path:
-    """Anchor a configured path to the repository root.
+    """Anchor a configured path to the repository root, confining relative values.
 
     A path written in ``config.yml`` describes a location in the *repository*,
     not one relative to wherever the author happens to be standing. Resolving it
@@ -185,15 +190,34 @@ def _repo_relative(value: str | Path, root: Path | None = None) -> Path:
     cache's case into a directory ``research-init`` never gitignored. An
     absolute value is honoured as given.
 
+    A **relative** path that escapes the repository (e.g. ``../../elsewhere``) is
+    confined: such a path is almost certainly a typo. An integrity tool must not
+    write outside the work tree by accident. An **absolute** path is honoured
+    without restriction: a deliberately shared cache on a large disk is a real
+    need, and that is exactly how it is expressed.
+
     :param value: The configured path.
     :param root: The repository root to anchor to; discovered from the cwd when
         omitted.
     :returns: The absolute path it names.
+    :raises CacheDirError: If a relative path escapes the repository.
     """
     from defendable_science.core.config import find_repo_root
 
     path = Path(value)
-    return path if path.is_absolute() else (root or find_repo_root()) / path
+    if path.is_absolute():
+        return path
+    repo_root = (root or find_repo_root()).resolve()
+    resolved = (repo_root / path).resolve()
+    # Same containment rule as `_relative` in scaffold/layout.py: a relative
+    # value must stay inside the repository.
+    if resolved != repo_root and repo_root not in resolved.parents:
+        msg = (
+            f"cache_dir must stay inside the repository: {value!r} escapes it. "
+            "Use an absolute path for a deliberately external cache."
+        )
+        raise CacheDirError(msg)
+    return resolved
 
 
 def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) -> Path:
@@ -206,13 +230,16 @@ def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) 
     and the runtime cache location from drifting apart (defendable-science#65).
     A relative value is anchored to the repo root (see :func:`_repo_relative`),
     so the cache does not move when a command is run from a subdirectory.
+    A relative value that escapes the repository is confined to prevent
+    accidental writes outside the work tree.
 
     :param config: A pre-loaded config mapping; loaded fresh when omitted.
     :param root: The repository root a relative ``cache_dir`` is anchored to;
         discovered from the cwd when omitted.
     :returns: The absolute cache root — the configured ``cache_dir``, or
         :data:`_DEFAULT_CACHE_ROOT` when it is unset.
-    :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string.
+    :raises typer.Exit: Code 1 if ``cache_dir`` is present but not a string,
+        or if a relative ``cache_dir`` escapes the repository.
     """
     if config is None:
         config = _load_config_or_exit(root)
@@ -225,7 +252,11 @@ def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) 
             err=True,
         )
         raise typer.Exit(code=1)
-    return _repo_relative(cache_dir, root)
+    try:
+        return _repo_relative(cache_dir, root)
+    except CacheDirError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 # --- init (defendable-science#123) ----------------------------------------------------
