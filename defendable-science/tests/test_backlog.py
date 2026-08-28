@@ -603,6 +603,19 @@ def test_registry_malformed_table_raises(tmp_path: Path) -> None:
         b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
 
 
+def test_registry_ragged_row_raises_naming_the_registry(tmp_path: Path) -> None:
+    # A short registry row would silently pad required columns; the diagnostic
+    # must name the artifact the human edited, not the backlog.
+    papers = tmp_path / "papers.md"
+    papers.write_text(
+        "| paper-id | root | backend |\n|---|---|---|\n| first |\n", encoding="utf-8"
+    )
+    before = papers.read_text(encoding="utf-8")
+    with pytest.raises(b.BacklogError, match="ragged registry row"):
+        b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+    assert papers.read_text(encoding="utf-8") == before
+
+
 def test_registry_absent_file_creates_three_column_table(tmp_path: Path) -> None:
     papers = tmp_path / "nested" / "papers.md"
     b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")

@@ -63,14 +63,17 @@ _RANK_SOURCES = frozenset({"candidate", "parked"})
 #: Character cap on a minted row id (truncated on a word boundary).
 _ID_MAX = 40
 
-BacklogError = TableError
-"""Raised on an illegal transition, a missing row, or a guard violation.
 
-Aliases :class:`~defendable_science.core.mdtable.TableError` rather than
-subclassing it, so a ragged row raised while parsing the host table is still
-catchable as the single backlog error it was before the table core moved out
-of this module.
-"""
+class BacklogError(TableError):
+    """Raised on an illegal transition, a missing row, or a guard violation.
+
+    Subclasses :class:`~defendable_science.core.mdtable.TableError` so a ragged
+    row surfacing from the shared table parser is catchable as the one backlog
+    error (the parse boundaries below re-raise as this type). The direction
+    matters: a backlog failure is *a kind of* error a table front-end can raise,
+    whereas making ``TableError`` mean "any backlog condition" would have handed
+    the shared core a contract it cannot keep for its other consumers.
+    """
 
 
 def columns_for(level: Level) -> list[str]:
@@ -157,7 +160,10 @@ class Backlog:
             or a data row's cell count does not match the header (a ragged row
             would otherwise silently pad/drop required columns).
         """
-        doc = parse_document(text, row_label="backlog")
+        try:
+            doc = parse_document(text, row_label="backlog")
+        except TableError as exc:  # a table fault reaching a backlog caller
+            raise BacklogError(str(exc)) from exc
         if doc.header is None and doc.saw_table_shape:
             raise BacklogError(
                 "malformed backlog table: table-like rows with no GFM '|---|' "
@@ -487,12 +493,16 @@ def append_papers_registry(
     :param root: The paper's root path, relative to the repo.
     :param backend: The experiment-backend binding for the paper.
     :raises BacklogError: If `paper_id` is already registered, the registry table
-        lacks one of :data:`REGISTRY_COLUMNS`, or its rows are not anchored by a
-        GFM separator (writing into a malformed registry would corrupt it).
+        lacks one of :data:`REGISTRY_COLUMNS`, its rows are not anchored by a GFM
+        separator (writing into a malformed registry would corrupt it), or one of
+        its rows is ragged.
     """
     path = Path(papers_md)
     text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    doc = parse_document(text, row_label="backlog")
+    try:
+        doc = parse_document(text, row_label="registry")
+    except TableError as exc:  # a table fault reaching a backlog caller
+        raise BacklogError(str(exc)) from exc
     if doc.header is None and doc.saw_table_shape:
         raise BacklogError(
             f"malformed registry table in {path}: table-like rows with no GFM "
