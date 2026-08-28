@@ -1101,11 +1101,16 @@ def fetch(
     :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or the chain is exhausted.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
     try:
         paths = retrieval_mod.fetch(
-            entry, cache_dir=_dataset_cache_dir(), mirror=_mirror_from(parsed)
+            entry,
+            cache_dir=_dataset_cache_dir(),
+            mirror=_mirror_from(parsed),
+            repo_root=find_repo_root(),
         )
     except retrieval_mod.RetrievalError as exc:
         typer.echo(f"fetch failed: {exc}", err=True)
@@ -1125,9 +1130,13 @@ def verify(
     :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if the id is unknown or a file fails to verify.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
-    report = retrieval_mod.verify(entry, cache_dir=_dataset_cache_dir())
+    report = retrieval_mod.verify(
+        entry, cache_dir=_dataset_cache_dir(), repo_root=find_repo_root()
+    )
     typer.echo(json.dumps(dataclasses.asdict(report) | {"ok": report.ok}, indent=2))
     raise typer.Exit(code=0 if report.ok else 1)
 
@@ -1143,6 +1152,8 @@ def mirror(
     :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if no mirror is configured or a hop fails.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     entry = _entry_or_exit(parsed, identifier)
     mir = _mirror_from(parsed)
@@ -1150,7 +1161,12 @@ def mirror(
         typer.echo("no mirror configured in the manifest", err=True)
         raise typer.Exit(code=1)
     try:
-        paths = retrieval_mod.fetch(entry, cache_dir=_dataset_cache_dir(), mirror=mir)
+        paths = retrieval_mod.fetch(
+            entry,
+            cache_dir=_dataset_cache_dir(),
+            mirror=mir,
+            repo_root=find_repo_root(),
+        )
         for path, ref in zip(paths, entry.files, strict=True):
             mir.put(path, ref.sha256)
     except retrieval_mod.RetrievalError as exc:
@@ -1173,12 +1189,17 @@ def audit(
     :param manifest: Path to the manifest; from the layout when omitted.
     :raises typer.Exit: Code 1 if validation or any fixity check fails.
     """
+    from defendable_science.core.config import find_repo_root
+
     parsed = _load_manifest_or_exit(manifest)
     if identifier:
         entry = _entry_or_exit(parsed, identifier)
         parsed = manifest_mod.Manifest(mirror=parsed.mirror, datasets=[entry])
     report = retrieval_mod.audit(
-        parsed, cache_dir=_dataset_cache_dir(), mirror=_mirror_from(parsed)
+        parsed,
+        cache_dir=_dataset_cache_dir(),
+        mirror=_mirror_from(parsed),
+        repo_root=find_repo_root(),
     )
     typer.echo(
         json.dumps(

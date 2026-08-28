@@ -128,6 +128,37 @@ def test_verify_unreadable_file_is_corrupt_not_crash(
     assert not report.ok
 
 
+def test_verify_tier_a_from_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify Tier-A files from a subdirectory using repo_root."""
+    sha = _write(tmp_path / "data/f.bin")
+    entry = _entry("A", sha)
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+    # Verify from subdirectory with repo_root pointing to tmp_path
+    report = r.verify(entry, cache_dir="cache", repo_root=tmp_path)
+    assert report.ok
+    assert report.verified == ["data/f.bin"]
+
+
+def test_verify_tier_a_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify Tier-A files with absolute paths from any directory."""
+    sha = _write(tmp_path / "data/f.bin")
+    absolute_path = tmp_path / "data/f.bin"
+    entry = _entry("A", sha, path=str(absolute_path))
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+    # Verify with absolute path from subdirectory
+    report = r.verify(entry, cache_dir="cache", repo_root=tmp_path)
+    assert report.ok
+    assert report.verified == [str(absolute_path)]
+
+
 def test_verified_unreadable_present_file_treated_as_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -140,7 +171,7 @@ def test_verified_unreadable_present_file_treated_as_absent(
     monkeypatch.setattr(fx, "sha256_file", _boom)
     # An unreadable Tier-A file is absent to the chain, which then fails cleanly.
     with pytest.raises(r.RetrievalError, match="missing or corrupt"):
-        r.fetch(_entry("A", "a" * 64), cache_dir="cache")
+        r.fetch(_entry("A", "a" * 64), cache_dir="cache", repo_root=tmp_path)
 
 
 # --- fetch chain ------------------------------------------------------------
@@ -151,8 +182,10 @@ def test_fetch_tier_a_verifies_in_place(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sha = _write(Path("data/f.bin"))
-    paths = r.fetch(_entry("A", sha), cache_dir="cache")
-    assert paths == [Path("data/f.bin")]
+    paths = r.fetch(_entry("A", sha), cache_dir="cache", repo_root=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+    assert r.sha256_file(paths[0]) == sha
 
 
 def test_fetch_tier_a_corrupt_raises(
@@ -161,7 +194,38 @@ def test_fetch_tier_a_corrupt_raises(
     monkeypatch.chdir(tmp_path)
     _write(Path("data/f.bin"))
     with pytest.raises(r.RetrievalError, match="missing or corrupt"):
-        r.fetch(_entry("A", "b" * 64), cache_dir="cache")
+        r.fetch(_entry("A", "b" * 64), cache_dir="cache", repo_root=tmp_path)
+
+
+def test_fetch_tier_a_from_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tier-A paths are resolved from the repo root, not the current directory."""
+    sha = _write(tmp_path / "data/f.bin")
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+    # Running from a subdirectory with repo_root pointing to tmp_path
+    paths = r.fetch(_entry("A", sha), cache_dir="cache", repo_root=tmp_path)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+    assert r.sha256_file(paths[0]) == sha
+
+
+def test_fetch_tier_a_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Absolute paths in Tier-A entries work unchanged."""
+    sha = _write(tmp_path / "data/f.bin")
+    absolute_path = tmp_path / "data/f.bin"
+    entry = _entry("A", sha, path=str(absolute_path))
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
+    # Running from a subdirectory with an absolute path
+    paths = r.fetch(entry, cache_dir="cache", repo_root=tmp_path)
+    assert len(paths) == 1
+    assert paths[0] == absolute_path
 
 
 def test_fetch_cache_hit(tmp_path: Path) -> None:
