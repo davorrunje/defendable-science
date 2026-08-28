@@ -392,3 +392,30 @@ def test_a_rejection_renders_as_one_line_naming_the_paper_and_the_cell() -> None
 def test_a_whole_paper_rejection_renders_without_inventing_an_axis() -> None:
     line = ex.render_rejection(ex.Rejection("sill1997", None, "no cells at all"))
     assert line == "sill1997 / no cells at all"
+
+
+def test_a_header_column_repeating_the_row_label_refuses(tmp_path: Path) -> None:
+    """A repeated column collapses the row it labels — refuse before that.
+
+    ``| Method | Method |`` parses each row into ``{header[i]: cells[i]}``, so
+    the duplicate key wins and the citekey cell is *lost*; re-emitting then
+    writes the survivor into both columns. The author's row labels would be
+    silently destroyed, in the one file with no safe failure mode.
+    """
+    text = "## Concept matrix\n\n| Method | Method |\n|---|---|\n| sill1997 | arch |\n"
+    with pytest.raises(
+        ex.ExtractionError, match=r"duplicate column names \['Method'\]"
+    ):
+        ex.axes_from_positioning(_write(tmp_path, text))
+
+
+def test_the_duplicate_column_refusal_names_only_the_repeats(tmp_path: Path) -> None:
+    text = (
+        "## Concept matrix\n\n| Method | breadth | Method |\n|---|---|---|\n| x | | |\n"
+    )
+    with pytest.raises(ex.ExtractionError) as caught:
+        ex.axes_from_positioning(_write(tmp_path, text))
+    message = str(caught.value)
+    assert "['Method']" in message
+    assert "breadth" not in message  # the innocent columns are not suspects
+    assert "rename" in message

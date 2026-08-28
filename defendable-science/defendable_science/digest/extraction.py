@@ -147,9 +147,10 @@ def _checked_axes(header: list[str], target: Path) -> list[str]:
     :returns: The axes, stripped, in column order.
     :raises ExtractionError: If there are no axes beyond the row label, if the
         header carries unreplaced template placeholders or an unnamed column,
-        or if two axes share a name.
+        or if two **columns** share a name.
     """
-    axes = [c.strip() for c in header[1:]]
+    columns = [c.strip() for c in header]
+    axes = columns[1:]
     if not axes:
         raise ExtractionError(
             f"{target}: the concept matrix has no comparison axes, only a row "
@@ -169,11 +170,18 @@ def _checked_axes(header: list[str], target: Path) -> list[str]:
             f"{unnamed} (1-based, counting the row label) — name each one after "
             "the attribute it compares, or delete it"
         )
-    duplicates = sorted({a for a in axes if axes.count(a) > 1})
+    # The **whole** header, row label included. A row is parsed into a mapping
+    # keyed by the header, so a repeated name collapses two cells into one:
+    # `| Method | Method |` loses the citekey the first column carried, and
+    # re-emitting writes the survivor into both columns. Checking only the axes
+    # would let that through, and it destroys authored content silently.
+    duplicates = sorted({c for c in columns if columns.count(c) > 1})
     if duplicates:
         raise ExtractionError(
-            f"{target}: duplicate axis names {duplicates} in the concept matrix "
-            "— rename them so each axis is distinct, or drop the repeat"
+            f"{target}: duplicate column names {duplicates} in the concept "
+            "matrix — two columns of one name collapse into a single cell, "
+            "losing what the other one held; rename them so each column is "
+            "distinct, or drop the repeat"
         )
     return axes
 

@@ -2891,7 +2891,20 @@ def extract_render(
         batch = sorted(set(citekey))
     else:
         batch, errors = _extraction_batch(layout, "digest extract render")
-    if not batch:
+    if not batch and errors:
+        # An empty batch that is empty *because nothing could be read* is not
+        # an empty batch — whether anything was extracted is unknown, and
+        # "run `digest extract record`" would be the wrong repair. The headline
+        # sentence has to say which of the two happened, not just the errors
+        # underneath it.
+        typer.echo(
+            f"digest extract render failed: {len(errors)} artifact(s) under "
+            f"{layout.digests_dir} could not be read and none could be loaded, "
+            "so whether any paper has been extracted is unknown; nothing was "
+            f"rendered and {path} was not touched — repair them and re-run",
+            err=True,
+        )
+    elif not batch:
         # Not "rendered zero rows": no paper was extracted, and the matrix is
         # left alone rather than rewritten to say so.
         typer.echo(

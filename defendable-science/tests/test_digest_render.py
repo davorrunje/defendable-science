@@ -79,12 +79,17 @@ def _matrix_block(text: str) -> str:
 def test_a_new_citekey_is_inserted_leaving_the_other_rows_alone(
     tmp_path: Path,
 ) -> None:
+    target = _write(tmp_path)
+    before = target.read_bytes()
     out = render_matrix(
-        _write(tmp_path),
+        target,
         {"vanilla2020": {"guarantee type": "learned", "partial monotonicity": "no"}},
     )
     assert "| vanilla2020 | learned | no |" in out
     assert "| sill1997 | architectural | no |" in out
+    # Purity on the *success* path too, not only on the refusals: the CLI is
+    # what decides whether anything reaches disk, so the merge must not write.
+    assert target.read_bytes() == before
 
 
 def test_a_new_row_lands_before_the_author_s_own_delta(tmp_path: Path) -> None:
@@ -513,4 +518,42 @@ def test_the_cli_refuses_a_section_holding_two_tables_without_writing(
     assert result.exit_code == 1
     assert "holds 2 tables" in result.stderr
     assert "Traceback" not in (result.stdout + result.stderr)
+    assert _positioning(root).read_bytes() == before
+
+
+def test_a_repeated_header_column_is_refused_before_it_eats_a_row_label(
+    tmp_path: Path,
+) -> None:
+    """``| Method | Method |``: the label cell collapses and a bogus row appears."""
+    doubled_column = (
+        "# Positioning\n\n## Concept matrix\n\n| Method | Method |\n|---|---|\n"
+        "| sill1997 | arch |\n"
+    )
+    target = _write(tmp_path, doubled_column)
+    before = target.read_bytes()
+    with pytest.raises(ExtractionError, match="duplicate column names"):
+        render_matrix(target, {"x2020": {"Method": "v"}})
+    assert target.read_bytes() == before
+
+
+def test_an_all_unreadable_batch_does_not_report_an_empty_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure must not be announced as a legitimate empty result.
+
+    Every artifact was unreadable, so whether anything was extracted is
+    *unknown*. Saying "no extracted papers — run `digest extract record`" would
+    state a falsehood and prescribe the wrong repair.
+    """
+    root = _repo(tmp_path)
+    broken = _extract(root, "bad2021", {"guarantee type": "v"})
+    broken.write_text("not a digest at all\n", encoding="utf-8")
+    before = _positioning(root).read_bytes()
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 1
+    assert "no extracted papers" not in result.stderr
+    assert "could not be read" in result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert [e["citekey"] for e in payload["errors"]] == ["bad2021"]
     assert _positioning(root).read_bytes() == before

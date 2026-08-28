@@ -398,6 +398,14 @@ per-branch delta and section comments survive by construction.
 - **Rows are keyed by citekey** in the first column, so re-rendering is idempotent. Cost to
   state in the skill: a hand-edited row label is overwritten on the next render. That is the
   price of the row being a projection.
+
+  *Amended during implementation — this is not what happens, and the skill must say the true
+  thing.* Row lookup is exact label equality, so a hand-edited label does not get overwritten;
+  it stops matching, and the next render adds a **second** row for the same paper. Safer than
+  the documented behaviour, since nothing the author wrote is lost, but noisier, and the remedy
+  is different: restore the label rather than re-edit it. Two further costs the section did not
+  name — the matrix is re-emitted canonically, so an author's column padding is collapsed and
+  GFM alignment specifiers (`|:---:|`) are dropped.
 - **`**This paper**` is never touched** — it is the author's own delta.
 - **Render never deletes a row.** Insert or update only; if a paper leaves the survey, the
   author removes its row by hand. Automatic deletion is the one operation here with no safe

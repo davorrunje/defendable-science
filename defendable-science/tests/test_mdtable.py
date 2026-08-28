@@ -313,3 +313,32 @@ def test_a_table_after_the_windowed_section_is_not_a_second_table() -> None:
         "Method",
         "axis",
     ]
+
+
+def test_an_ambiguous_section_is_refused_before_a_ragged_row_is_reported() -> None:
+    """The refusal must name the real problem, not a table nobody asked about.
+
+    Collecting rows while scanning would raise ``ragged`` about the scratch
+    table, sending the author to count cells in a table that is not the one
+    they meant — the misdiagnosis `AmbiguousSectionError` exists to avoid.
+    """
+    text = (
+        "## Concept matrix\n\n| Method | axis |\n|---|---|\n| a | b |\n\n"
+        "Scratch:\n\n| x | y |\n|---|---|\n| 1 | 2 | 3 |\n"
+    )
+    with pytest.raises(md.AmbiguousSectionError, match="holds 2 tables"):
+        md.parse_document(text, under_heading="Concept matrix")
+
+
+def test_the_one_table_in_a_section_is_still_checked_for_ragged_rows() -> None:
+    text = "## Concept matrix\n\n| a | b |\n|---|---|\n| 1 |\n"
+    with pytest.raises(md.TableError, match="ragged concept-matrix row"):
+        md.parse_document(
+            text, under_heading="Concept matrix", row_label="concept-matrix"
+        )
+
+
+def test_an_unwindowed_ragged_table_after_the_first_is_still_ignored() -> None:
+    """`backlog.py`'s guarantee: a later sloppy table is not this caller's problem."""
+    text = "| a | b |\n|---|---|\n| 1 | 2 |\n\nprose\n\n| x |\n|---|\n| 1 | 2 |\n"
+    assert md.parse_document(text).header == ["a", "b"]

@@ -130,6 +130,31 @@ class Document:
     saw_table_shape: bool = False
 
 
+def _row_span(lines: list[str], start: int, end_limit: int) -> int:
+    """Return the index just past the contiguous data rows at `start`.
+
+    Where a table ends, without deciding whether its rows are well-formed —
+    :func:`_collect_rows` is written in terms of this so the two can never
+    disagree about a table's extent. The scan needs the extent alone, so that
+    it can step over one table's rows while merely *counting* the tables in a
+    window, and leave every ragged-row verdict to the one table the caller
+    ends up with.
+
+    :param lines: The document's lines.
+    :param start: Index of the first line after the GFM separator.
+    :param end_limit: Index one past the last line the table may occupy.
+    :returns: The index of the first post-table line.
+    """
+    end = start
+    while (
+        end < end_limit
+        and "|" in lines[end]
+        and not is_separator(split_cells(lines[end]))
+    ):
+        end += 1
+    return end
+
+
 def _collect_rows(
     lines: list[str], header: list[str], start: int, end_limit: int, row_label: str
 ) -> tuple[list[Row], int]:
@@ -148,21 +173,16 @@ def _collect_rows(
     :raises TableError: If a data row's cell count does not match `header` (a
         ragged row would otherwise silently pad/drop required columns).
     """
+    end = _row_span(lines, start, end_limit)
     rows: list[Row] = []
-    end = start
-    while end < end_limit:
-        if "|" not in lines[end]:
-            break
-        cells = split_cells(lines[end])
-        if is_separator(cells):
-            break
+    for line in lines[start:end]:
+        cells = split_cells(line)
         if len(cells) != len(header):
             raise TableError(
                 f"ragged {row_label} row: {len(cells)} cells, header has "
                 f"{len(header)} ({cells!r})"
             )
         rows.append({header[i]: cells[i] for i in range(len(header))})
-        end += 1
     return rows, end
 
 
@@ -208,34 +228,46 @@ def _section_bounds(
     return start, end
 
 
+@dataclass
+class _Located:
+    """One separator-confirmed table's position, before its rows are read.
+
+    :param header: The confirmed header's cells.
+    :param header_at: The header line's index.
+    :param rows_at: The first data row's index (just past the separator).
+    """
+
+    header: list[str]
+    header_at: int
+    rows_at: int
+
+
 def _scan_window(
-    lines: list[str],
-    fenced: list[bool],
-    window: tuple[int, int],
-    row_label: str,
-    *,
-    first_only: bool,
-) -> tuple[Document | None, list[int], bool]:
-    """Locate the separator-confirmed tables in `window`.
+    lines: list[str], fenced: list[bool], window: tuple[int, int], *, first_only: bool
+) -> tuple[list[_Located], bool]:
+    """Locate the separator-confirmed tables in `window`, reading no rows.
+
+    Deliberately does **not** parse rows: a window holding two tables is
+    ambiguous, and the caller must be able to say so before any of them is
+    validated. Collecting as it went would let a ragged row in a scratch table
+    the caller never asked about raise first and displace the ambiguity
+    refusal, sending the author to count cells in the wrong table.
 
     :param lines: The document's lines.
     :param fenced: Per-line fence flags from :func:`_fenced`.
     :param window: The half-open line range to search.
-    :param row_label: What to call a row in a ragged-row error message.
-    :param first_only: Stop at the first table found. What an unwindowed caller
-        wants, and not merely an optimisation: scanning on would raise on a
-        ragged row in some *later*, unrelated table the caller never asked
-        about.
-    :returns: The first table (or ``None``), the line index of every confirmed
-        header, and whether table-like rows were seen without a separator.
-    :raises TableError: If a data row of a scanned table is ragged.
+    :param first_only: Stop at the first table. What an unwindowed caller
+        wants: it takes the first table and never refuses, so a second one
+        tells it nothing. It is also what keeps the ambiguity refusal scoped to
+        windowed calls — an unwindowed scan can never report more than one.
+    :returns: The tables found, in document order, and whether table-like rows
+        were seen but never anchored by a separator.
     """
     candidate: list[str] | None = None
     candidate_at = 0
     pending = 0  # consecutive unconfirmed pipe rows (a table shape sans separator)
     saw_table_shape = False
-    found: Document | None = None
-    header_lines: list[int] = []
+    located: list[_Located] = []
     i = window[0]
     while i < window[1]:
         if fenced[i] or "|" not in lines[i]:
@@ -256,21 +288,14 @@ def _scan_window(
         if candidate is None:
             i += 1
             continue
-        rows, end = _collect_rows(lines, candidate, i + 1, window[1], row_label)
-        header_lines.append(candidate_at)
-        if found is None:
-            found = Document(
-                preamble="".join(lines[:candidate_at]),
-                header=candidate,
-                rows=rows,
-                postamble="".join(lines[end:]),
-            )
-            if first_only:
-                break
+        located.append(_Located(candidate, candidate_at, i + 1))
+        if first_only:
+            break
         candidate = None
         pending = 0
-        i = end  # the rows belong to that table, not to the next candidate
-    return found, header_lines, saw_table_shape
+        # The rows belong to that table, not to the next candidate header.
+        i = _row_span(lines, i + 1, window[1])
+    return located, saw_table_shape
 
 
 def parse_document(
@@ -308,23 +333,32 @@ def parse_document(
     # answer, as it has always been. Only a caller that named a section is
     # saying "I mean one specific table", and only there can a second one be
     # ambiguous.
-    found, header_lines, saw_table_shape = _scan_window(
-        lines, fenced, window, row_label, first_only=under_heading is None
+    located, saw_table_shape = _scan_window(
+        lines, fenced, window, first_only=under_heading is None
     )
-    if found is None:
+    if not located:
         return Document(preamble=text, saw_table_shape=saw_table_shape)
-    if len(header_lines) > 1:
+    if len(located) > 1:
         # The caller named a section because it means one specific table, and
         # `splice` would write into whichever this returned. A legend above the
         # matrix is ordinary authoring, and silently overwriting it while
         # leaving the matrix untouched is the worst outcome available.
         raise AmbiguousSectionError(
-            f"the {under_heading!r} section holds {len(header_lines)} tables "
-            f"(headers at lines {[n + 1 for n in header_lines]}) — which one is "
+            f"the {under_heading!r} section holds {len(located)} tables (headers "
+            f"at lines {[t.header_at + 1 for t in located]}) — which one is "
             "meant cannot be guessed; keep one table in the section, or move "
             "the others under a heading of their own"
         )
-    return found
+    # Only now, and only for the one table the caller gets: a ragged-row
+    # verdict must be about the table they asked for.
+    table = located[0]
+    rows, end = _collect_rows(lines, table.header, table.rows_at, window[1], row_label)
+    return Document(
+        preamble="".join(lines[: table.header_at]),
+        header=table.header,
+        rows=rows,
+        postamble="".join(lines[end:]),
+    )
 
 
 def render_table(header: list[str], rows: list[Row]) -> str:
