@@ -20,7 +20,8 @@ experiment-backend implementation.
 
 ## When to use
 
-- **First time** a repository adopts the workflow — there is no `docs/research/`
+- **First time** a repository adopts the workflow — there is no layout directory
+  (for illustration: `docs/research/`)
   or `.defendable-science/` yet.
 - A repo already has research artifacts (reference PDFs, a bibliography, dataset
   files or download scripts, prior results, an existing benchmark/experiment

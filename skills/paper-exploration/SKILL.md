@@ -8,7 +8,7 @@ paper-level mirror of `hypothesis-exploration` one level down (see
 `../../docs/design/00-meta-spec.md` §3.1 and `../hypothesis-exploration/SKILL.md`).
 Where `hypothesis-exploration` proposes hypotheses into a paper's `backlog.md`,
 paper-exploration proposes *candidate papers* — application spin-offs and
-follow-ups — into the portfolio's `docs/research/portfolio-backlog.md`. A paper
+follow-ups — into the portfolio backlog (resolved from the repo's layout). A paper
 starts as a one-line pitch here and, once the human promotes it, is handed to
 `paper-synthesis` (the **resolve** skill) which drives it through
 pitch → positioning → outline/plan → decision → sections (ADR-0006,
@@ -30,7 +30,7 @@ top. This skill **proposes only**; the human decides what gets written
   want it parked as a candidate before it is lost.
 - You want the backlog re-ranked by feasibility × interest, or a candidate
   promoted to `paper-synthesis` (or dropped).
-- You are registering a newly promoted paper into `docs/research/papers.md`.
+- You are registering a newly promoted paper into the papers registry (resolved from the repo's layout).
 
 Do **not** use this skill to *develop* a paper (that is `paper-synthesis`), to
 decide *whether to publish* (that is the `decision.md` gate inside
@@ -122,11 +122,11 @@ lenses and the human triages — scout adjudicates nothing.
 
 ## The papers registry
 
-Paper-exploration owns `docs/research/papers.md` — the portfolio's index of
+Paper-exploration owns the papers registry (resolved from the repo's layout) — the portfolio's index of
 paper roots and their experiment-backend binding.
 
-- **What it holds.** One row per paper: `paper-id` → its root path under
-  `docs/research/<paper>/` + a `backend:` field naming the bound experiment
+- **What it holds.** One row per paper: `paper-id` → its root path (resolved from the repo's layout)
+  + a `backend:` field naming the bound experiment
   backend (**required — the plugin bundles no default**; each repo supplies its own
   implementation of the contract; ADR-0013,
   `../../decisions/0013-experiment-backend-contract.md`;

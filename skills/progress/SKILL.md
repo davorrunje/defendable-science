@@ -27,8 +27,8 @@ lifecycle §5 (`../../docs/design/01-lifecycle.md`).
 - You want to see **blockers** (a refuted load-bearing hypothesis, an uncovered
   aim) or **staleness** (artifacts whose `last-updated` has gone cold relative to
   their backend evidence — cross-check with the experiment backend's `is-current`,
-  resolved from the `backend:` binding in `docs/research/papers.md`).
-- You need to regenerate `docs/research/dashboard.md` after any status frontmatter
+  resolved from the paper registry for illustration: `docs/research/papers.md`).
+- You need to regenerate the dashboard (for illustration: `docs/research/dashboard.md`) after any status frontmatter
   changed.
 
 Do **not** use progress to decide a verdict, rank artifacts by "productivity," or
@@ -41,7 +41,7 @@ compute a completion percentage — those are firewall/anti-Goodhart violations
 | Verb | What it does |
 |---|---|
 | `status <level> [id]` | Run `defendable-science check` first. Then read the frontmatter for one artifact (`id` given) or every artifact at a level (`hypothesis` \| `paper` \| `thesis` \| `literature`), roll it up per the rules below, and print a coverage + blockers view. No files written. |
-| `dashboard` | Run `defendable-science check` first. Then regenerate `docs/research/dashboard.md` as a **pure projection** of all status frontmatter. The only file progress writes — and it is machine-owned, never hand-edited. |
+| `dashboard` | Run `defendable-science check` first. Then regenerate the dashboard (for illustration: `docs/research/dashboard.md`) as a **pure projection** of all status frontmatter. The only file progress writes — and it is machine-owned, never hand-edited. |
 
 - `status` is the everyday verb; run it freely, it mutates nothing.
 - `dashboard` overwrites the generated file wholesale from current frontmatter. If
@@ -96,7 +96,7 @@ own lighter `understanding` + `last-updated` (written by `defend`), which progre
 |---|---|---|
 | hypothesis | `…/hypotheses/<slug>/findings.md` | `verdict` (confirmed/refuted/inconclusive), `readiness`, `evidence`, sign-off. Before `findings.md` exists, readiness is `pending`, inferred from the furthest completed stage. |
 | paper | `…/<paper>/paper/decision.md` | `verdict: publish\|no-go`, `readiness` (drafting/under-review/published), sign-off. |
-| thesis | `docs/research/thesis/aims.md` | `readiness: framing\|synthesis\|defensible`, the defensibility sign-off, and the machine-readable **aim list** that `paper → thesis` roll-up matches against each paper's `covers:`. Milestones stay in `thesis/milestones.yml`. |
+| thesis | thesis aims file (for illustration: `docs/research/thesis/aims.md`) | `readiness: framing\|synthesis\|defensible`, the defensibility sign-off, and the machine-readable **aim list** that `paper → thesis` roll-up matches against each paper's `covers:`. Milestones stay in the thesis milestones file. |
 
 ## Definition of done
 
@@ -137,7 +137,7 @@ Output shape everywhere: `{covered / total by state}` + `{explicit blockers}` +
 ## Literature reading
 
 A fourth roll-up, independent of the hypothesis/paper/thesis hierarchy above
-(`status literature`): scan `docs/research/literature/digests/*.md`
+(`status literature`): scan digest artifacts (for illustration: `docs/research/literature/digests/*.md`)
 frontmatter directly — the `understanding` block the `digest` skill writes via
 `defend record --target paper-comprehension` (ADR-0033) — and report, per
 digested paper, `{digested & understood / gaps unresolved}`, joined against
