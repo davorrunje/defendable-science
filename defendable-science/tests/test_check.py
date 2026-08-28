@@ -10,6 +10,8 @@ import pytest
 from defendable_science.check import checks as c
 from defendable_science.check import model as m
 from defendable_science.check.probe import FsProbe
+from defendable_science.digest import artifact as art
+from defendable_science.digest import extraction as ex
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status as st
 from defendable_science.scaffold.layout import Layout
@@ -909,6 +911,457 @@ def test_staged_documents_handles_external_thesis_dir() -> None:
     assert LAYOUT.paper_docs_dir("dc") / "pitch.md" in docs
     assert external_thesis / "kappa" / "kappa.md" in docs
     assert external_thesis / "kappa" / "aims.md" in docs
+
+
+# --- extraction-status checks (#147) ------------------------------------------
+
+EXTRACT_CITEKEY = "smith2024widget"
+DIGEST_PATH = LAYOUT.digest(EXTRACT_CITEKEY)
+
+
+def _extraction_cells(citekey: str = EXTRACT_CITEKEY) -> list[ex.Cell]:
+    """One value cell with a locator, one justified `not-addressed` cell."""
+    return [
+        ex.Cell(citekey, "guarantee type", "architectural", locator="§2, Eq. (3)"),
+        ex.Cell(
+            citekey,
+            "scope",
+            ex.NOT_ADDRESSED,
+            justification="scoped to fully-monotone inputs in §1",
+        ),
+    ]
+
+
+def _extraction_artifact(
+    tmp_path: Path,
+    citekey: str = EXTRACT_CITEKEY,
+    cells: list[ex.Cell] | None = None,
+    *,
+    in_sample: bool = False,
+    batch_check: str = "pending",
+) -> str:
+    """Build a real extraction artifact through the actual writer.
+
+    Written to `tmp_path` (a real, throwaway directory) and read back as text,
+    so every fixture is exactly what `digest extract record` produces rather
+    than a hand-rolled approximation of it. Callers that need a corrupted
+    artifact take this text and mutate it, the same way a hand-edit would.
+    """
+    path = tmp_path / f"{citekey}.md"
+    art.write_extraction(
+        path,
+        _extraction_cells(citekey) if cells is None else cells,
+        in_sample=in_sample,
+        batch_check=batch_check,
+        log_dir=tmp_path / "log",
+        date="2026-08-28",
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def _strip_cells_block(text: str) -> str:
+    """Delete the extracted-cells block, leaving the status block intact."""
+    lines = text.splitlines()
+    begin = lines.index(art.CELLS_BEGIN)
+    end = lines.index(art.CELLS_END)
+    return "\n".join(lines[:begin] + lines[end + 1 :]) + "\n"
+
+
+def test_extraction_check_is_silent_on_a_scaffolded_repo() -> None:
+    assert c.check_extraction(LAYOUT, FakeProbe(_scaffolded())) == []
+
+
+def test_extraction_check_is_silent_on_an_artifact_with_no_extraction_block() -> None:
+    """A depth-mode-only digest is legitimately extraction-free (#147)."""
+    files = _scaffolded()
+    files[DIGEST_PATH] = (
+        "---\n"
+        "status:\n"
+        "  understanding: {status: gaps, unresolved: [why convexity matters]}\n"
+        "  last-updated: 2026-08-28\n"
+        "---\n\n"
+        f"# {EXTRACT_CITEKEY}\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_accepts_a_freshly_written_artifact(tmp_path: Path) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_validates_extraction_rules_only_when_both_blocks_are_present(
+    tmp_path: Path,
+) -> None:
+    """`understanding` and `extraction` coexist; neither is judged by the other's rules."""
+    text = _extraction_artifact(tmp_path).replace(
+        "status:\n",
+        "status:\n  understanding: {status: gaps, unresolved: []}\n",
+        1,
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_flags_a_cell_count_mismatch(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace('"cells": 2', '"cells": 5')
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "claims `cells: 5`" in findings[0].message
+    assert "holds 2 cell(s)" in findings[0].message
+    assert findings[0].file == str(LAYOUT.rel(DIGEST_PATH))
+
+
+def test_extraction_check_flags_a_non_integer_cells_value(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace('"cells": 2', '"cells": "two"')
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "not an integer" in findings[0].message
+
+
+def test_extraction_check_flags_a_boolean_cells_value(tmp_path: Path) -> None:
+    """A `bool` is a subclass of `int`; `cells: true` must not slip through."""
+    text = _extraction_artifact(tmp_path).replace('"cells": 2', '"cells": true')
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "not an integer" in findings[0].message
+
+
+def test_extraction_check_flags_an_unknown_batch_check_verdict(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace(
+        '"batch-check": "pending"', '"batch-check": "yolo"'
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "batch-check: 'yolo'" in findings[0].message
+
+
+def test_extraction_check_flags_a_hand_written_locators_value(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace(
+        '"locators": "ok"', '"locators": "verified"'
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "locators: 'verified'" in findings[0].message
+
+
+def test_extraction_check_flags_a_non_boolean_in_sample(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace(
+        '"in-sample": false', '"in-sample": "no"'
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "in-sample: 'no'" in findings[0].message
+
+
+def test_extraction_check_flags_a_cell_with_no_locator(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace("  locator: §2, Eq. (3)\n", "")
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "'guarantee type' cell has no locator" in findings[0].message
+
+
+def test_extraction_check_flags_a_cell_locator_with_an_unrecognised_shape(
+    tmp_path: Path,
+) -> None:
+    text = _extraction_artifact(tmp_path).replace(
+        "locator: §2, Eq. (3)", "locator: somewhere in the middle"
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "matches no known form" in findings[0].message
+
+
+def test_extraction_check_flags_a_not_addressed_cell_with_no_justification(
+    tmp_path: Path,
+) -> None:
+    text = _extraction_artifact(tmp_path).replace(
+        "  justification: scoped to fully-monotone inputs in §1\n", ""
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert (
+        "'scope' cell is 'not-addressed' with no justification" in findings[0].message
+    )
+
+
+def test_extraction_check_reports_an_unreadable_digest_artifact(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    probe = FakeProbe(files, unreadable={DIGEST_PATH})
+
+    findings = c.check_extraction(LAYOUT, probe)
+
+    assert [f.severity for f in findings] == ["unreadable"]
+
+
+def test_extraction_check_flags_unterminated_frontmatter() -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = "---\nstatus:\n  extraction: {}\n"
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert findings[0].file == str(LAYOUT.rel(DIGEST_PATH))
+
+
+def test_extraction_check_flags_a_missing_cells_block(tmp_path: Path) -> None:
+    """Claiming a cell count with no cells block at all is a defect, not a read failure."""
+    text = _strip_cells_block(_extraction_artifact(tmp_path))
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "no extracted-cells block" in findings[0].message
+
+
+def test_extraction_check_flags_a_broken_cells_fence(tmp_path: Path) -> None:
+    text = _extraction_artifact(tmp_path).replace("```yaml", "```", 1)
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "no ```yaml fence" in findings[0].message
+
+
+def test_extraction_check_handles_multiple_digest_artifacts(tmp_path: Path) -> None:
+    """The locator patterns are only computed once, and reused for later artifacts."""
+    other_citekey = "jones2023gadget"
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.digest(other_citekey)] = _extraction_artifact(
+        tmp_path, citekey=other_citekey
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_uses_configured_locator_patterns(tmp_path: Path) -> None:
+    text = _extraction_artifact(
+        tmp_path,
+        cells=[
+            ex.Cell(
+                EXTRACT_CITEKEY, "guarantee type", "architectural", locator="Widget-7"
+            ),
+            ex.Cell(
+                EXTRACT_CITEKEY,
+                "scope",
+                ex.NOT_ADDRESSED,
+                justification="scoped to fully-monotone inputs in §1",
+            ),
+        ],
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+    files[LAYOUT.config_file] = (
+        "literature:\n  extraction:\n    locator_patterns:\n      - 'Widget-\\d+'\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_rejects_an_unconfigured_locator_shape_without_config(
+    tmp_path: Path,
+) -> None:
+    """The same locator, with no config extending the pattern set, is rejected."""
+    text = _extraction_artifact(
+        tmp_path,
+        cells=[
+            ex.Cell(
+                EXTRACT_CITEKEY, "guarantee type", "architectural", locator="Widget-7"
+            ),
+            ex.Cell(
+                EXTRACT_CITEKEY,
+                "scope",
+                ex.NOT_ADDRESSED,
+                justification="scoped to fully-monotone inputs in §1",
+            ),
+        ],
+    )
+    files = _scaffolded()
+    files[DIGEST_PATH] = text
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "matches no known form" in findings[0].message
+
+
+def test_extraction_check_falls_back_to_defaults_when_config_is_missing(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    del files[LAYOUT.config_file]
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_config_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    probe = FakeProbe(files, unreadable={LAYOUT.config_file})
+
+    assert c.check_extraction(LAYOUT, probe) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_config_yaml_is_malformed(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = "cache_dir: [unclosed\n"
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert findings == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_literature_is_not_a_mapping(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = "literature: nope\n"
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_extraction_block_is_not_a_mapping(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = "literature:\n  extraction: nope\n"
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_locator_patterns_is_not_a_list(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = (
+        "literature:\n  extraction:\n    locator_patterns: 'not-a-list'\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_a_locator_pattern_is_not_a_string(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = (
+        "literature:\n  extraction:\n    locator_patterns:\n      - 7\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_to_defaults_when_a_configured_pattern_is_invalid_regex(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = (
+        "literature:\n  extraction:\n    locator_patterns:\n      - '(unclosed'\n"
+    )
+
+    assert c.check_extraction(LAYOUT, FakeProbe(files)) == []
+
+
+def test_extraction_check_falls_back_silently_without_duplicating_configs_own_finding(
+    tmp_path: Path,
+) -> None:
+    """A malformed config is `check_config`'s finding to make, not this check's."""
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.config_file] = "cache_dir: [unclosed\n"
+
+    findings = c.check_extraction(LAYOUT, FakeProbe(files))
+
+    assert not any("config.yml" in f.file for f in findings)
+
+
+def test_digest_artifacts_lists_files_directly_under_the_digests_dir(
+    tmp_path: Path,
+) -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = _extraction_artifact(tmp_path)
+    files[LAYOUT.digests_dir / "notes" / "nested.md"] = "not a digest"
+
+    found = c.digest_artifacts(LAYOUT, FakeProbe(files))
+
+    assert found == [DIGEST_PATH]
+
+
+def test_run_checks_includes_extraction_findings() -> None:
+    files = _scaffolded()
+    files[DIGEST_PATH] = (
+        "---\n"
+        "status:\n"
+        '  extraction: {"cells": 1, "locators": "ok", "in-sample": false, '
+        '"batch-check": "pending"}\n'
+        "---\n"
+    )
+
+    report = c.run_checks(LAYOUT, FakeProbe(files))
+
+    extraction_findings = [f for f in report.findings if f.check == "extraction"]
+    assert extraction_findings
+    assert report.exit_code == 1
 
 
 # --- registries checks -------------------------------------------------------
