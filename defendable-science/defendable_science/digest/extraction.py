@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from defendable_science.core.mdtable import Row, TableError, parse_document
+from defendable_science.core.mdtable import (
+    AmbiguousSectionError,
+    Row,
+    TableError,
+    parse_document,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -83,10 +88,11 @@ def read_matrix(path: str | Path) -> Matrix:
     :param path: The positioning document.
     :returns: The located matrix, its axes in the matrix's own column order.
     :raises ExtractionError: If the file is missing; if it has no
-        ``Concept matrix`` section, or that section has no table, or its table
-        is missing its GFM separator, or is ragged; if the header carries
-        unreplaced template placeholders or an unnamed column; if there are no
-        axes beyond the row label; or if two axes share a name.
+        ``Concept matrix`` section, or **more than one**, or that section has
+        no table, or its table is missing its GFM separator, or is ragged; if
+        the header carries unreplaced template placeholders or an unnamed
+        column; if there are no axes beyond the row label; or if two axes share
+        a name.
     """
     target = Path(path)
     if not target.is_file():
@@ -96,6 +102,11 @@ def read_matrix(path: str | Path) -> Matrix:
         doc = parse_document(
             text, under_heading=CONCEPT_MATRIX_HEADING, row_label="concept-matrix"
         )
+    except AmbiguousSectionError as exc:
+        # Its own message already carries the remedy, and it is not the ragged
+        # row's — appending that one would send the author counting cells in a
+        # table that is perfectly well-formed.
+        raise ExtractionError(f"{target}: {exc}") from exc
     except TableError as exc:
         raise ExtractionError(
             f"{target}: {exc} — give every row one cell per header column"
@@ -116,7 +127,29 @@ def read_matrix(path: str | Path) -> Matrix:
             f"{target}: the '{CONCEPT_MATRIX_HEADING}' section holds no table — add "
             "the matrix, one column per attribute your delta turns on"
         )
-    axes = [c.strip() for c in doc.header[1:]]
+    return Matrix(
+        header=doc.header,
+        rows=doc.rows,
+        axes=_checked_axes(doc.header, target),
+        preamble=doc.preamble,
+        postamble=doc.postamble,
+    )
+
+
+def _checked_axes(header: list[str], target: Path) -> list[str]:
+    """Return the matrix's axes — `header` minus its row label — or refuse.
+
+    Split from :func:`read_matrix` only to keep each function's branching
+    readable; every refusal here is one of that function's documented ones.
+
+    :param header: The matrix's own column order.
+    :param target: The positioning document, named in every message.
+    :returns: The axes, stripped, in column order.
+    :raises ExtractionError: If there are no axes beyond the row label, if the
+        header carries unreplaced template placeholders or an unnamed column,
+        or if two axes share a name.
+    """
+    axes = [c.strip() for c in header[1:]]
     if not axes:
         raise ExtractionError(
             f"{target}: the concept matrix has no comparison axes, only a row "
@@ -142,13 +175,7 @@ def read_matrix(path: str | Path) -> Matrix:
             f"{target}: duplicate axis names {duplicates} in the concept matrix "
             "— rename them so each axis is distinct, or drop the repeat"
         )
-    return Matrix(
-        header=doc.header,
-        rows=doc.rows,
-        axes=axes,
-        preamble=doc.preamble,
-        postamble=doc.postamble,
-    )
+    return axes
 
 
 def axes_from_positioning(path: str | Path) -> list[str]:

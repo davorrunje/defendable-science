@@ -442,3 +442,41 @@ def test_render_is_idempotent_at_the_cli(
     assert second.exit_code == 0
     assert json.loads(second.stdout)["changed"] is False
     assert _positioning(root).read_bytes() == once
+
+
+def test_two_concept_matrix_sections_are_refused_not_guessed(tmp_path: Path) -> None:
+    """Which section is the matrix cannot be guessed; the file is not written."""
+    doubled = POSITIONING + "\n## Concept matrix\n\n| Method | other |\n|---|---|\n"
+    target = _write(tmp_path, doubled)
+    before = target.read_bytes()
+    with pytest.raises(ExtractionError, match="2 headings"):
+        render_matrix(target, {"x2020": {"guarantee type": "v"}})
+    assert target.read_bytes() == before
+
+
+def test_a_matrix_heading_inside_a_fence_is_not_a_second_matrix(
+    tmp_path: Path,
+) -> None:
+    shown = POSITIONING.replace(
+        "```markdown\n| Method | example axis |",
+        "```markdown\n## Concept matrix\n\n| Method | example axis |",
+    )
+    out = render_matrix(
+        _write(tmp_path, shown),
+        {"vanilla2020": {"guarantee type": "learned", "partial monotonicity": "no"}},
+    )
+    assert "| vanilla2020 | learned | no |" in out
+
+
+def test_the_cli_refuses_an_ambiguous_matrix_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubled = POSITIONING + "\n## Concept matrix\n\n| Method | other |\n|---|---|\n"
+    root = _repo(tmp_path, doubled)
+    _extract(root, "x2020", {"guarantee type": "v", "partial monotonicity": "no"})
+    before = _positioning(root).read_bytes()
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 1
+    assert "2 headings" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+    assert _positioning(root).read_bytes() == before

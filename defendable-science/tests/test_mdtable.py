@@ -229,3 +229,36 @@ def test_an_unclosed_fence_runs_to_the_end_of_the_document() -> None:
     doc = md.parse_document(text)
     assert doc.header is None
     assert doc.preamble == text
+
+
+def test_two_sections_with_the_same_heading_are_refused() -> None:
+    """Which section is *the* section cannot be guessed, so nothing is located."""
+    text = (
+        "## Concept matrix\n\n| a |\n|---|\n| 1 |\n\n"
+        "## Concept matrix\n\n| b |\n|---|\n| 2 |\n"
+    )
+    with pytest.raises(
+        md.AmbiguousSectionError, match=r"'Concept matrix' names 2 headings"
+    ):
+        md.parse_document(text, under_heading="Concept matrix")
+
+
+def test_duplicate_headings_are_matched_case_insensitively() -> None:
+    text = "## Concept matrix\n\n| a |\n|---|\n\n### concept MATRIX\n\nprose\n"
+    with pytest.raises(md.AmbiguousSectionError):
+        md.parse_document(text, under_heading="Concept matrix")
+
+
+def test_a_duplicate_heading_inside_a_fence_is_not_ambiguity() -> None:
+    """A heading *shown* in a code block is documentation, not a second section."""
+    text = (
+        "## Concept matrix\n\n| b |\n|---|\n| real |\n\n"
+        "```\n## Concept matrix\n| a |\n|---|\n| fake |\n```\n"
+    )
+    doc = md.parse_document(text, under_heading="Concept matrix")
+    assert doc.rows == [{"b": "real"}]
+
+
+def test_an_ambiguous_section_is_a_table_error() -> None:
+    # Callers that already catch TableError keep catching this one.
+    assert issubclass(md.AmbiguousSectionError, md.TableError)

@@ -62,6 +62,16 @@ class TableError(ValueError):
     """Raised when a document's table is malformed (a ragged data row)."""
 
 
+class AmbiguousSectionError(TableError):
+    """Raised when `under_heading` matches more than one heading.
+
+    A distinct type, not a distinct message, so a caller can offer the remedy
+    that fits — "merge the duplicate sections" is nothing like "give every row
+    one cell per header column". Subclasses `TableError` so every existing
+    ``except TableError`` keeps catching it.
+    """
+
+
 def escape_cell(cell: str) -> str:
     """Escape a cell for a markdown table (newlines and pipes)."""
     return cell.replace("\\", "\\\\").replace("|", r"\|").replace("\n", " ")
@@ -170,20 +180,32 @@ def _section_bounds(
         line inside a code block is a comment or a shell prompt, not a heading,
         and must neither open nor close a section.
     :returns: The bounds, or ``None`` when no such heading exists.
+    :raises AmbiguousSectionError: If more than one heading carries `title`.
+        Which of them is *the* section is unknowable, and taking the first
+        would let a caller write its table into a section it never meant —
+        silently, since the document parses perfectly well either way.
     """
     want = title.strip().casefold()
-    start: int | None = None
+    headings: list[tuple[int, str]] = []
     for i, line in enumerate(lines):
         if fenced[i]:
             continue
         match = _HEADING.match(line)
-        if match is None:
-            continue
-        if start is not None:
-            return start, i
-        if match.group("title").strip().casefold() == want:
-            start = i + 1
-    return None if start is None else (start, len(lines))
+        if match is not None:
+            headings.append((i, match.group("title").strip().casefold()))
+    matches = [i for i, heading in enumerate(headings) if heading[1] == want]
+    if len(matches) > 1:
+        raise AmbiguousSectionError(
+            f"{title!r} names {len(matches)} headings in this document (lines "
+            f"{[headings[i][0] + 1 for i in matches]}) — which section is "
+            "meant cannot be guessed; merge them, or rename all but one"
+        )
+    if not matches:
+        return None
+    at = matches[0]
+    start = headings[at][0] + 1
+    end = headings[at + 1][0] if at + 1 < len(headings) else len(lines)
+    return start, end
 
 
 def parse_document(
@@ -203,7 +225,9 @@ def parse_document(
     :param row_label: What to call a row in a ragged-row error message.
     :returns: The located document; ``header`` is ``None`` when the window holds
         no table, in which case `preamble` is the whole of `text`.
-    :raises TableError: If a data row is ragged (see :func:`_collect_rows`).
+    :raises TableError: If a data row is ragged (see :func:`_collect_rows`), or
+        if `under_heading` matches more than one heading
+        (`AmbiguousSectionError`, see :func:`_section_bounds`).
     """
     lines = text.splitlines(keepends=True)
     fenced = _fenced(lines)
