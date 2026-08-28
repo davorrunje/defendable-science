@@ -487,3 +487,188 @@ def test_missing_recorded_manifest_names_the_path_it_looked_for(
     report = json.loads(validate.stdout)
     assert report["ok"] is False
     assert expected in report["errors"][0]
+
+
+# --- init (#123) ---------------------------------------------------------------------
+#
+# Every scaffold here lands in a `repo` subdirectory of `tmp_path`, never in
+# `tmp_path` itself: the autouse fake-HOME fixture already populates `tmp_path`,
+# and the dry-run assertion ("nothing was written") is only worth making if it
+# can be exact. It also keeps the writer's `.gitignore` merge a long way from
+# this repository's own.
+
+
+def _fresh_repo(tmp_path: Path) -> Path:
+    """Return an empty, un-onboarded repo root under `tmp_path`."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    return root
+
+
+def test_init_scaffolds_and_reports_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["counts"]["created"] > 0
+    assert payload["thesis"] is False
+    assert payload["dry_run"] is False
+    assert payload["root"] == str(repo.resolve())
+    paths = {action["path"] for action in payload["actions"]}
+    assert "docs/research/papers.md" in paths  # repo-relative in the report
+    assert (repo / "docs" / "research" / "papers.md").is_file()
+
+
+def test_init_counts_every_action_it_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The counts are a tally of the actions, not a separate claim about them."""
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    payload = json.loads(runner.invoke(app, ["init"]).stdout)
+
+    counts = payload["counts"]
+    assert set(counts) == {"created", "exists", "merged"}
+    assert sum(counts.values()) == len(payload["actions"])
+    for status in ("created", "exists", "merged"):
+        tallied = [a for a in payload["actions"] if a["status"] == status]
+        assert counts[status] == len(tallied)
+    # `.gitignore` is *merged*, never *created*: the writer appends the missing
+    # entries whether or not the file was already there.
+    assert counts["merged"] == 1
+
+
+def test_init_is_idempotent_at_the_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    runner.invoke(app, ["init"])
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["counts"]["created"] == 0
+    assert payload["counts"]["exists"] == len(payload["actions"])
+
+
+def test_init_dry_run_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["dry_run"] is True
+    assert payload["counts"]["created"] > 0
+    assert list(repo.iterdir()) == []
+
+
+def test_init_thesis_scaffolds_the_thesis_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--thesis"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["thesis"] is True
+    assert (repo / "docs" / "research" / "thesis" / "aims.md").is_file()
+
+
+def test_init_honours_root_and_a_recorded_layout(tmp_path: Path) -> None:
+    """``--root`` is authoritative for the *whole* resolution chain.
+
+    Not just for where files land: the config that is read, and the cache path
+    written into ``.gitignore``, must come from that root too. This test never
+    chdirs, so a resolution that quietly fell back to the cwd would reach for
+    this checkout instead of the scaffolded repo.
+    """
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    (repo / ".defendable-science" / "config.yml").write_text(
+        "layout:\n  research_root: writing/\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(app, ["init", "--root", str(repo)])
+
+    assert result.exit_code == 0, result.output
+    assert (repo / "writing" / "papers.md").is_file()
+    payload = json.loads(result.stdout)
+    assert payload["root"] == str(repo.resolve())
+    assert "writing/papers.md" in {a["path"] for a in payload["actions"]}
+    ignored = (repo / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".defendable-science/cache/" in ignored
+    assert not any(line.startswith("/") for line in ignored)
+
+
+def test_init_gitignores_the_configured_cache_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A repo that moved its cache gets *that* path ignored, not the default."""
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    (repo / ".defendable-science" / "config.yml").write_text(
+        "cache_dir: var/cache/ds\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.output
+    assert "var/cache/ds/" in (repo / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_init_exits_1_on_an_invalid_layout_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    (repo / ".defendable-science" / "config.yml").write_text(
+        "layout:\n  papers_dir: x/\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert "unknown layout key" in result.output
+    assert "research_root" in result.output
+    assert "Traceback" not in result.output
+    assert result.stdout.strip() == ""
+    assert not (repo / "docs").exists()
+
+
+def test_init_reports_a_write_failure_without_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unwritable path is an actionable message, never a raw traceback.
+
+    And never a report either: the scaffold got part-way (``papers.md`` is on
+    disk) and saying so with a JSON report would present a half-finished repo
+    as a finished one.
+    """
+    repo = _fresh_repo(tmp_path)
+    (repo / ".gitignore").mkdir()  # the writer's last step cannot write here
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 1
+    assert not isinstance(result.exception, OSError)
+    assert "Traceback" not in result.output
+    assert ".gitignore" in result.output
+    assert "incomplete" in result.output
+    assert result.stdout.strip() == ""
+    assert (repo / "docs" / "research" / "papers.md").is_file()
