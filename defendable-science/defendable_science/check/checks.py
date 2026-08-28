@@ -2,18 +2,23 @@
 
 Two questions nothing could answer before ``check`` existed: are the files a
 defendable-science repo needs actually there, and do the tables everything else
-reads actually parse with the right column profile? Both failures are real —
-a scaffolded ``portfolio-backlog.md`` whose header was
-``['id', 'status', 'idea', 'rationale', 'ranked', 'promoted-to']`` and a
-``papers.md`` carrying an invented fourth ``state`` column were malformed from
-the moment they were written, and nothing surfaced it until an unrelated
-``backlog park`` tripped over them (#120, #121).
+reads actually parse with the right column profile? The failure is real — a
+scaffolded ``portfolio-backlog.md`` whose header was
+``['id', 'status', 'idea', 'rationale', 'ranked', 'promoted-to']`` carried none
+of the columns the paper profile requires, and nothing surfaced it until an
+unrelated ``backlog park`` tripped over it (#120, #121).
+
+A *missing* required column is the defect; an extra one never is. ``papers.md``
+and both backlogs are author-editable, and their writers deliberately preserve
+whatever a host header carries beyond the profile (``Backlog.columns``,
+``append_papers_registry``), so flagging a column an author added would make
+``check`` nag about a documented extension point.
 
 Every read goes through :func:`_read`, so a file that could not be read is
 reported as ``unreadable`` — validity *unknown* — and never as a valid empty
-one. Every column judgement is delegated to the validators that already own the
-shape (``Backlog``'s own guard, :data:`REGISTRY_COLUMNS`), so a table these
-checks call valid can never be one a mutation then refuses.
+one. Every column judgement is made against the profile its writer enforces
+(:func:`columns_for`, :data:`REGISTRY_COLUMNS`), so a table these checks call
+valid can never be one a mutation then refuses.
 
 Nothing here looks at a verdict: a ``refuted`` hypothesis and a ``no-go`` paper
 are successful science, not findings.
@@ -213,19 +218,21 @@ def _check_backlog(
     table = _parse_table(path, text, layout, level, profile)
     if isinstance(table, Finding):
         return [table]
-    try:
-        # The guard `Backlog` itself applies before any mutation, reused rather
-        # than restated: a header this check passes can never be one that
-        # `backlog park` then refuses to write into. Its message already names
-        # both the missing columns and the level's profile.
-        table._require(*profile)
-    except BacklogError as exc:
+    # `Backlog.columns` is the host file's own header — the very list the
+    # backlog's pre-mutation guard compares the profile against — so this is the
+    # same rule, read through the public API rather than a second definition of
+    # it: a header this check passes can never be one `backlog park` refuses.
+    missing = [column for column in profile if column not in table.columns]
+    if missing:
         return [
             Finding(
                 severity="invalid",
                 check=TABLES_CHECK,
                 file=str(layout.rel(path)),
-                message=str(exc),
+                message=(
+                    f"{level} backlog table is missing required column(s) "
+                    f"{missing}: its header is {table.columns}"
+                ),
                 remedy=(
                     f"migrate the table to the {level} profile — the header "
                     f"`{_header(profile)}` — keeping each existing row's values"
@@ -236,54 +243,38 @@ def _check_backlog(
 
 
 def _registry_columns(path: Path, layout: Layout, header: list[str]) -> list[Finding]:
-    """Report how `header` diverges from the registry's column profile.
+    """Report the required registry columns `header` does not carry.
 
-    The registry's shape is owned by this package end to end — ``init`` renders
-    it from :data:`REGISTRY_COLUMNS` and ``promote --scaffold`` writes into it —
-    so an unknown column is as much a defect as a missing one: it means
-    something wrote a registry nothing owns.
+    Missing columns only. ``append_papers_registry`` raises on exactly this set
+    and writes rows into any header that carries it, preserving the columns
+    beyond it as the author's own ("written empty for the author to fill, never
+    dropped"), so an extra column is an extension point rather than corruption.
+    A missing one is what stops ``promote --scaffold`` registering a paper.
 
     :param path: The registry file, for the finding.
     :param layout: The resolved layout.
     :param header: The column order read from the file.
-    :returns: Up to two ``invalid`` findings (missing columns, unknown columns).
+    :returns: One ``invalid`` finding if a required column is absent, else none.
     """
-    rel = str(layout.rel(path))
-    remedy = (
-        f"restore the registry header to `{_header(list(REGISTRY_COLUMNS))}` — the "
-        "shape `defendable-science init` renders and `backlog promote --scaffold` "
-        "appends rows to"
-    )
-    findings = []
     missing = [column for column in REGISTRY_COLUMNS if column not in header]
-    if missing:
-        findings.append(
-            Finding(
-                severity="invalid",
-                check=TABLES_CHECK,
-                file=rel,
-                message=(
-                    f"registry table is missing required column(s) {missing}: its "
-                    f"header is {header}"
-                ),
-                remedy=remedy,
-            )
+    if not missing:
+        return []
+    return [
+        Finding(
+            severity="invalid",
+            check=TABLES_CHECK,
+            file=str(layout.rel(path)),
+            message=(
+                f"registry table is missing required column(s) {missing}: its "
+                f"header is {header}"
+            ),
+            remedy=(
+                f"add the missing column(s) to the registry header — it must "
+                f"carry `{_header(list(REGISTRY_COLUMNS))}` for "
+                "`backlog promote --scaffold` to append a row"
+            ),
         )
-    unknown = [column for column in header if column not in REGISTRY_COLUMNS]
-    if unknown:
-        findings.append(
-            Finding(
-                severity="invalid",
-                check=TABLES_CHECK,
-                file=rel,
-                message=(
-                    f"registry table carries unknown column(s) {unknown}: the "
-                    f"registry profile is {list(REGISTRY_COLUMNS)}"
-                ),
-                remedy=remedy,
-            )
-        )
-    return findings
+    ]
 
 
 def registry_rows(layout: Layout, probe: Probe) -> tuple[list[Row], list[Finding]]:
@@ -319,8 +310,9 @@ def _check_registered_paper(layout: Layout, probe: Probe, row: Row) -> list[Find
     :param probe: The filesystem seam.
     :param row: One ``papers.md`` row.
     :returns: The findings for this row. An unbound backend is a ``gap`` —
-        incomplete science in a valid file — while a root or backlog the
-        registry names but the repo does not have is ``invalid``.
+        incomplete science in a valid file — while a root that is missing or
+        outside the repository, and a backlog the registry implies but the repo
+        does not have, are ``invalid``.
     """
     registry = str(layout.rel(layout.papers_registry))
     paper_id = row.get("paper-id", "").strip()
@@ -351,7 +343,27 @@ def _check_registered_paper(layout: Layout, probe: Probe, row: Row) -> list[Find
                 ),
             )
         ]
-    paper_root = layout.repo_root / root
+    # Mirrors `scaffold.layout._relative`: an absolute value, or one that walks
+    # out with `..`, would point `check` — and every command that follows this
+    # row — at a tree outside the work tree, which an integrity tool must not do.
+    paper_root = (layout.repo_root / root).resolve()
+    if paper_root != layout.repo_root and layout.repo_root not in paper_root.parents:
+        return [
+            Finding(
+                severity="invalid",
+                check=TABLES_CHECK,
+                file=registry,
+                message=(
+                    f"registered paper {paper_id!r} has root {root}, which is "
+                    f"outside the repository ({paper_root})"
+                ),
+                remedy=(
+                    "make the row's root a repo-relative path inside the "
+                    "repository, e.g. "
+                    f"{layout.rel(layout.paper_dir(paper_id))}"
+                ),
+            )
+        ]
     if not probe.exists(paper_root):
         return [
             Finding(
@@ -369,7 +381,10 @@ def _check_registered_paper(layout: Layout, probe: Probe, row: Row) -> list[Find
             )
         ]
     findings = []
-    if not row.get("backend", "").strip():
+    # Only when the header actually carries the column. A registry missing
+    # `backend` altogether is one reported header defect, not an unbound backend
+    # per row: that gap would be an artifact of the header, not of the science.
+    if "backend" in row and not row["backend"].strip():
         findings.append(
             Finding(
                 severity="gap",

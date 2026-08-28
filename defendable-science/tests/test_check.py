@@ -250,15 +250,21 @@ def test_tables_check_flags_the_header_that_broke_park() -> None:
     assert "one-line" in findings[0].remedy
 
 
-def test_tables_check_flags_an_invented_registry_column() -> None:
+def test_tables_check_is_silent_about_an_extra_registry_column() -> None:
+    """A column beyond the profile is the author's own extension point.
+
+    ``append_papers_registry`` writes rows into a wider header and preserves the
+    extra cells rather than dropping them, so flagging one would have `check`
+    nag about documented behaviour.
+    """
     files = _scaffolded()
     files[LAYOUT.papers_registry] = (
-        "| paper-id | root | backend | state |\n|---|---|---|---|\n"
+        "| paper-id | root | backend | notes |\n|---|---|---|---|\n"
+        "| dc | docs/research/dc | bench | ours |\n"
     )
+    files[LAYOUT.paper_dir("dc") / "backlog.md"] = r.render_paper_backlog()
 
-    findings = c.check_tables(LAYOUT, FakeProbe(files))
-
-    assert any("state" in f.message for f in findings)
+    assert c.check_tables(LAYOUT, FakeProbe(files)) == []
 
 
 def test_tables_check_flags_a_missing_registry_column() -> None:
@@ -268,6 +274,42 @@ def test_tables_check_flags_a_missing_registry_column() -> None:
     findings = c.check_tables(LAYOUT, FakeProbe(files))
 
     assert any("backend" in f.message and f.severity == "invalid" for f in findings)
+
+
+def test_a_missing_backend_column_is_not_reported_once_per_row() -> None:
+    """The header defect is the finding; the rows are not each a second one."""
+    files = _scaffolded()
+    files[LAYOUT.papers_registry] = (
+        "| paper-id | root |\n|---|---|\n| dc | docs/research/dc |\n"
+    )
+    files[LAYOUT.paper_dir("dc") / "backlog.md"] = r.render_paper_backlog()
+
+    findings = c.check_tables(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "backend" in findings[0].message
+    assert not any(f.severity == "gap" for f in findings)
+
+
+def test_tables_check_flags_a_registry_root_outside_the_repository() -> None:
+    files = _scaffolded()
+    files[LAYOUT.papers_registry] = _registry("| dc | ../outside/dc | bench |\n")
+
+    findings = c.check_tables(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "outside the repository" in findings[0].message
+    assert "docs/research/dc" in findings[0].remedy
+
+
+def test_tables_check_flags_an_absolute_registry_root() -> None:
+    files = _scaffolded()
+    files[LAYOUT.papers_registry] = _registry("| dc | /etc | bench |\n")
+
+    findings = c.check_tables(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "outside the repository" in findings[0].message
 
 
 def test_tables_check_flags_a_registry_row_whose_root_is_missing() -> None:
