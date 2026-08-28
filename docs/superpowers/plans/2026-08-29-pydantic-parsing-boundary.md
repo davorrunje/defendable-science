@@ -277,7 +277,7 @@ uv sync && uv lock
 uv tree --no-dev
 ```
 
-Expected: exactly four additions to the runtime tree — `pydantic`, `pydantic-core`, `annotated-types`, `typing-extensions`. Nothing else. If a fifth appears, stop and report it.
+Expected: exactly five additions to the runtime tree — `pydantic`, `pydantic-core`, `annotated-types`, `typing-extensions` and `typing-inspection`. Nothing else. `typing-inspection` is a genuine pydantic 2.13 transitive (pure Python, no compiled artifact), so it does not touch the compiled-wheel axis ADR-0043 weighed. If a *sixth* appears, stop and report it.
 
 - [ ] **Step 4: Write the failing tests for the seam**
 
@@ -1562,7 +1562,7 @@ grep -rn "Pydantic is deliberately rejected\|ADR rejecting it stands" . --exclud
 ls decisions/0043-*.md
 grep -c "0043" decisions/README.md
 cd defendable-science
-uv tree --no-dev | grep -E "pydantic|annotated-types|typing-extensions"
+uv tree --no-dev | grep -E "pydantic|annotated-types|typing-extensions|typing-inspection"
 grep -rln "ValidationError" defendable_science/
 grep -n "cast(" defendable_science/literature/acquire.py | awk -F: '$1 > 1930 && $1 < 1960'
 printf '[1,2]' > /tmp/x.json && uv run defendable-science dataset ingest /tmp/x.json; echo "exit=$?"

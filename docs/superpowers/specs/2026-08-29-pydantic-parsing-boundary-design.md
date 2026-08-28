@@ -34,9 +34,9 @@ installed beside them.
 at v0.2.2 shows a 13-package runtime tree: `typer` pulls `rich` (→ `markdown-it-py`,
 `mdurl`, `pygments`), `shellingham`, `annotated-doc`; `pooch` pulls `packaging`,
 `platformdirs`; `requests` pulls `certifi`, `charset-normalizer`, `idna`, `urllib3`.
-Adding `pydantic` adds `pydantic-core`, `annotated-types` and `typing-extensions` — a real
-download-size increase, since `pydantic-core` ships a compiled per-platform wheel, but a
-difference of degree, not of kind.
+Adding `pydantic` adds `pydantic-core`, `annotated-types`, `typing-extensions` and
+`typing-inspection` — a real download-size increase, since `pydantic-core` ships a compiled
+per-platform wheel, but a difference of degree, not of kind. The other three are pure Python.
 
 What the decision is weighed against is the cost of the status quo. The package hand-parses
 input it did not write at 10 `yaml.safe_load` sites and 10+ `json.loads` sites across nine
@@ -274,10 +274,11 @@ Land as separate PRs against #169, in order.
 
 **Slice 1 — dependency and seam.** Add `pydantic>=2.13,<3` to `[project].dependencies` in
 `defendable-science/pyproject.toml`; `uv sync && uv lock`; confirm `uv tree --no-dev` adds only
-`pydantic`, `pydantic-core`, `annotated-types` and `typing-extensions`. Verified at design
-time: `pydantic-core` 2.48.0 ships `cp311`–`cp315` wheels, covering `>=3.11,<3.15`.
-Try the `pydantic.mypy` plugin under `[tool.mypy]` against the pinned mypy and drop it if it
-does not hold — it is a nicety, not load-bearing. Then `core/models.py` and its tests.
+`pydantic`, `pydantic-core`, `annotated-types`, `typing-extensions` and `typing-inspection`.
+Verified at design time: `pydantic-core` 2.48.0 ships `cp311`–`cp315` wheels, covering
+`>=3.11,<3.15`. Try the `pydantic.mypy` plugin under `[tool.mypy]` against the pinned mypy and
+drop it if it does not hold — it is a nicety, not load-bearing. Then `core/models.py` and its
+tests.
 
 **Slice 2 — `graph.py`, defects 1–4.** Models: `OpenAlexWork` (`id`, `doi`, `ids.arxiv`,
 `display_name`/`title`, `publication_year`, `cited_by_count`,
@@ -343,7 +344,8 @@ degradation branches.
 
 - [ ] `pydantic>=2.13,<3` in `[project].dependencies`; `uv lock` updated
 - [ ] `uv tree --no-dev` adds only `pydantic`, `pydantic-core`, `annotated-types`,
-      `typing-extensions`
+      `typing-extensions` and `typing-inspection` (the last is a pure-Python pydantic 2.13
+      transitive; no compiled artifact, so the ADR's wheel-weight argument is unaffected)
 - [ ] `ValidationError` is caught in exactly one module
 - [ ] Defect 1: a `results` page with a non-dict element yields a named `HttpError`
 - [ ] Defect 2: a non-mapping `abstract_inverted_index` is rejected explicitly
