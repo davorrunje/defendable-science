@@ -900,6 +900,218 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
     return findings
 
 
+# --- cross-artifact checks -------------------------------------------------------
+
+CROSS_ARTIFACT_CHECK = "cross-artifact"
+
+
+def _extract_aim_ids(text: str) -> set[str]:
+    r"""Extract aim ids from aims.md content.
+
+    Parses declared aim ids as the `aim-\d+` tokens appearing in the text;
+    a loose match is right because the gap is advisory and a false negative
+    costs less than nagging about a legitimately-formatted aims file.
+
+    :param text: The aims.md file contents.
+    :returns: Set of aid ids like "aim-1", "aim-2", etc.
+    """
+    import re
+
+    return set(re.findall(r"aim-\d+", text))
+
+
+def _extract_artifact_ids_from_dashboard(text: str) -> set[str]:
+    r"""Extract artifact ids from dashboard.md.
+
+    Looks for backtick-quoted ids in lines matching the dashboard pattern
+    (e.g., `dc` in `- paper `dc` — drafting`). Only extracts from lines with
+    the artifact listing pattern.
+
+    :param text: The dashboard.md file contents.
+    :returns: Set of artifact ids found.
+    """
+    import re
+
+    ids: set[str] = set()
+    # Match lines like "- paper `dc` — status" or "- hypothesis `2026-03-04-x` — status"
+    for line in text.splitlines():
+        # Look for the pattern: "- [type] `[id]` — [status]"
+        match = re.search(r"- (?:paper|hypothesis|thesis) `([^`]+)`", line)
+        if match:
+            ids.add(match.group(1))
+    return ids
+
+
+def _is_ungenerated_stub(text: str) -> bool:
+    """Check if the dashboard is the ungenerated stub.
+
+    The stub carries the marker "Not yet generated".
+
+    :param text: The dashboard.md file contents.
+    :returns: True if this is the ungenerated stub.
+    """
+    return "Not yet generated" in text
+
+
+def _check_dashboard_consistency(
+    layout: Layout, probe: Probe, artifact_ids: set[str]
+) -> list[Finding]:
+    """Check dashboard for stale or orphaned artifact ids.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :param artifact_ids: Set of artifact ids from staged documents.
+    :returns: List of ``gap`` findings for dashboard consistency.
+    """
+    findings: list[Finding] = []
+
+    if not probe.exists(layout.dashboard):
+        return findings
+
+    dashboard_text = _read(layout.dashboard, layout, probe, CROSS_ARTIFACT_CHECK)
+    if not isinstance(dashboard_text, str):
+        return findings
+
+    # Skip if it's the ungenerated stub and no artifact ids exist
+    if _is_ungenerated_stub(dashboard_text) and not artifact_ids:
+        return findings
+
+    dashboard_ids = _extract_artifact_ids_from_dashboard(dashboard_text)
+
+    # Check for ids on disk but not in dashboard
+    findings.extend(
+        Finding(
+            severity="gap",
+            check=CROSS_ARTIFACT_CHECK,
+            file="docs/research/dashboard.md",
+            message=f"artifact {aid!r} exists but is not mentioned in the dashboard",
+            remedy="run the `progress` skill to regenerate the dashboard",
+        )
+        for aid in artifact_ids
+        if aid not in dashboard_ids
+    )
+
+    # Check for ids in dashboard but not on disk
+    findings.extend(
+        Finding(
+            severity="gap",
+            check=CROSS_ARTIFACT_CHECK,
+            file="docs/research/dashboard.md",
+            message=f"dashboard mentions artifact {did!r}, which does not exist",
+            remedy="run the `progress` skill to regenerate the dashboard",
+        )
+        for did in dashboard_ids
+        if did not in artifact_ids
+    )
+
+    return findings
+
+
+def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
+    """Report cross-artifact gaps without failing the run.
+
+    Four rules:
+    1. Verdict set and signed-off-by null → gap
+    2. Readiness in {resolved, published} and evidence == [] → gap
+    3. Covers entries not declared in aims.md (only when aims.md exists)
+    4. Dashboard id-set comparison (skip if stub and no artifact ids exist)
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: List of ``gap`` findings for cross-artifact issues.
+    """
+    findings: list[Finding] = []
+
+    # Get all staged documents
+    docs = staged_documents(layout, probe)
+
+    # Prepare for rule 3: extract declared aims if they exist
+    declared_aims: set[str] = set()
+    check_covers = False
+    if probe.exists(layout.aims):
+        aims_text = _read(layout.aims, layout, probe, CROSS_ARTIFACT_CHECK)
+        if not isinstance(aims_text, Finding):
+            declared_aims = _extract_aim_ids(aims_text)
+            check_covers = True
+
+    # Collect artifact ids for rule 4
+    artifact_ids: set[str] = set()
+
+    # Process each document for rules 1-3 and collect artifact ids
+    for path in docs:
+        rel = str(layout.rel(path))
+        text = _read(path, layout, probe, CROSS_ARTIFACT_CHECK)
+        if isinstance(text, Finding):
+            continue
+
+        status_block = st.parse(text)
+        if status_block is None:
+            continue
+
+        verdict = status_block.get("verdict")
+        readiness = status_block.get("readiness")
+        signed_off_by = status_block.get("signed-off-by")
+        evidence = status_block.get("evidence")
+        covers = status_block.get("covers")
+        artifact_id = status_block.get("id")
+
+        # Rule 1: unsigned verdict
+        if verdict is not None and verdict != "n/a" and signed_off_by is None:
+            findings.append(
+                Finding(
+                    severity="gap",
+                    check=CROSS_ARTIFACT_CHECK,
+                    file=rel,
+                    message=(
+                        f"verdict {verdict!r} is not yet decided: "
+                        "`signed-off-by` is null"
+                    ),
+                    remedy="sign off the verdict with `signed-off-by` and `signed-off-date`",
+                )
+            )
+
+        # Rule 2: empty evidence on resolved/published
+        if readiness in ("resolved", "published") and evidence == []:
+            findings.append(
+                Finding(
+                    severity="gap",
+                    check=CROSS_ARTIFACT_CHECK,
+                    file=rel,
+                    message=(
+                        f"`readiness: {readiness}` with empty `evidence` "
+                        "— evidence is missing"
+                    ),
+                    remedy="record the evidence in the `evidence:` field",
+                )
+            )
+
+        # Rule 3: covers entries not in aims.md (only if thesis exists)
+        if check_covers and covers and isinstance(covers, list):
+            findings.extend(
+                Finding(
+                    severity="gap",
+                    check=CROSS_ARTIFACT_CHECK,
+                    file=rel,
+                    message=(
+                        f"`covers: {covers}` references {aim!r}, "
+                        "which is not declared in aims.md"
+                    ),
+                    remedy=f"add {aim!r} to aims.md, or remove it from covers",
+                )
+                for aim in covers
+                if aim not in declared_aims
+            )
+
+        # Collect artifact ids for rule 4
+        if artifact_id:
+            artifact_ids.add(artifact_id)
+
+    # Rule 4: dashboard id-set comparison
+    findings.extend(_check_dashboard_consistency(layout, probe, artifact_ids))
+
+    return findings
+
+
 # --- config checks ---------------------------------------------------------------
 
 CONFIG_CHECK = "config"

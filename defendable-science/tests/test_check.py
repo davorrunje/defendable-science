@@ -1165,3 +1165,192 @@ def test_config_check_ignores_commented_out_gitignore_entries() -> None:
         f for f in findings if "cache" in f.message and f.severity == "invalid"
     ]
     assert len(cache_missing) == 1
+
+
+# --- cross-artifact checks -------------------------------------------------------
+
+
+def test_an_unsigned_verdict_is_a_gap_not_a_failure() -> None:
+    files = _scaffolded()
+    decision = LAYOUT.paper_docs_dir("dc") / "decision.md"
+    files[decision] = _doc("paper", id="dc", verdict="publish")
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    signed = [f for f in findings if "signed-off-by" in f.message]
+    assert [f.severity for f in signed] == ["gap"]
+    assert "not yet decided" in signed[0].message
+
+
+def test_a_no_go_verdict_is_never_reported_as_a_problem() -> None:
+    files = _scaffolded()
+    decision = LAYOUT.paper_docs_dir("dc") / "decision.md"
+    files[decision] = _doc(
+        "paper",
+        id="dc",
+        verdict="no-go",
+        **{"signed-off-by": "D. Runje", "signed-off-date": "2026-03-04"},
+    )
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    assert [f for f in findings if "no-go" in f.message] == []
+
+
+def test_empty_evidence_on_a_resolved_artifact_is_a_gap() -> None:
+    files = _scaffolded()
+    path = LAYOUT.hypothesis_dir("dc", "2026-03-04-x") / "findings.md"
+    files[path] = _doc(
+        "hypothesis",
+        id="2026-03-04-x",
+        verdict="confirmed",
+        readiness="resolved",
+        **{"signed-off-by": "D. Runje", "signed-off-date": "2026-03-04"},
+    )
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    evidence = [f for f in findings if "evidence" in f.message]
+    assert [f.severity for f in evidence] == ["gap"]
+
+
+def test_a_covers_entry_with_no_such_aim_is_a_gap() -> None:
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing") + (
+        "\n## Aims\n\n- **aim-1** — the first aim\n"
+    )
+    files[PITCH] = "---\nstatus:\n  level: paper\n  id: dc\n  covers: [aim-2]\n---\n"
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    covers = [f for f in findings if "aim-2" in f.message]
+    assert [f.severity for f in covers] == ["gap"]
+
+
+def test_covers_is_not_checked_when_the_repo_has_no_thesis() -> None:
+    files = _scaffolded()
+    files[PITCH] = "---\nstatus:\n  level: paper\n  id: dc\n  covers: [aim-2]\n---\n"
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    assert [f for f in findings if "aim-2" in f.message] == []
+
+
+def test_a_dashboard_missing_a_live_artifact_is_a_gap() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc")
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    stale = [f for f in findings if f.file == "docs/research/dashboard.md"]
+    assert [f.severity for f in stale] == ["gap"]
+    assert "dc" in stale[0].message
+    assert "progress" in stale[0].remedy
+
+
+def test_a_dashboard_naming_an_artifact_that_is_gone_is_a_gap() -> None:
+    files = _scaffolded()
+    files[LAYOUT.dashboard] = "# Research dashboard\n\n- paper `ghost` — drafting\n"
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    assert any("ghost" in f.message for f in findings)
+
+
+def test_the_ungenerated_dashboard_stub_is_not_stale_on_an_empty_repo() -> None:
+    assert c.check_cross_artifact(LAYOUT, FakeProbe(_scaffolded())) == []
+
+
+def test_cross_artifact_ignores_documents_with_missing_status_blocks() -> None:
+    files = _scaffolded()
+    # Add a document without a status block
+    path = LAYOUT.hypothesis_dir("dc", "2026-03-04-x") / "findings.md"
+    files[path] = "# No status block\n\nJust content.\n"
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    # Should not report anything about the file without a status block
+    assert not any(
+        f.file == "docs/research/dc/hypotheses/2026-03-04-x/findings.md"
+        for f in findings
+    )
+
+
+def test_cross_artifact_ignores_documents_with_unreadable_status_blocks() -> None:
+    files = _scaffolded()
+    # Add a document with broken YAML in the frontmatter
+    path = LAYOUT.hypothesis_dir("dc", "2026-03-04-x") / "findings.md"
+    files[path] = "---\nstatus:\n  level: [broken yaml\n---\n\nContent.\n"
+
+    # The parse error means the status block parse fails, not a read error
+    # So we need to use the FakeProbe to simulate an actual read failure
+    probe = FakeProbe(files, unreadable={path})
+
+    findings = c.check_cross_artifact(LAYOUT, probe)
+
+    # Should not report anything about the unreadable file (it skips with continue)
+    assert not any(f.file.endswith("findings.md") for f in findings)
+
+
+def test_cross_artifact_handles_null_artifact_ids() -> None:
+    files = _scaffolded()
+    # Add a document with null id
+    files[PITCH] = _doc("paper", id="null")  # Rendered as null, not the string "null"
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    # Null ids should be skipped (not added to artifact_ids), so dashboard should be clean
+    stale = [f for f in findings if f.file == "docs/research/dashboard.md"]
+    assert stale == []
+
+
+def test_cross_artifact_handles_unreadable_dashboard() -> None:
+    files = _scaffolded()
+    files[PITCH] = _doc("paper", id="dc")
+
+    probe = FakeProbe(files, unreadable={LAYOUT.dashboard})
+
+    findings = c.check_cross_artifact(LAYOUT, probe)
+
+    # Should not report dashboard issues if it cannot be read
+    stale = [f for f in findings if f.file == "docs/research/dashboard.md"]
+    assert stale == []
+
+
+def test_cross_artifact_handles_unreadable_aims() -> None:
+    files = _scaffolded()
+    # Create a document with covers by directly writing YAML
+    pitch_content = (
+        "---\nstatus:\n  level: paper\n  id: dc\n  covers: [aim-1]\n---\n\n# Pitch\n"
+    )
+    files[PITCH] = pitch_content
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing")
+
+    probe = FakeProbe(files, unreadable={LAYOUT.aims})
+
+    findings = c.check_cross_artifact(LAYOUT, probe)
+
+    # Should not check covers if aims is unreadable
+    covers_findings = [
+        f for f in findings if "covers" in f.message or "aim" in f.message
+    ]
+    assert covers_findings == []
+
+
+def test_cross_artifact_handles_documents_with_empty_covers() -> None:
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing") + (
+        "\n## Aims\n\n- **aim-1** — the first aim\n"
+    )
+    # Document with empty covers list should not trigger any findings
+    pitch_content = (
+        "---\nstatus:\n  level: paper\n  id: dc\n  covers: []\n---\n\n# Pitch\n"
+    )
+    files[PITCH] = pitch_content
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    covers_findings = [
+        f for f in findings if "covers" in f.message or "aim" in f.message
+    ]
+    assert covers_findings == []
