@@ -262,3 +262,54 @@ def test_a_duplicate_heading_inside_a_fence_is_not_ambiguity() -> None:
 def test_an_ambiguous_section_is_a_table_error() -> None:
     # Callers that already catch TableError keep catching this one.
     assert issubclass(md.AmbiguousSectionError, md.TableError)
+
+
+def test_a_windowed_section_holding_two_tables_is_refused() -> None:
+    """A legend above the matrix: writing into the first would destroy it."""
+    text = (
+        "## Concept matrix\n\nLegend:\n\n| symbol | meaning |\n|---|---|\n"
+        "| + | holds |\n\nThe matrix:\n\n| Method | axis |\n|---|---|\n| a | b |\n"
+    )
+    with pytest.raises(md.AmbiguousSectionError, match=r"holds 2 tables"):
+        md.parse_document(text, under_heading="Concept matrix")
+
+
+def test_a_second_table_inside_a_fence_is_not_a_second_table() -> None:
+    """The over-correction guard: an illustration must not force a refusal."""
+    text = (
+        "## Concept matrix\n\n```\n| shown | only |\n|---|---|\n| x | y |\n```\n\n"
+        "| Method | axis |\n|---|---|\n| a | b |\n"
+    )
+    doc = md.parse_document(text, under_heading="Concept matrix")
+    assert doc.header == ["Method", "axis"]
+    assert doc.rows == [{"Method": "a", "axis": "b"}]
+
+
+def test_a_windowed_section_with_one_table_is_unaffected() -> None:
+    doc = md.parse_document(TWO_TABLES, under_heading="Concept matrix")
+    assert doc.header == ["Method", "guarantee", "scope"]
+
+
+def test_an_unwindowed_document_with_several_tables_still_takes_the_first() -> None:
+    """The regression that protects `backlog.py`: no refusal without a window.
+
+    A whole-document call legitimately meets many tables — a backlog file's
+    prose routinely holds more than one — so the refusal is scoped to calls
+    that named a section. Simplifying it to apply everywhere breaks them.
+    """
+    doc = md.parse_document(TWO_TABLES)
+    assert doc.header == ["Baseline", "Why"]
+    assert doc.rows == [{"Baseline": "ridge", "Why": "simplest floor"}]
+    # And the round trip still preserves the second table verbatim.
+    assert md.splice(doc.preamble, doc.postamble, doc.header, doc.rows) == TWO_TABLES
+
+
+def test_a_table_after_the_windowed_section_is_not_a_second_table() -> None:
+    text = (
+        "## Concept matrix\n\n| Method | axis |\n|---|---|\n| a | b |\n\n"
+        "## Baselines\n\n| Baseline | Why |\n|---|---|\n| ridge | floor |\n"
+    )
+    assert md.parse_document(text, under_heading="Concept matrix").header == [
+        "Method",
+        "axis",
+    ]

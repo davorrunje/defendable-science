@@ -480,3 +480,37 @@ def test_the_cli_refuses_an_ambiguous_matrix_without_writing(
     assert "2 headings" in result.stderr
     assert "Traceback" not in (result.stdout + result.stderr)
     assert _positioning(root).read_bytes() == before
+
+
+def test_a_legend_table_above_the_matrix_is_refused_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    """The worst pairing: the legend destroyed and the matrix never touched."""
+    with_legend = POSITIONING.replace(
+        "<!-- rows = prior work; the last row is our delta -->\n",
+        "<!-- rows = prior work; the last row is our delta -->\n\n"
+        "| symbol | meaning |\n|---|---|\n| yes | holds unconditionally |\n",
+    )
+    target = _write(tmp_path, with_legend)
+    before = target.read_bytes()
+    with pytest.raises(ExtractionError, match="holds 2 tables"):
+        render_matrix(target, {"x2020": {"guarantee type": "v"}})
+    assert target.read_bytes() == before
+
+
+def test_the_cli_refuses_a_section_holding_two_tables_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_legend = POSITIONING.replace(
+        "<!-- rows = prior work; the last row is our delta -->\n",
+        "<!-- rows = prior work; the last row is our delta -->\n\n"
+        "| symbol | meaning |\n|---|---|\n| yes | holds unconditionally |\n",
+    )
+    root = _repo(tmp_path, with_legend)
+    _extract(root, "x2020", {"guarantee type": "v", "partial monotonicity": "no"})
+    before = _positioning(root).read_bytes()
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 1
+    assert "holds 2 tables" in result.stderr
+    assert "Traceback" not in (result.stdout + result.stderr)
+    assert _positioning(root).read_bytes() == before

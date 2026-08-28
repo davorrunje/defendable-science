@@ -208,6 +208,71 @@ def _section_bounds(
     return start, end
 
 
+def _scan_window(
+    lines: list[str],
+    fenced: list[bool],
+    window: tuple[int, int],
+    row_label: str,
+    *,
+    first_only: bool,
+) -> tuple[Document | None, list[int], bool]:
+    """Locate the separator-confirmed tables in `window`.
+
+    :param lines: The document's lines.
+    :param fenced: Per-line fence flags from :func:`_fenced`.
+    :param window: The half-open line range to search.
+    :param row_label: What to call a row in a ragged-row error message.
+    :param first_only: Stop at the first table found. What an unwindowed caller
+        wants, and not merely an optimisation: scanning on would raise on a
+        ragged row in some *later*, unrelated table the caller never asked
+        about.
+    :returns: The first table (or ``None``), the line index of every confirmed
+        header, and whether table-like rows were seen without a separator.
+    :raises TableError: If a data row of a scanned table is ragged.
+    """
+    candidate: list[str] | None = None
+    candidate_at = 0
+    pending = 0  # consecutive unconfirmed pipe rows (a table shape sans separator)
+    saw_table_shape = False
+    found: Document | None = None
+    header_lines: list[int] = []
+    i = window[0]
+    while i < window[1]:
+        if fenced[i] or "|" not in lines[i]:
+            # Fenced content is an illustration, not the document's table; it
+            # breaks a pending candidate exactly as prose does.
+            candidate = None  # prose breaks a pending header candidate
+            pending = 0
+            i += 1
+            continue
+        cells = split_cells(lines[i])
+        if not is_separator(cells):
+            candidate, candidate_at = cells, i  # a header only if a separator follows
+            pending += 1
+            if pending >= 2:  # header + row(s) shape with no separator between
+                saw_table_shape = True
+            i += 1
+            continue
+        if candidate is None:
+            i += 1
+            continue
+        rows, end = _collect_rows(lines, candidate, i + 1, window[1], row_label)
+        header_lines.append(candidate_at)
+        if found is None:
+            found = Document(
+                preamble="".join(lines[:candidate_at]),
+                header=candidate,
+                rows=rows,
+                postamble="".join(lines[end:]),
+            )
+            if first_only:
+                break
+        candidate = None
+        pending = 0
+        i = end  # the rows belong to that table, not to the next candidate
+    return found, header_lines, saw_table_shape
+
+
 def parse_document(
     text: str, *, under_heading: str | None = None, row_label: str = "table"
 ) -> Document:
@@ -225,9 +290,10 @@ def parse_document(
     :param row_label: What to call a row in a ragged-row error message.
     :returns: The located document; ``header`` is ``None`` when the window holds
         no table, in which case `preamble` is the whole of `text`.
-    :raises TableError: If a data row is ragged (see :func:`_collect_rows`), or
-        if `under_heading` matches more than one heading
-        (`AmbiguousSectionError`, see :func:`_section_bounds`).
+    :raises TableError: If a data row is ragged (see :func:`_collect_rows`); or,
+        for a call that named a section, if `under_heading` matches more than
+        one heading or that section holds more than one table
+        (`AmbiguousSectionError`).
     """
     lines = text.splitlines(keepends=True)
     fenced = _fenced(lines)
@@ -237,34 +303,28 @@ def parse_document(
         if bounds is None:
             return Document(preamble=text)
         window = bounds
-    candidate: list[str] | None = None
-    candidate_at = 0
-    pending = 0  # consecutive unconfirmed pipe rows (a table shape sans separator)
-    saw_table_shape = False
-    for offset, line in enumerate(lines[window[0] : window[1]]):
-        i = window[0] + offset
-        if fenced[i] or "|" not in line:
-            # Fenced content is an illustration, not the document's table; it
-            # breaks a pending candidate exactly as prose does.
-            candidate = None  # prose breaks a pending header candidate
-            pending = 0
-            continue
-        cells = split_cells(line)
-        if is_separator(cells):
-            if candidate is None:
-                continue
-            rows, end = _collect_rows(lines, candidate, i + 1, window[1], row_label)
-            return Document(
-                preamble="".join(lines[:candidate_at]),
-                header=candidate,
-                rows=rows,
-                postamble="".join(lines[end:]),
-            )
-        candidate, candidate_at = cells, i  # a header only if a separator follows
-        pending += 1
-        if pending >= 2:  # header + row(s) shape with no separator between
-            saw_table_shape = True
-    return Document(preamble=text, saw_table_shape=saw_table_shape)
+    # An unwindowed call legitimately meets many tables — a backlog's prose
+    # routinely holds more than one — so the first confirmed table is the
+    # answer, as it has always been. Only a caller that named a section is
+    # saying "I mean one specific table", and only there can a second one be
+    # ambiguous.
+    found, header_lines, saw_table_shape = _scan_window(
+        lines, fenced, window, row_label, first_only=under_heading is None
+    )
+    if found is None:
+        return Document(preamble=text, saw_table_shape=saw_table_shape)
+    if len(header_lines) > 1:
+        # The caller named a section because it means one specific table, and
+        # `splice` would write into whichever this returned. A legend above the
+        # matrix is ordinary authoring, and silently overwriting it while
+        # leaving the matrix untouched is the worst outcome available.
+        raise AmbiguousSectionError(
+            f"the {under_heading!r} section holds {len(header_lines)} tables "
+            f"(headers at lines {[n + 1 for n in header_lines]}) — which one is "
+            "meant cannot be guessed; keep one table in the section, or move "
+            "the others under a heading of their own"
+        )
+    return found
 
 
 def render_table(header: list[str], rows: list[Row]) -> str:
