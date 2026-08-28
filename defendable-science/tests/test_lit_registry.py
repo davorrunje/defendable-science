@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from defendable_science.literature import registry as reg
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write(path: Path, items: list[dict[str, Any]]) -> Path:
@@ -477,6 +475,47 @@ def test_patch_triage_creates_a_missing_file(tmp_path: Path) -> None:
     path = tmp_path / "t.yml"
     reg.patch_triage(path, "k", {"disposition": "screened"})
     assert reg.load_triage(path)["k"].disposition == "screened"
+
+
+# --- #144: a failed atomic replace must not leave an orphan .tmp ---------------
+
+
+def test_patch_triage_removes_the_tmp_file_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`tmp.replace(target)` raising leaves no `.tmp` beside the untouched file."""
+    path = tmp_path / "t.yml"
+    original = "k:\n  disposition: inbox\n"
+    path.write_text(original, encoding="utf-8")
+
+    def _boom(self: Path, _target: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        reg.patch_triage(path, "k", {"disposition": "screened"})
+
+    assert path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "t.yml.tmp").exists()
+
+
+def test_patch_triage_removes_the_tmp_file_when_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`tmp.write_text` raising is also cleaned up, even though nothing landed."""
+    path = tmp_path / "t.yml"
+    original = "k:\n  disposition: inbox\n"
+    path.write_text(original, encoding="utf-8")
+
+    def _boom(self: Path, *_args: object, **_kwargs: object) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    with pytest.raises(OSError, match="permission denied"):
+        reg.patch_triage(path, "k", {"disposition": "screened"})
+
+    assert path.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "t.yml.tmp").exists()
 
 
 # --- the write must not lose a row a reader cannot see -------------------------
