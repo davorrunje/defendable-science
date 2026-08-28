@@ -89,6 +89,11 @@ def _text(value: object) -> str | None:
     return text or None
 
 
+def _unique(values: list[str]) -> tuple[str, ...]:
+    """De-duplicate `values`, keeping first-seen order so two runs agree."""
+    return tuple(dict.fromkeys(values))
+
+
 def _understanding(name: str, value: object) -> tuple[str, ...]:
     """Return the unresolved understanding gaps `value` records, each named.
 
@@ -192,6 +197,12 @@ class _Group:
 def _groups(layout: Layout, probe: Probe) -> list[_Group]:
     """Gather every staged document into the artifact it belongs to.
 
+    Keyed on ``(level, directory)``, not the directory alone. Two levels can
+    share a directory — a stray ``findings.md`` beside ``aims.md`` — and keying
+    on the directory took the level from whichever document was seen first,
+    merged the two, and silently dropped one artifact's status. This module's
+    own invariant is that a projection never drops an artifact.
+
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
     :returns: One group per artifact, its documents in stage order. A thesis's
@@ -199,12 +210,13 @@ def _groups(layout: Layout, probe: Probe) -> list[_Group]:
         level below ``aims.md`` and the two describe the same artifact; every
         other level groups on the directory its documents share.
     """
-    groups: dict[Path, _Group] = {}
+    groups: dict[tuple[str, Path], _Group] = {}
     for path in staged_documents(layout, probe):
         level = STAGED_DOCUMENTS[path.name]
-        key = layout.thesis_dir if level == "thesis" else path.parent
+        directory = layout.thesis_dir if level == "thesis" else path.parent
         paper = None if level == "thesis" else _paper_of(layout, path)
-        groups.setdefault(key, _Group(level, key, paper)).documents.append(path)
+        key = (level, directory)
+        groups.setdefault(key, _Group(level, directory, paper)).documents.append(path)
     for group in groups.values():
         group.documents.sort(key=lambda p: _STAGE_ORDER[p.name])
     return [groups[key] for key in sorted(groups)]
@@ -251,6 +263,16 @@ def _artifact(
 ) -> tuple[Artifact, list[Finding]]:
     """Project one group of staged documents into one dashboard row.
 
+    The **adjudication** axes — verdict, readiness, sign-off, load-bearing —
+    come from the authoritative document alone, because that is what makes it
+    authoritative. Everything else is a fact about the artifact rather than
+    about one stage of it, so it is gathered across the group: the id falls back
+    to whichever document names one, ``last-updated`` is the newest anywhere
+    (late work usually lands in a sibling, and the primary's date would read
+    stale), and ``covers`` and ``blockers`` are unioned (a paper that declared
+    ``covers: [aim-1]`` in its pitch and left ``decision.md``'s empty would
+    otherwise report that aim uncovered).
+
     :param group: The artifact's documents.
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
@@ -261,6 +283,10 @@ def _artifact(
     findings: list[Finding] = []
     understanding: list[str] = []
     notes: list[str] = []
+    ids: list[str] = []
+    updated: list[str] = []
+    covers: list[str] = []
+    blockers: list[str] = []
     primary = group.primary
     fields: dict[str, Any] = {}
     unreadable = False
@@ -273,6 +299,10 @@ def _artifact(
             unreadable = unreadable or path == primary
             continue
         understanding += _understanding(path.name, status.get("understanding"))
+        ids += _strings(_text(status.get("id")))
+        updated += _strings(_text(status.get("last-updated")))
+        covers += _strings(status.get("covers"))
+        blockers += _strings(status.get("blockers"))
         if path == primary:
             fields = status
 
@@ -281,15 +311,18 @@ def _artifact(
             level=group.level,
             label=group.label,
             link=_link(layout, primary),
-            artifact_id=_text(fields.get("id")),
+            artifact_id=_text(fields.get("id")) or (ids[-1] if ids else None),
             paper=group.paper,
             verdict=_text(fields.get("verdict")),
             readiness=_text(fields.get("readiness")),
             signed_off=_text(fields.get("signed-off-by")) is not None,
-            last_updated=_text(fields.get("last-updated")),
+            # ISO-8601 sorts lexicographically, so the newest is the string max.
+            # A value that is not a date is displayed as the author wrote it —
+            # never repaired, and never replaced by an invented one.
+            last_updated=max(updated) if updated else None,
             load_bearing=fields.get("load-bearing") is True,
-            covers=_strings(fields.get("covers")),
-            blockers=_strings(fields.get("blockers")),
+            covers=_unique(covers),
+            blockers=_unique(blockers),
             understanding=tuple(understanding),
             unreadable=unreadable,
             notes=tuple(notes),
@@ -422,15 +455,14 @@ def _milestones(
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        return Milestones(unknown=True), [
-            Finding(
-                severity="unreadable",
-                check=PROGRESS_CHECK,
-                file=str(rel),
-                message=f"could not parse {rel}: {exc}",
-                remedy=f"repair the YAML in {rel}, then {_REGENERATE}",
-            )
-        ]
+        # `invalid`, not `unreadable`: the bytes were read fine, and every other
+        # family here reports a parse failure as `invalid` (`_check_references`,
+        # `_check_triage`, `_check_datasets`, and `_status_of` above).
+        return _unknown_gates(
+            rel,
+            f"could not parse {rel}: {exc}",
+            f"repair the YAML in {rel}, then {_REGENERATE}",
+        )
     if data is None:
         return Milestones(), []
     if not isinstance(data, dict) or "milestones" not in data:
@@ -499,3 +531,26 @@ def collect(layout: Layout, probe: Probe) -> Projection:
         milestones=milestones,
         findings=tuple(findings + milestone_findings),
     )
+
+
+def projected_ids(layout: Layout, probe: Probe) -> set[str]:
+    """Return the artifact ids a freshly generated dashboard would claim.
+
+    The disk side of ``check``'s stale-dashboard comparison, so both sides come
+    from this package. Collecting it per staged *document* instead is what made
+    that rule emit an unclearable gap: every shipped template defaults
+    ``id: null``, so a paper whose id lives in ``pitch.md`` while its
+    authoritative ``decision.md`` is still a stub was reported missing from a
+    dashboard that had just been regenerated.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: One id per artifact that has one. An artifact whose id is not yet
+        set contributes nothing — the dashboard shows it but does not claim it
+        as an id, so neither side of the comparison sees it.
+    """
+    return {
+        artifact.artifact_id
+        for artifact in collect(layout, probe).artifacts
+        if artifact.artifact_id is not None
+    }

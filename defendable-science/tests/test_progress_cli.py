@@ -169,8 +169,10 @@ def test_an_unreadable_artifact_is_written_as_unknown_and_exits_one(
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
-    assert payload["counts"]["unreadable"] == 1
-    assert payload["findings"][0]["check"] == "progress"
+    assert payload["counts"] == {"invalid": 0, "unreadable": 1, "gap": 0}
+    assert [(f["check"], f["severity"]) for f in payload["findings"]] == [
+        ("progress", "unreadable")
+    ]
     # The row is still written, visibly unknown: dropping it would be a
     # projection that lies about what the repo holds.
     text = _dashboard(tmp_path).read_text(encoding="utf-8")
@@ -227,3 +229,57 @@ def test_the_command_is_documented_in_help() -> None:
     assert "dashboard" in group.stdout
     assert "--root" in command.stdout
     assert "--dry-run" in command.stdout
+
+
+def test_a_paper_whose_decision_has_no_id_yet_clears_the_stale_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordinary trajectory of a paper: an id in the pitch, a stub decision.
+
+    `check` used to collect its disk-side ids per staged *document* while the
+    dashboard wrote one per *artifact*, so this repo produced a gap that its own
+    remedy could not clear — regenerating changed nothing.
+    """
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    _pitch(tmp_path, "dc", "---\nstatus:\n  level: paper\n  id: dc\n---\n")
+    # Straight from `resources/templates/paper/decision.md`: `id` is still null.
+    Layout.default(tmp_path).paper_docs_dir("dc").joinpath("decision.md").write_text(
+        "---\nstatus:\n  level: paper\n  id: null\n  readiness: drafting\n---\n",
+        encoding="utf-8",
+    )
+
+    assert runner.invoke(app, ["progress", "dashboard"]).exit_code == 0
+
+    result = runner.invoke(app, ["check"])
+    assert [
+        f
+        for f in json.loads(result.stdout)["findings"]
+        if f["file"] == "docs/research/dashboard.md"
+    ] == []
+    text = _dashboard(tmp_path).read_text(encoding="utf-8")
+    assert artifact_ids(text) == {"dc"}
+    # The row links the authoritative document, and still names the artifact.
+    assert "[`dc`](dc/paper/decision.md)" in text
+
+
+def test_an_unsigned_defensible_thesis_reads_as_undecided_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path, thesis=True)
+    Layout.default(tmp_path).aims.write_text(
+        "---\nstatus:\n  level: thesis\n  id: t\n  verdict: n/a\n"
+        "  readiness: defensible\n  signed-off-by: null\n---\n",
+        encoding="utf-8",
+    )
+
+    assert runner.invoke(app, ["progress", "dashboard"]).exit_code == 0
+
+    assert "defensible (unsigned)" in _dashboard(tmp_path).read_text(encoding="utf-8")
+    check = runner.invoke(app, ["check"])
+    assert [
+        f["message"]
+        for f in json.loads(check.stdout)["findings"]
+        if "defensible" in f["message"]
+    ] == ["`readiness: defensible` is not yet decided: `signed-off-by` is null"]

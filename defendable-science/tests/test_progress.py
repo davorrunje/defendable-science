@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from defendable_science.progress import collect as col
 from defendable_science.progress import model as pm
 from defendable_science.progress import render as pr
 from defendable_science.scaffold import render as r
+from defendable_science.scaffold import status as st
 from defendable_science.scaffold.layout import Layout
 
 ROOT = Path("/repo")
@@ -139,7 +142,9 @@ def test_an_unreadable_artifact_is_reported_unknown_never_absent() -> None:
         )
     )
 
-    assert "| [`dc`](dc/paper/pitch.md) | unknown | unknown | — |" in text
+    # `updated` is `unknown` too: no document carried a date *and* one could not
+    # be read, so we did not find out — which `—` ("not yet set") would deny.
+    assert "| [`dc`](dc/paper/pitch.md) | unknown | unknown | unknown |" in text
     assert "could not read dc/paper/decision.md" in text
 
 
@@ -235,10 +240,23 @@ def test_rows_with_the_same_id_are_still_ordered_deterministically() -> None:
 
 
 def test_the_dashboard_carries_no_timestamp() -> None:
-    """Idempotence: a date in the artifact would defeat the staleness check."""
-    text = pr.render_dashboard(pm.Projection())
+    """Idempotence: a date in the artifact would defeat the staleness check.
 
-    assert "generated on" not in text.lower()
+    Asserted against *today*, on a projection that already carries a different
+    date: "no line says `generated on`" would pass against `Generated:
+    2026-08-28`, which is the failure this is meant to catch.
+    """
+    today = date.today().isoformat()
+    projection = pm.Projection(
+        artifacts=(_artifact(artifact_id="dc", last_updated="1999-12-31"),),
+        milestones=pm.Milestones(entries=(pm.Milestone(name="viva"),)),
+    )
+
+    text = pr.render_dashboard(projection)
+
+    assert today not in text
+    assert re.findall(r"\d{4}-\d{2}-\d{2}", text) == ["1999-12-31"]
+    assert text == pr.render_dashboard(projection)
 
 
 def test_a_pipe_in_a_field_cannot_break_the_table() -> None:
@@ -658,7 +676,9 @@ def test_invalid_milestone_yaml_is_unknown_never_an_empty_gate_list() -> None:
     projection = col.collect(LAYOUT, FakeProbe(files))
 
     assert projection.milestones == pm.Milestones(unknown=True)
-    assert [f.severity for f in projection.findings] == ["unreadable"]
+    # `invalid`, matching every other parse failure in `check`; `unreadable` is
+    # reserved for bytes that could not be read at all.
+    assert [f.severity for f in projection.findings] == ["invalid"]
 
 
 @pytest.mark.parametrize(
@@ -793,3 +813,168 @@ def test_a_thesis_with_no_kappa_yet_is_projected_from_its_aims() -> None:
     assert [(a.link, a.readiness) for a in projection.artifacts] == [
         ("thesis/aims.md", "framing")
     ]
+
+
+# --- the thesis decision axis (F1) ---------------------------------------------
+
+
+def test_an_unsigned_defensible_thesis_is_not_rendered_as_decided() -> None:
+    """A thesis has no verdict axis: `defensible` *is* its material decision."""
+    text = pr.render_dashboard(
+        pm.Projection(
+            artifacts=(
+                _artifact(
+                    level="thesis",
+                    artifact_id="t",
+                    label="thesis",
+                    link="thesis/kappa/kappa.md",
+                    verdict="n/a",
+                    readiness="defensible",
+                    signed_off=False,
+                ),
+            )
+        )
+    )
+
+    assert "| n/a | defensible (unsigned) |" in _row(text)
+
+
+def test_a_signed_defensible_thesis_reads_as_defensible() -> None:
+    text = pr.render_dashboard(
+        pm.Projection(
+            artifacts=(
+                _artifact(
+                    level="thesis",
+                    artifact_id="t",
+                    verdict="n/a",
+                    readiness="defensible",
+                    signed_off=True,
+                ),
+            )
+        )
+    )
+
+    assert "| n/a | defensible |" in _row(text)
+
+
+@pytest.mark.parametrize(
+    "readiness",
+    ["pending", "resolved", "drafting", "under-review", "published", "framing"],
+)
+def test_a_readiness_that_decides_nothing_is_never_marked_unsigned(
+    readiness: str,
+) -> None:
+    """`published` is a sub-state of done, not a gate — only the gate is signed."""
+    text = pr.render_dashboard(
+        pm.Projection(artifacts=(_artifact(artifact_id="dc", readiness=readiness),))
+    )
+
+    assert "unsigned" not in _row(text)
+
+
+def test_every_signed_readiness_is_a_readiness_some_level_allows() -> None:
+    """A typo in the constant would silently switch the rule off."""
+    allowed = {value for values in st.READINESS.values() for value in values}
+    assert allowed >= st.SIGNED_READINESS
+
+
+# --- the artifact, not the document, is the unit (F2) ---------------------------
+
+
+def test_an_artifact_keeps_its_id_when_its_authoritative_document_has_none() -> None:
+    """`decision.md` ships with `id: null` and is drafted late — the ordinary case."""
+    files = _scaffolded()
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc("paper", id="dc")
+    files[docs / "decision.md"] = _doc("paper")  # id: null, from the template
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert projection.artifacts[0].artifact_id == "dc"
+    assert projection.artifacts[0].link == "dc/paper/decision.md"
+
+
+def test_the_authoritative_id_wins_when_two_documents_name_one() -> None:
+    files = _scaffolded()
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc("paper", id="working-title")
+    files[docs / "decision.md"] = _doc("paper", id="dc")
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert projection.artifacts[0].artifact_id == "dc"
+
+
+def test_updated_is_the_newest_date_anywhere_in_the_artifact() -> None:
+    """Late work often lands in a sibling; the primary's date would read stale."""
+    files = _scaffolded()
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc("paper", id="dc", **{"last-updated": "2026-05-01"})
+    files[docs / "ledger.md"] = _doc("paper", id="dc", **{"last-updated": "2026-07-09"})
+    files[docs / "decision.md"] = _doc(
+        "paper", id="dc", **{"last-updated": "2026-03-01"}
+    )
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert projection.artifacts[0].last_updated == "2026-07-09"
+
+
+def test_covers_and_blockers_union_across_the_artifact() -> None:
+    files = _scaffolded()
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc(
+        "paper", id="dc", covers="[aim-1]", blockers="[awaiting rerun]"
+    )
+    files[docs / "decision.md"] = _doc(
+        "paper", id="dc", covers="[aim-1, aim-2]", blockers="[reviewer 2]"
+    )
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert projection.artifacts[0].covers == ("aim-1", "aim-2")
+    assert projection.artifacts[0].blockers == ("awaiting rerun", "reviewer 2")
+
+
+def test_an_aim_covered_only_by_the_pitch_is_not_reported_uncovered() -> None:
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing") + (
+        "\n## Aims\n\n- **aim-1** — one\n"
+    )
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc("paper", id="dc", covers="[aim-1]")
+    files[docs / "decision.md"] = _doc("paper", id="dc")  # covers: []
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+    thesis = next(a for a in projection.artifacts if a.level == "thesis")
+
+    assert thesis.uncovered_aims == ()
+
+
+def test_two_levels_in_one_directory_are_two_rows_never_one() -> None:
+    """Grouping on the directory alone silently dropped one artifact's status."""
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing")
+    files[LAYOUT.thesis_dir / "findings.md"] = _doc(
+        "hypothesis", id="h1", verdict="refuted"
+    )
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert sorted((a.level, a.artifact_id) for a in projection.artifacts) == [
+        ("hypothesis", "h1"),
+        ("thesis", "t"),
+    ]
+
+
+def test_projected_ids_is_exactly_what_a_fresh_dashboard_would_claim() -> None:
+    files = _scaffolded()
+    docs = LAYOUT.paper_docs_dir("dc")
+    files[docs / "pitch.md"] = _doc("paper", id="dc")
+    files[docs / "decision.md"] = _doc("paper")
+    files[LAYOUT.hypothesis_dir("dc", "h1") / "hypothesis.md"] = _doc("hypothesis")
+
+    probe = FakeProbe(files)
+    rendered = pr.render_dashboard(col.collect(LAYOUT, probe))
+
+    assert col.projected_ids(LAYOUT, probe) == pr.artifact_ids(rendered) == {"dc"}

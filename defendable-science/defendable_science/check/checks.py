@@ -1040,25 +1040,162 @@ def aim_ids(text: str) -> set[str]:
     return set(re.findall(r"aim-\d+", text))
 
 
-def _check_dashboard_consistency(
-    layout: Layout, probe: Probe, artifact_ids: set[str]
+def _unsigned_decision(rel: str, status_block: dict[str, object]) -> list[Finding]:
+    """Report a material decision no named human has signed (rules 1 and 1b).
+
+    Two arms, because two axes carry a decision. A hypothesis and a paper are
+    adjudicated by their ``verdict``; a thesis has no verdict axis (it carries
+    ``verdict: n/a``, which the first arm exempts) and is adjudicated by
+    ``readiness: defensible``. With only the verdict arm, the highest-stakes
+    claim in the methodology was reported by nothing at all.
+
+    :param rel: The document's repo-relative path, for the finding.
+    :param status_block: Its parsed ``status`` mapping.
+    :returns: One ``gap`` per unsigned decision axis. A gap, not a defect: the
+        artifact is valid, the science is simply not decided yet.
+    """
+    signed_off_by = status_block.get("signed-off-by")
+    if signed_off_by is not None:
+        return []
+    findings: list[Finding] = []
+    verdict = status_block.get("verdict")
+    if verdict is not None and verdict != "n/a":
+        findings.append(
+            Finding(
+                severity="gap",
+                check=CROSS_ARTIFACT_CHECK,
+                file=rel,
+                message=(
+                    f"verdict {verdict!r} is not yet decided: `signed-off-by` is null"
+                ),
+                remedy=(
+                    "sign off the verdict with `signed-off-by` and `signed-off-date`"
+                ),
+            )
+        )
+    readiness = status_block.get("readiness")
+    if readiness in st.SIGNED_READINESS:
+        findings.append(
+            Finding(
+                severity="gap",
+                check=CROSS_ARTIFACT_CHECK,
+                file=rel,
+                message=(
+                    f"`readiness: {readiness}` is not yet decided: "
+                    "`signed-off-by` is null"
+                ),
+                remedy=(
+                    f"sign off `readiness: {readiness}` with `signed-off-by` and "
+                    "`signed-off-date`, or move it back to the readiness the work "
+                    "is actually at"
+                ),
+            )
+        )
+    return findings
+
+
+def _missing_evidence(rel: str, status_block: dict[str, object]) -> list[Finding]:
+    """Report a resolved or published artifact whose ``evidence`` is empty (rule 2).
+
+    :param rel: The document's repo-relative path, for the finding.
+    :param status_block: Its parsed ``status`` mapping.
+    :returns: At most one ``gap``.
+    """
+    readiness = status_block.get("readiness")
+    if readiness not in ("resolved", "published") or status_block.get("evidence") != []:
+        return []
+    return [
+        Finding(
+            severity="gap",
+            check=CROSS_ARTIFACT_CHECK,
+            file=rel,
+            message=(
+                f"`readiness: {readiness}` with empty `evidence` — evidence is missing"
+            ),
+            remedy="record the evidence in the `evidence:` field",
+        )
+    ]
+
+
+def _undeclared_aims(
+    rel: str, status_block: dict[str, object], declared_aims: set[str]
 ) -> list[Finding]:
+    """Report ``covers:`` entries that ``aims.md`` does not declare (rule 3).
+
+    :param rel: The document's repo-relative path, for the finding.
+    :param status_block: Its parsed ``status`` mapping.
+    :param declared_aims: The aim ids ``aims.md`` declares.
+    :returns: One ``gap`` per undeclared aim.
+    """
+    covers = status_block.get("covers")
+    if not covers or not isinstance(covers, list):
+        return []
+    return [
+        Finding(
+            severity="gap",
+            check=CROSS_ARTIFACT_CHECK,
+            file=rel,
+            message=(
+                f"`covers: {covers}` references {aim!r}, "
+                "which is not declared in aims.md"
+            ),
+            remedy=f"add {aim!r} to aims.md, or remove it from covers",
+        )
+        for aim in covers
+        if aim not in declared_aims
+    ]
+
+
+def _check_artifact_rules(
+    rel: str,
+    status_block: dict[str, object],
+    declared_aims: set[str],
+    check_covers: bool,
+) -> list[Finding]:
+    """Apply the per-document gap rules to one staged document.
+
+    :param rel: The document's repo-relative path, for the findings.
+    :param status_block: Its parsed ``status`` mapping.
+    :param declared_aims: The aim ids ``aims.md`` declares.
+    :param check_covers: Whether ``aims.md`` could be read at all. A repo with
+        no thesis, or one whose aims file is unreadable, has nothing to check
+        ``covers:`` against — reporting every aim as undeclared would be a
+        verdict on a file nobody read.
+    :returns: The gaps this document carries, rule by rule.
+    """
+    findings = _unsigned_decision(rel, status_block)
+    findings += _missing_evidence(rel, status_block)
+    if check_covers:
+        findings += _undeclared_aims(rel, status_block, declared_aims)
+    return findings
+
+
+def _check_dashboard_consistency(layout: Layout, probe: Probe) -> list[Finding]:
     """Check dashboard for stale or orphaned artifact ids.
 
-    Which ids a dashboard claims is read by
-    :func:`defendable_science.progress.render.artifact_ids` — the module that
-    writes them. A second reader here would drift from the writer and report a
-    current dashboard as stale, which is why this rule was unenforceable until
-    a generator existed (#130).
+    **Both** sides of the comparison come from ``progress``, deliberately.
+    :func:`~defendable_science.progress.render.artifact_ids` reads what the
+    dashboard claims, in the module that writes it; and
+    :func:`~defendable_science.progress.collect.projected_ids` computes what a
+    fresh regeneration *would* claim. A reader that drifted from the writer
+    would report a current dashboard as stale, which is why this rule was
+    unenforceable until a generator existed (#130).
+
+    Collecting the disk side here instead — one id per staged *document* — is
+    what made this rule emit an unclearable gap: every shipped template defaults
+    ``id: null`` and ``decision.md`` is drafted late, so a paper whose ``id``
+    lives in ``pitch.md`` was reported missing from a dashboard that had just
+    been generated, with a remedy that could not clear it. The unit is the
+    artifact, not the document.
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :param artifact_ids: Set of artifact ids from staged documents.
     :returns: List of ``gap`` findings for dashboard consistency.
     """
     # Imported here, not at module scope: `progress.collect` reads this module,
     # so a top-level import would make the pair a cycle the moment `progress`
     # grows the re-exporting `__init__` that `check` already has.
+    from defendable_science.progress.collect import projected_ids
     from defendable_science.progress.render import artifact_ids as dashboard_claims
 
     findings: list[Finding] = []
@@ -1072,6 +1209,8 @@ def _check_dashboard_consistency(
     if isinstance(dashboard_text, Finding):
         findings.append(dashboard_text)
         return findings
+
+    artifact_ids = projected_ids(layout, probe)
 
     # Skip if it's the ungenerated stub and no artifact ids exist
     if r.is_ungenerated_dashboard(dashboard_text) and not artifact_ids:
@@ -1114,7 +1253,12 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
     """Report cross-artifact gaps without failing the run.
 
     Four rules:
-    1. Verdict set and signed-off-by null → gap
+    1. A material decision with ``signed-off-by`` null → gap. That is a
+       ``verdict`` on a hypothesis or a paper, **and** a readiness that is
+       itself the decision (``status.SIGNED_READINESS``) at a level with no
+       verdict axis: a thesis carries ``verdict: n/a``, so the verdict arm
+       cannot see it and ``readiness: defensible`` — the highest-stakes claim
+       in the methodology — was invisible here until the readiness arm existed.
     2. Readiness in {resolved, published} and evidence == [] → gap
     3. Covers entries not declared in aims.md (only when aims.md exists)
     4. Dashboard id-set comparison (skip if stub and no artifact ids exist)
@@ -1137,10 +1281,7 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
             declared_aims = aim_ids(aims_text)
             check_covers = True
 
-    # Collect artifact ids for rule 4
-    artifact_ids: set[str] = set()
-
-    # Process each document for rules 1-3 and collect artifact ids
+    # Process each document for rules 1-3
     for path in docs:
         rel = str(layout.rel(path))
         text = read_or_finding(path, layout, probe, CROSS_ARTIFACT_CHECK)
@@ -1152,66 +1293,12 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
         if status_block is None:
             continue
 
-        verdict = status_block.get("verdict")
-        readiness = status_block.get("readiness")
-        signed_off_by = status_block.get("signed-off-by")
-        evidence = status_block.get("evidence")
-        covers = status_block.get("covers")
-        artifact_id = status_block.get("id")
-
-        # Rule 1: unsigned verdict
-        if verdict is not None and verdict != "n/a" and signed_off_by is None:
-            findings.append(
-                Finding(
-                    severity="gap",
-                    check=CROSS_ARTIFACT_CHECK,
-                    file=rel,
-                    message=(
-                        f"verdict {verdict!r} is not yet decided: "
-                        "`signed-off-by` is null"
-                    ),
-                    remedy="sign off the verdict with `signed-off-by` and `signed-off-date`",
-                )
-            )
-
-        # Rule 2: empty evidence on resolved/published
-        if readiness in ("resolved", "published") and evidence == []:
-            findings.append(
-                Finding(
-                    severity="gap",
-                    check=CROSS_ARTIFACT_CHECK,
-                    file=rel,
-                    message=(
-                        f"`readiness: {readiness}` with empty `evidence` "
-                        "— evidence is missing"
-                    ),
-                    remedy="record the evidence in the `evidence:` field",
-                )
-            )
-
-        # Rule 3: covers entries not in aims.md (only if thesis exists)
-        if check_covers and covers and isinstance(covers, list):
-            findings.extend(
-                Finding(
-                    severity="gap",
-                    check=CROSS_ARTIFACT_CHECK,
-                    file=rel,
-                    message=(
-                        f"`covers: {covers}` references {aim!r}, "
-                        "which is not declared in aims.md"
-                    ),
-                    remedy=f"add {aim!r} to aims.md, or remove it from covers",
-                )
-                for aim in covers
-                if aim not in declared_aims
-            )
-
-        # Collect artifact ids for rule 4
-        if artifact_id:
-            artifact_ids.add(artifact_id)
+        findings.extend(
+            _check_artifact_rules(rel, status_block, declared_aims, check_covers)
+        )
 
     # Rule 4: dashboard id-set comparison
-    findings.extend(_check_dashboard_consistency(layout, probe, artifact_ids))
+    findings.extend(_check_dashboard_consistency(layout, probe))
 
     return findings
 

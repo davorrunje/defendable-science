@@ -69,19 +69,46 @@ clock belongs, and not in a file whose diff has to mean something.
 <hypothesis-id> (load-bearing, refuted)`, `understanding: <document>: <gap>` —
 no totals, no scores, no percentages, and no styling that reads as a red mark:
 `refuted` and `no-go` render exactly as `confirmed` and `publish` do. An unset
-field renders `—` ("not yet set", never zero); a verdict no human has signed
-renders `(unsigned)`, because a decision nobody signed is not yet a decision.
+field renders `—` ("not yet set", never zero).
+
+**4a. The unsigned rule follows the *decision axis*, which is not always the
+verdict.** A material decision no named human has signed renders `(unsigned)`,
+because a decision nobody signed is not yet a decision (§2.1). Applying that to
+the `verdict` field alone leaves a hole exactly where it matters most: a thesis
+carries `verdict: n/a` and is adjudicated by `readiness: defensible`, so an
+unsigned thesis rendered as settled — and `check`'s matching rule, which exempts
+`verdict: n/a`, said nothing either. `scaffold.status.SIGNED_READINESS` names
+the readiness values that are themselves decisions, beside the enums it is a
+fact about, so `check` and `progress` apply one rule. `published` is
+deliberately not one: `drafting → under-review → published` are sub-states of a
+paper's *done*, and the paper's decision is its verdict.
 
 **5. An unreadable artifact keeps its row, visibly `unknown`, and the run exits
 `1`.** The file is still written — dropping the row would be a projection that
 lies about what the repo holds — but the exit code does not claim a clean
 regeneration.
 
-**6. `check` reads the ids through the module that writes them.**
+**6. `check` gets *both* sides of the staleness comparison from `progress`.**
 `progress.render.artifact_ids` is the counterpart of `render_dashboard`, in the
-same module; `check` delegates to it, and to `scaffold.render.is_ungenerated_dashboard`
-for the stub marker. Only an id the renderer wrote as one counts, so an artifact
-whose `status.id` is not yet set is shown but never claimed.
+same module, and `progress.collect.projected_ids` computes what a fresh
+regeneration would claim; `check` delegates to both, and to
+`scaffold.render.is_ungenerated_dashboard` for the stub marker. Only an id the
+renderer wrote as one counts, so an artifact whose `status.id` is not yet set is
+shown but never claimed.
+
+**6a. The unit on *both* sides is the artifact, not the staged document.**
+`check` originally collected its disk-side set per document, which produced a
+gap nothing could clear: every shipped template defaults `id: null` and
+`decision.md` is drafted late, so a paper whose id lives in `pitch.md` was
+reported missing from a dashboard that had just been generated, with the remedy
+"regenerate the dashboard". The same group-wise reasoning applies to the other
+artifact-level facts: an artifact's `id` falls back to whichever document names
+one, `last-updated` is the newest anywhere in the group (late work lands in a
+sibling, and the primary's date reads stale), and `covers` and `blockers` are
+unioned — a paper declaring `covers: [aim-1]` in its pitch while `decision.md`
+leaves it `[]` must not make `aim-1` read as uncovered. Only the *adjudication*
+axes — verdict, readiness, sign-off, load-bearing — remain primary-only, which
+is what makes the authoritative document authoritative.
 
 **7. The thesis gate list is read verbatim.** Institution gates vary and are
 deadline-driven, so whatever `thesis/milestones.yml` holds under `milestones:`

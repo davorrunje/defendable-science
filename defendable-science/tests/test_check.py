@@ -1669,3 +1669,30 @@ def test_run_checks_no_finding_appears_twice_with_same_severity_file_message() -
         # This assertion proves no duplicate was preserved
         assert key not in seen, f"Duplicate finding: {key}"
         seen.add(key)
+
+
+def test_an_unsigned_defensible_thesis_is_a_gap() -> None:
+    """A thesis carries `verdict: n/a`, so rule 1's verdict arm cannot see it."""
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="defensible")
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    unsigned = [f for f in findings if "defensible" in f.message]
+    assert [f.severity for f in unsigned] == ["gap"]
+    assert "`signed-off-by` is null" in unsigned[0].message
+    assert unsigned[0].file == "docs/research/thesis/aims.md"
+
+
+def test_a_signed_defensible_thesis_is_not_a_gap() -> None:
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc(
+        "thesis",
+        id="t",
+        readiness="defensible",
+        **{"signed-off-by": "D. Runje", "signed-off-date": "2026-08-20"},
+    )
+
+    findings = c.check_cross_artifact(LAYOUT, FakeProbe(files))
+
+    assert [f for f in findings if "defensible" in f.message] == []

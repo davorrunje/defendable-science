@@ -29,6 +29,7 @@ import re
 
 from defendable_science.core.mdtable import render_table, split_cells
 from defendable_science.progress.model import LEVELS, Artifact, Projection
+from defendable_science.scaffold.status import SIGNED_READINESS
 
 #: The banner every generated dashboard opens with. It names the command, not
 #: the skill: a reader who is told to run a skill cannot reproduce the file.
@@ -46,6 +47,9 @@ UNKNOWN = "unknown"
 #: Verdict values that record no material decision, so they are never annotated
 #: as unsigned — there is nothing yet to sign.
 UNDECIDED_VERDICTS: frozenset[str] = frozenset({"pending", "n/a"})
+
+#: Appended to a material decision no named human has signed.
+UNSIGNED = "(unsigned)"
 
 _HEADINGS: dict[str, str] = {
     "hypothesis": "Hypotheses",
@@ -106,29 +110,74 @@ def _id_cell(artifact: Artifact) -> str:
     return f"[`{artifact.artifact_id}`]({artifact.link})"
 
 
+def _signed(value: str, *, signed_off: bool) -> str:
+    """Annotate a material decision no named human has signed.
+
+    :param value: The decision as recorded.
+    :param signed_off: Whether ``signed-off-by`` names a human.
+    :returns: `value`, or ``<value> (unsigned)`` — a decision nobody signed is
+        not yet a decision (meta-spec §2.1).
+    """
+    return value if signed_off else f"{value} {UNSIGNED}"
+
+
 def _verdict_cell(artifact: Artifact) -> str:
     """Render the verdict, marking one no human has signed as undecided.
 
     :param artifact: The row to render.
     :returns: ``unknown`` when the document could not be read, :data:`ABSENT`
-        when no verdict is recorded, the verdict itself when it is signed or
-        decides nothing, and ``<verdict> (unsigned)`` otherwise — a decision
-        nobody signed is not yet a decision (meta-spec §2.1).
+        when no verdict is recorded, the verdict itself when it decides nothing
+        (there is nothing yet to sign), and otherwise the verdict put through
+        :func:`_signed`.
     """
     if artifact.unreadable:
         return UNKNOWN
     if artifact.verdict is None:
         return ABSENT
-    if artifact.signed_off or artifact.verdict in UNDECIDED_VERDICTS:
+    if artifact.verdict in UNDECIDED_VERDICTS:
         return artifact.verdict
-    return f"{artifact.verdict} (unsigned)"
+    return _signed(artifact.verdict, signed_off=artifact.signed_off)
 
 
-def _plain_cell(value: str | None, *, unreadable: bool = False) -> str:
-    """Render `value`, distinguishing unknown from not-yet-set."""
-    if unreadable:
+def _readiness_cell(artifact: Artifact) -> str:
+    """Render the readiness, which at one level *is* the material decision.
+
+    A thesis has no verdict axis, so ``readiness: defensible`` carries the same
+    named-human requirement a verdict does (``status.SIGNED_READINESS``).
+    Without this the single highest-stakes claim in the methodology — "this
+    thesis is defensible" — rendered as settled with nobody having signed it.
+
+    :param artifact: The row to render.
+    :returns: ``unknown`` when the document could not be read, :data:`ABSENT`
+        when no readiness is recorded, and otherwise the readiness, annotated
+        by :func:`_signed` when it is itself a decision.
+    """
+    if artifact.unreadable:
         return UNKNOWN
+    if artifact.readiness is None:
+        return ABSENT
+    if artifact.readiness not in SIGNED_READINESS:
+        return artifact.readiness
+    return _signed(artifact.readiness, signed_off=artifact.signed_off)
+
+
+def _plain_cell(value: str | None) -> str:
+    """Render `value`, or :data:`ABSENT` when it is not yet set."""
     return ABSENT if value is None else value
+
+
+def _updated_cell(artifact: Artifact) -> str:
+    """Render ``last-updated``, telling a date nobody set from one nobody read.
+
+    :param artifact: The row to render.
+    :returns: The date when any document in the artifact carries one;
+        ``unknown`` when none does *and* a document could not be read (we could
+        not find out); :data:`ABSENT` when none does and every document was
+        read (there genuinely is no date).
+    """
+    if artifact.last_updated is not None:
+        return artifact.last_updated
+    return UNKNOWN if artifact.unreadable else ABSENT
 
 
 def _row(artifact: Artifact) -> dict[str, str]:
@@ -136,8 +185,8 @@ def _row(artifact: Artifact) -> dict[str, str]:
     row = {
         "id": _id_cell(artifact),
         "verdict": _verdict_cell(artifact),
-        "readiness": _plain_cell(artifact.readiness, unreadable=artifact.unreadable),
-        "updated": _plain_cell(artifact.last_updated),
+        "readiness": _readiness_cell(artifact),
+        "updated": _updated_cell(artifact),
     }
     if artifact.level == "hypothesis":
         row["paper"] = _plain_cell(artifact.paper)
