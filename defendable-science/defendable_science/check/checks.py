@@ -29,12 +29,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from defendable_science.check.model import Finding
+from defendable_science.dataset import manifest as mf
 from defendable_science.exploration.backlog import (
     REGISTRY_COLUMNS,
     Backlog,
     BacklogError,
     columns_for,
 )
+from defendable_science.literature import registry as reg
 from defendable_science.scaffold import status as st
 from defendable_science.scaffold.layout import STAGED_DOCUMENTS
 
@@ -672,5 +674,333 @@ def check_frontmatter(layout: Layout, probe: Probe) -> list[Finding]:
         findings.extend(
             _check_frontmatter_document(path, rel, expected_level, layout, probe)
         )
+
+    return findings
+
+
+# --- registries checks -------------------------------------------------------
+
+REGISTRIES_CHECK = "registries"
+
+
+def _parse_json_array(text: str, file_rel: str) -> list[object] | Finding:
+    """Parse JSON text as an array, or return an invalid finding.
+
+    :param text: The JSON text to parse.
+    :param file_rel: The repo-relative path (for error messages).
+    :returns: The parsed array, or an ``invalid`` Finding.
+    """
+    import json
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=file_rel,
+            message=f"invalid JSON: {exc}",
+            remedy="repair the JSON syntax",
+        )
+    if not isinstance(data, list):
+        return Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=file_rel,
+            message=(
+                f"expected a JSON array of CSL-JSON items, got {type(data).__name__}"
+            ),
+            remedy="change the top level to a JSON array: [...]",
+        )
+    return data
+
+
+def _parse_datasets_yaml(text: str, file_rel: str) -> dict[str, object] | Finding:
+    """Parse datasets.yml YAML text as a mapping, or return an invalid finding.
+
+    :param text: The YAML text to parse.
+    :param file_rel: The repo-relative path (for error messages).
+    :returns: The parsed mapping, or an ``invalid`` Finding.
+    """
+    import yaml
+
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=file_rel,
+            message=f"invalid YAML: {exc}",
+            remedy="repair the YAML syntax",
+        )
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        return Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=file_rel,
+            message=(
+                f"expected a YAML mapping at the top level, got {type(data).__name__}"
+            ),
+            remedy="change the top level to a YAML mapping: ...",
+        )
+    return data
+
+
+def check_registries(layout: Layout, probe: Probe) -> list[Finding]:
+    """Report every problem with references, triage, and datasets registries.
+
+    Reuses the real loaders to avoid reimplementing validation rules.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Findings for each registry. Severity is ``invalid`` for structural
+        violations and loader errors, ``unreadable`` for read failures, and
+        ``gap`` for soft validation issues (manifest warnings).
+    """
+    findings: list[Finding] = []
+
+    # Check references.json
+    findings.extend(_check_references(layout, probe))
+
+    # Check triage.yml
+    findings.extend(_check_triage(layout, probe))
+
+    # Check datasets.yml
+    findings.extend(_check_datasets(layout, probe))
+
+    return findings
+
+
+def _check_references(layout: Layout, probe: Probe) -> list[Finding]:
+    """Check ``references.json`` for structural validity.
+
+    Parses the JSON array and checks that each entry has an 'id' field.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: One finding per issue, or none if the registry is valid.
+    """
+    path = layout.references
+    rel = str(layout.rel(path))
+
+    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    if isinstance(text, Finding):
+        return [text]
+
+    # Parse the JSON array
+    items = _parse_json_array(text, rel)
+    if isinstance(items, Finding):
+        return [items]
+
+    findings: list[Finding] = []
+
+    # Check that each entry has an 'id' field
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=REGISTRIES_CHECK,
+                    file=rel,
+                    message=(
+                        f"entry {index} is not an object (got {type(item).__name__})"
+                    ),
+                    remedy="each entry must be a JSON object: {...}",
+                )
+            )
+        elif "id" not in item:
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=REGISTRIES_CHECK,
+                    file=rel,
+                    message=(
+                        f"entry {index} has no 'id' field; the id keys each "
+                        "reference across triage.yml, the backlog, and other tools"
+                    ),
+                    remedy="add an 'id' field to each entry, or remove entries without ids",
+                )
+            )
+
+    return findings
+
+
+def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
+    """Check ``triage.yml`` for structural validity and consistency with refs.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Findings for YAML parsing, non-mapping rows, and orphan keys.
+    """
+    path = layout.triage
+    rel = str(layout.rel(path))
+
+    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    if isinstance(text, Finding):
+        return [text]
+
+    # Parse the triage mapping
+    try:
+        triage_rows = reg.triage_mapping(path, text)
+    except reg.RegistryError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=REGISTRIES_CHECK,
+                file=rel,
+                message=str(exc),
+                remedy=f"repair {rel}: it must be a YAML mapping of citekey → row",
+            )
+        ]
+
+    findings: list[Finding] = []
+
+    # Check for non-mapping rows
+    for key, value in triage_rows.items():
+        if not isinstance(value, dict):
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=REGISTRIES_CHECK,
+                    file=rel,
+                    message=(
+                        f"triage row {key!r} is not a mapping (got "
+                        f"{type(value).__name__}); load_triage silently skips such "
+                        "rows"
+                    ),
+                    remedy=(
+                        f"make {key!r} a mapping with fields like 'disposition', "
+                        f"or remove it"
+                    ),
+                )
+            )
+
+    # Get the set of valid ids from references.json
+    ref_path = layout.references
+    ref_rel = str(layout.rel(ref_path))
+    ref_text = _read(ref_path, layout, probe, REGISTRIES_CHECK)
+    valid_ids: set[str] = set()
+    if not isinstance(ref_text, Finding):
+        items = _parse_json_array(ref_text, ref_rel)
+        if not isinstance(items, Finding):
+            # Extract ids from valid items (skip non-objects)
+            for item in items:
+                if isinstance(item, dict) and "id" in item:
+                    valid_ids.add(str(item["id"]))
+
+    # Check for orphan keys (triage keys with no matching reference id)
+    findings.extend(
+        Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=rel,
+            message=(f"triage key {key!r} has no matching entry in {ref_rel}"),
+            remedy=(
+                f"add an entry with id {key!r} to {ref_rel}, "
+                f"or remove the {key!r} row from {rel}"
+            ),
+        )
+        for key in triage_rows
+        if key not in valid_ids
+    )
+
+    return findings
+
+
+def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
+    """Check ``datasets.yml`` for structural validity and semantic correctness.
+
+    Parses the YAML and builds a manifest for validation, reusing the
+    manifest module's validation rules.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: One finding per structural error or validation error/warning.
+    """
+    path = layout.datasets_manifest
+    rel = str(layout.rel(path))
+
+    text = _read(path, layout, probe, REGISTRIES_CHECK)
+    if isinstance(text, Finding):
+        return [text]
+
+    # Parse the YAML
+    data = _parse_datasets_yaml(text, rel)
+    if isinstance(data, Finding):
+        return [data]
+
+    # Try to build a manifest from the parsed data
+    # (replicating manifest.load's logic but using our parsed YAML)
+    try:
+        mirror = None
+        if (mraw := data.get("mirror")) is not None:
+            if not isinstance(mraw, dict):
+                raise mf.ManifestError(f"{rel}: 'mirror' must be a mapping")
+            mirror = mf.Mirror(
+                rclone_remote=mf._opt_str(mraw.get("rclone_remote")),
+                base_path=mf._opt_str(mraw.get("base_path")),
+                hash=mf._opt_str(mraw.get("hash")),
+            )
+
+        datasets_raw = data.get("datasets") or []
+        if not isinstance(datasets_raw, list):
+            raise mf.ManifestError(f"{rel}: 'datasets' must be a list")
+        manifest = mf.Manifest(
+            mirror=mirror,
+            datasets=[
+                mf._decode_entry(entry, i) for i, entry in enumerate(datasets_raw)
+            ],
+        )
+    except mf.ManifestError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=REGISTRIES_CHECK,
+                file=rel,
+                message=str(exc),
+                remedy=(
+                    f"repair {rel}: {str(exc).lower()} — check the schema for "
+                    "required and conditional fields"
+                ),
+            )
+        ]
+
+    # Validate the manifest
+    report = mf.validate(manifest)
+
+    findings: list[Finding] = []
+
+    # Each error is invalid
+    findings.extend(
+        Finding(
+            severity="invalid",
+            check=REGISTRIES_CHECK,
+            file=rel,
+            message=error_msg,
+            remedy=(
+                f"correct {rel}: {error_msg.lower()} — consult the schema for "
+                "required and conditional fields"
+            ),
+        )
+        for error_msg in report.errors
+    )
+
+    # Each warning is a gap (soft issue)
+    findings.extend(
+        Finding(
+            severity="gap",
+            check=REGISTRIES_CHECK,
+            file=rel,
+            message=warning_msg,
+            remedy=(
+                f"complete {rel}: {warning_msg.lower()} to make the metadata "
+                "more useful"
+            ),
+        )
+        for warning_msg in report.warnings
+    )
 
     return findings

@@ -460,12 +460,15 @@ class TriageRow:
     raw: dict[str, Any]
 
 
-def _triage_mapping(target: Path, text: str) -> dict[Any, Any]:
+def triage_mapping(target: Path, text: str) -> dict[Any, Any]:
     """Parse the triage sidecar into its raw top-level mapping.
 
     Raw on purpose: the row values are handed back exactly as ``pyyaml`` gave
     them, including rows that are not mappings, so a *writer* can see what a
-    reader would skip.
+    reader would skip. This public function must exist because ``load_triage``
+    skips rows that are not mappings — correct for a reader, but that means a
+    malformed row is invisible to every consumer, and ``check`` is the one
+    caller that must see what a reader would skip.
 
     :param target: The path, for error messages.
     :param text: The file contents.
@@ -502,7 +505,7 @@ def load_triage(path: str | Path) -> dict[str, TriageRow]:
     target = Path(path)
     if not target.is_file():
         return {}
-    data = _triage_mapping(target, target.read_text(encoding="utf-8"))
+    data = triage_mapping(target, target.read_text(encoding="utf-8"))
     rows: dict[str, TriageRow] = {}
     for citekey, row in data.items():
         if not isinstance(row, dict):
@@ -572,7 +575,7 @@ def patch_triage(
                 f"{target}: carries comments, which cannot be preserved on write "
                 f"— set {sorted(updates)} on {citekey!r} by hand"
             )
-        raw = _triage_mapping(target, text)
+        raw = triage_mapping(target, text)
         opaque = sorted(
             str(key) for key, row in raw.items() if not isinstance(row, dict)
         )

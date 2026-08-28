@@ -706,3 +706,246 @@ def test_staged_documents_handles_external_thesis_dir() -> None:
     assert LAYOUT.paper_docs_dir("dc") / "pitch.md" in docs
     assert external_thesis / "kappa" / "kappa.md" in docs
     assert external_thesis / "kappa" / "aims.md" in docs
+
+
+# --- registries checks -------------------------------------------------------
+
+
+def test_registries_check_is_silent_on_a_scaffolded_repo() -> None:
+    assert c.check_registries(LAYOUT, FakeProbe(_scaffolded())) == []
+
+
+def test_registries_check_flags_invalid_csl_json() -> None:
+    files = _scaffolded()
+    files[LAYOUT.references] = '{"id": "smith2020"}\n'  # object, not an array
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert findings[0].file == "docs/research/literature/references.json"
+
+
+def test_registries_check_flags_an_entry_without_an_id() -> None:
+    files = _scaffolded()
+    files[LAYOUT.references] = '[{"title": "no id here"}]\n'
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any("id" in f.message for f in findings)
+
+
+def test_registries_check_flags_a_triage_key_with_no_reference() -> None:
+    files = _scaffolded()
+    files[LAYOUT.references] = '[{"id": "smith2020"}]\n'
+    files[LAYOUT.triage] = "jones2019:\n  disposition: include\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any("jones2019" in f.message and f.severity == "invalid" for f in findings)
+
+
+def test_registries_check_flags_a_triage_row_that_is_not_a_mapping() -> None:
+    """`load_triage` silently skips these, so nothing else would ever see it."""
+    files = _scaffolded()
+    files[LAYOUT.references] = '[{"id": "smith2020"}]\n'
+    files[LAYOUT.triage] = "smith2020: include\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any("smith2020" in f.message and "mapping" in f.message for f in findings)
+
+
+def test_registries_check_flags_invalid_triage_yaml() -> None:
+    files = _scaffolded()
+    files[LAYOUT.triage] = "smith2020: [unclosed\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any("invalid YAML" in f.message for f in findings)
+
+
+def test_registries_check_reports_every_manifest_error() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = "datasets:\n  - id: cifar10\n    files: []\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    messages = " ".join(f.message for f in findings)
+    assert "version" in messages
+    assert "license" in messages
+    assert all(f.file == "datasets.yml" for f in findings if "entry" in f.message)
+
+
+def test_registries_check_flags_an_unparseable_manifest() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = "- not: a mapping\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any(f.severity == "invalid" and f.file == "datasets.yml" for f in findings)
+
+
+def test_registries_check_reports_each_unreadable_registry() -> None:
+    probe = FakeProbe(_scaffolded(), unreadable={LAYOUT.references, LAYOUT.triage})
+
+    findings = c.check_registries(LAYOUT, probe)
+
+    assert sorted(f.file for f in findings if f.severity == "unreadable") == [
+        "docs/research/literature/references.json",
+        "docs/research/literature/triage.yml",
+    ]
+
+
+def test_registries_check_unreadable_datasets() -> None:
+    probe = FakeProbe(_scaffolded(), unreadable={LAYOUT.datasets_manifest})
+
+    findings = c.check_registries(LAYOUT, probe)
+
+    assert any(
+        f.severity == "unreadable" and f.file == "datasets.yml" for f in findings
+    )
+
+
+def test_registries_check_flags_malformed_json_in_references() -> None:
+    files = _scaffolded()
+    files[LAYOUT.references] = '[{"id": "smith2020"}\n'  # missing closing bracket
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any(
+        f.severity == "invalid"
+        and f.file == "docs/research/literature/references.json"
+        and "invalid JSON" in f.message
+        for f in findings
+    )
+
+
+def test_registries_check_flags_mirror_not_a_dict() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = "mirror: not_a_dict\ndatasets: []\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any(f.severity == "invalid" and "mirror" in f.message for f in findings)
+
+
+def test_registries_check_flags_datasets_not_a_list() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = (
+        "datasets:\n"
+        "  id: cifar10\n"  # object instead of list
+    )
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any(f.severity == "invalid" and "datasets" in f.message for f in findings)
+
+
+def test_registries_check_flags_malformed_yaml_in_datasets() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = "datasets: [unclosed\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    assert any(
+        f.severity == "invalid"
+        and f.file == "datasets.yml"
+        and "invalid YAML" in f.message
+        for f in findings
+    )
+
+
+def test_registries_check_handles_empty_datasets_manifest() -> None:
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = ""  # empty file
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    # Empty dataset manifest is valid, so no findings (except any schema validation)
+    assert all(f.file != "datasets.yml" or f.severity == "invalid" for f in findings)
+
+
+def test_registries_check_triage_orphan_with_readable_references() -> None:
+    """Test orphan key detection when both triage and references are readable."""
+    files = _scaffolded()
+    files[LAYOUT.references] = '[{"id": "smith2020"}]\n'
+    files[LAYOUT.triage] = "jones2019:\n  disposition: include\n"
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    orphan_findings = [f for f in findings if "jones2019" in f.message]
+    assert len(orphan_findings) == 1
+    assert orphan_findings[0].severity == "invalid"
+
+
+def test_registries_check_triage_orphan_when_references_unreadable() -> None:
+    """Test that when references can't be read, all triage keys are flagged as orphans."""
+    files = _scaffolded()
+    files[LAYOUT.triage] = "smith2020:\n  disposition: include\n"
+
+    probe = FakeProbe(files, unreadable={LAYOUT.references})
+
+    findings = c.check_registries(LAYOUT, probe)
+
+    # Should have: unreadable references + orphan triage key
+    unreadable_findings = [f for f in findings if f.severity == "unreadable"]
+    orphan_findings = [
+        f for f in findings if f.severity == "invalid" and "smith2020" in f.message
+    ]
+    assert len(unreadable_findings) >= 1  # references is unreadable
+    assert len(orphan_findings) >= 1  # smith2020 is orphan
+
+
+def test_registries_check_reports_manifest_warnings() -> None:
+    """Test that manifest validation warnings become gap findings."""
+    files = _scaffolded()
+    # Incomplete DataCite tuple (warning, not error)
+    files[LAYOUT.datasets_manifest] = (
+        "datasets:\n"
+        "  - id: cifar10\n"
+        "    version: 1.0\n"
+        "    tier: A\n"
+        "    license: CC-BY-4.0\n"
+        "    redistributable: true\n"
+        "    access: open\n"
+        "    files:\n"
+        "      - path: data.zip\n"
+        "        sha256: " + "a" * 64 + "\n"
+        "    datasheet: https://example.com/datasheet.pdf\n"
+        "    citation:\n"
+        "      title: My Dataset\n"  # Missing creator, publisher, identifier, publication_year
+        "      resource_type: Dataset\n"
+    )
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    gap_findings = [f for f in findings if f.severity == "gap"]
+    assert len(gap_findings) >= 1
+    assert any("citation" in f.message for f in gap_findings)
+
+
+def test_registries_check_handles_manifest_with_mirror() -> None:
+    """Test that a dataset manifest with a valid mirror is handled correctly."""
+    files = _scaffolded()
+    files[LAYOUT.datasets_manifest] = (
+        "mirror:\n"
+        "  rclone_remote: myremote\n"
+        "  base_path: /data\n"
+        "datasets:\n"
+        "  - id: cifar10\n"
+        "    version: 1.0\n"
+        "    tier: A\n"
+        "    license: CC-BY-4.0\n"
+        "    redistributable: true\n"
+        "    access: open\n"
+        "    files:\n"
+        "      - path: data.zip\n"
+        "        sha256: " + "a" * 64 + "\n"
+        "    datasheet: https://example.com/datasheet.pdf\n"
+    )
+
+    findings = c.check_registries(LAYOUT, FakeProbe(files))
+
+    # Should not have errors about the manifest structure itself
+    # (may have other validation issues, but not about mirror being invalid)
+    assert not any("mirror" in f.message and f.severity == "invalid" for f in findings)
