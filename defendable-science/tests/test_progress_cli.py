@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from pathlib import Path  # noqa: TC003
 
@@ -220,15 +221,27 @@ def test_an_invalid_layout_block_is_fatal(
     assert "unknown layout key" in result.stderr
 
 
+def _unstyled(text: str) -> str:
+    """Strip ANSI styling from rendered help.
+
+    Rich styles an option name when colour is forced, which splits tokens like
+    ``--root`` with escape sequences, so a plain substring search finds nothing.
+    CI sets ``FORCE_COLOR``, so a test asserting on raw ``--help`` output passes
+    on a developer's machine and fails there — assert on the text a reader sees,
+    not on how a terminal happened to paint it.
+    """
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def test_the_command_is_documented_in_help() -> None:
     top = runner.invoke(app, ["--help"])
     group = runner.invoke(app, ["progress", "--help"])
     command = runner.invoke(app, ["progress", "dashboard", "--help"])
 
-    assert "progress" in top.stdout
-    assert "dashboard" in group.stdout
-    assert "--root" in command.stdout
-    assert "--dry-run" in command.stdout
+    assert "progress" in _unstyled(top.stdout)
+    assert "dashboard" in _unstyled(group.stdout)
+    assert "--root" in _unstyled(command.stdout)
+    assert "--dry-run" in _unstyled(command.stdout)
 
 
 def test_a_paper_whose_decision_has_no_id_yet_clears_the_stale_check(
