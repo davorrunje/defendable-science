@@ -285,6 +285,23 @@ class Rejection:
     reason: str
 
 
+def render_rejection(rejection: Rejection) -> str:
+    """Render one rejection as a single human-readable line (spec §7.4).
+
+    Composed in one place so every front-end reports a refusal identically:
+    "3 cells rejected" sends the reader hunting, and a caller improvising its
+    own format makes the log and the terminal disagree about the same event.
+
+    `Rejection.axis` is not re-emitted — every reason already names the axis it
+    is about, and prefixing it again would read as two different axes. The
+    field stays the machine-readable one, for JSON output.
+
+    :param rejection: The refusal to render.
+    :returns: ``<citekey> / <reason>``.
+    """
+    return f"{rejection.citekey} / {rejection.reason}"
+
+
 def _cell_problem(
     cell: Cell, axes: list[str], patterns: list[re.Pattern[str]]
 ) -> str | None:

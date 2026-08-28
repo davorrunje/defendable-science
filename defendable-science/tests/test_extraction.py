@@ -377,3 +377,18 @@ def test_cell_from_mapping_rejects_an_unknown_field() -> None:
 def test_cell_from_mapping_rejects_a_missing_required_field() -> None:
     with pytest.raises(ex.ExtractionError, match="malformed"):
         ex.cell_from_mapping({"citekey": "k", "axis": "a"})
+
+
+def test_a_rejection_renders_as_one_line_naming_the_paper_and_the_cell() -> None:
+    """Spec §7.4: a refusal names the offending cell, never just a count."""
+    _, rejections = ex.validate(
+        [_cell(), _cell(axis="scope", locator="see paper")], AXES, PATTERNS
+    )
+    line = ex.render_rejection(rejections[0])
+    assert line.startswith("sill1997 / axis 'scope':")
+    assert "'see paper' matches no known form" in line
+
+
+def test_a_whole_paper_rejection_renders_without_inventing_an_axis() -> None:
+    line = ex.render_rejection(ex.Rejection("sill1997", None, "no cells at all"))
+    assert line == "sill1997 / no cells at all"
