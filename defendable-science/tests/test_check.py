@@ -1857,6 +1857,87 @@ def test_config_check_ignores_commented_out_gitignore_entries() -> None:
     assert len(cache_missing) == 1
 
 
+# --- literature.extraction.locator_patterns config shape (#161) --------------
+
+
+def test_config_check_flags_a_non_list_locator_patterns() -> None:
+    """A string instead of a list is `check_config`'s finding, not silence."""
+    files = _scaffolded_with_backend("bench")
+    files[LAYOUT.config_file] += (
+        "literature:\n  extraction:\n    locator_patterns: 'Widget-\\d+'\n"
+    )
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    locator_findings = [
+        f
+        for f in findings
+        if "locator_patterns" in f.message and f.severity == "invalid"
+    ]
+    assert len(locator_findings) == 1
+    assert locator_findings[0].file == str(LAYOUT.rel(LAYOUT.config_file))
+    assert "must be a list of strings" in locator_findings[0].message
+    assert "str" in locator_findings[0].message
+
+
+def test_config_check_flags_an_invalid_regex_in_locator_patterns() -> None:
+    """A syntactically-invalid regex surfaces the compiler's own message."""
+    files = _scaffolded_with_backend("bench")
+    files[LAYOUT.config_file] += (
+        "literature:\n  extraction:\n    locator_patterns:\n      - '(unclosed'\n"
+    )
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    locator_findings = [
+        f for f in findings if f.severity == "invalid" and "(unclosed" in f.message
+    ]
+    assert len(locator_findings) == 1
+    assert locator_findings[0].file == str(LAYOUT.rel(LAYOUT.config_file))
+    try:
+        ex.compile_locator_patterns(["(unclosed"])
+    except ex.ExtractionError as exc:
+        expected_message = str(exc)
+    else:  # pragma: no cover - the whole point of this test is that it raises
+        pytest.fail("compile_locator_patterns did not raise for '(unclosed'")
+    assert locator_findings[0].message == expected_message
+
+
+def test_config_check_is_silent_on_a_well_formed_locator_patterns_list() -> None:
+    files = _scaffolded_with_backend("bench")
+    files[LAYOUT.config_file] += (
+        "literature:\n  extraction:\n    locator_patterns:\n      - 'Widget-\\d+'\n"
+    )
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert not any("locator_patterns" in f.message for f in findings)
+
+
+def test_config_check_is_silent_when_literature_key_is_absent() -> None:
+    findings = c.check_config(LAYOUT, FakeProbe(_scaffolded_with_backend("bench")))
+
+    assert not any("locator_patterns" in f.message for f in findings)
+
+
+def test_config_check_is_silent_when_extraction_sub_key_is_absent() -> None:
+    files = _scaffolded_with_backend("bench")
+    files[LAYOUT.config_file] += "literature:\n  registry: some-registry\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert not any("locator_patterns" in f.message for f in findings)
+
+
+def test_config_check_is_silent_when_locator_patterns_key_is_absent() -> None:
+    files = _scaffolded_with_backend("bench")
+    files[LAYOUT.config_file] += "literature:\n  extraction:\n    max_cells: 5\n"
+
+    findings = c.check_config(LAYOUT, FakeProbe(files))
+
+    assert not any("locator_patterns" in f.message for f in findings)
+
+
 # --- real gitignore semantics via `Probe.is_gitignored` (#138) ---------------
 #
 # These pin the acceptance criteria directly: a `.gitignore` that covers
