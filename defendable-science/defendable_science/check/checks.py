@@ -484,6 +484,71 @@ def staged_documents(layout: Layout, probe: Probe) -> list[Path]:
     return sorted(documents.keys())
 
 
+def _check_unknown_fields(
+    findings: list[Finding], rel: str, status_block: dict[str, object]
+) -> None:
+    """Check for unknown status fields. Append findings for any."""
+    unknown_fields = sorted(k for k in status_block if k not in st.FIELD_ORDER)
+    findings.extend(
+        Finding(
+            severity="invalid",
+            check=FRONTMATTER_CHECK,
+            file=rel,
+            message=f"{rel} has unknown status field {field!r}",
+            remedy=f"remove {field!r} from the status block; valid fields are {list(st.FIELD_ORDER)}",
+        )
+        for field in unknown_fields
+    )
+
+
+def _collect_placeholder_fields(
+    findings: list[Finding], rel: str, status_block: dict[str, object]
+) -> set[str]:
+    """Scan for placeholder values and return their field names. Append findings for each."""
+    placeholder_fields: set[str] = set()
+    for field, value in status_block.items():
+        if isinstance(value, str) and value.startswith("<"):
+            placeholder_fields.add(field)
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=FRONTMATTER_CHECK,
+                    file=rel,
+                    message=f"{rel} has placeholder in `{field}`: {value!r}",
+                    remedy=(
+                        f"set `{field}` to `null` until it is real, "
+                        "and keep the guidance in a comment"
+                    ),
+                )
+            )
+    return placeholder_fields
+
+
+def _check_enum_field(
+    findings: list[Finding],
+    rel: str,
+    field_name: str,
+    field_value: str | None,
+    expected_level: str,
+    enum_map: dict[str, frozenset[str]],
+) -> None:
+    """Check if field_value is in enum_map[expected_level]. Append finding if not."""
+    if (
+        field_value is not None
+        and expected_level in enum_map
+        and field_value not in enum_map[expected_level]
+    ):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=FRONTMATTER_CHECK,
+                file=rel,
+                message=f"{rel} has `{field_name}: {field_value!r}`, which is not valid for {expected_level!r}; valid {field_name}s are {sorted(enum_map[expected_level])}",
+                remedy=f"set `{field_name}` to one of {sorted(enum_map[expected_level])}, or set it to `null` if not yet determined",
+            )
+        )
+
+
 def _check_frontmatter_document(
     path: Path, rel: str, expected_level: str, layout: Layout, probe: Probe
 ) -> list[Finding]:
@@ -528,80 +593,53 @@ def _check_frontmatter_document(
         ]
 
     # Check for unknown fields
-    unknown_fields = sorted(k for k in status_block if k not in st.FIELD_ORDER)
-    findings.extend(
-        Finding(
-            severity="invalid",
-            check=FRONTMATTER_CHECK,
-            file=rel,
-            message=f"{rel} has unknown status field {field!r}",
-            remedy=f"remove {field!r} from the status block; valid fields are {list(st.FIELD_ORDER)}",
-        )
-        for field in unknown_fields
-    )
+    _check_unknown_fields(findings, rel, status_block)
 
-    # Check for unreplaced placeholders
-    for field, value in status_block.items():
-        if isinstance(value, str) and value.startswith("<"):
+    # Check for unreplaced placeholders and collect their field names
+    placeholder_fields = _collect_placeholder_fields(findings, rel, status_block)
+
+    # Check that level matches the filename (skip if level has a placeholder)
+    if "level" not in placeholder_fields:
+        level = status_block.get("level")
+        if level != expected_level:
             findings.append(
                 Finding(
                     severity="invalid",
                     check=FRONTMATTER_CHECK,
                     file=rel,
-                    message=f"{rel} has placeholder in `{field}`: {value!r}",
-                    remedy=(
-                        f"set `{field}` to `null` until it is real, "
-                        "and keep the guidance in a comment"
-                    ),
+                    message=f"{rel} declares `level: {level!r}`, but {path.name!r} is a {expected_level!r} document",
+                    remedy=f"change `level` to {expected_level!r}, or move the file to the correct document type",
                 )
             )
 
-    # Check that level matches the filename
-    level = status_block.get("level")
-    if level != expected_level:
-        findings.append(
-            Finding(
-                severity="invalid",
-                check=FRONTMATTER_CHECK,
-                file=rel,
-                message=f"{rel} declares `level: {level!r}`, but {path.name!r} is a {expected_level!r} document",
-                remedy=f"change `level` to {expected_level!r}, or move the file to the correct document type",
-            )
+    # Check verdict enum (if not a placeholder)
+    if "verdict" not in placeholder_fields:
+        _check_enum_field(
+            findings,
+            rel,
+            "verdict",
+            status_block.get("verdict"),
+            expected_level,
+            st.VERDICTS,
         )
 
-    # Check verdict enum (if present and not None)
-    verdict = status_block.get("verdict")
-    if (
-        verdict is not None
-        and expected_level in st.VERDICTS
-        and verdict not in st.VERDICTS[expected_level]
-    ):
-        findings.append(
-            Finding(
-                severity="invalid",
-                check=FRONTMATTER_CHECK,
-                file=rel,
-                message=f"{rel} has `verdict: {verdict!r}`, which is not valid for {expected_level!r}; valid verdicts are {sorted(st.VERDICTS[expected_level])}",
-                remedy=f"set `verdict` to one of {sorted(st.VERDICTS[expected_level])}, or set it to `null` if the verdict is not yet determined",
+    # Check readiness enum (if not a placeholder)
+    if "readiness" not in placeholder_fields:
+        readiness = status_block.get("readiness")
+        if (
+            readiness is not None
+            and expected_level in st.READINESS
+            and readiness not in st.READINESS[expected_level]
+        ):
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=FRONTMATTER_CHECK,
+                    file=rel,
+                    message=f"{rel} has `readiness: {readiness!r}`, which is not valid for {expected_level!r}; valid values are {sorted(st.READINESS[expected_level])}",
+                    remedy=f"set `readiness` to one of {sorted(st.READINESS[expected_level])}, or set it to `null` if not yet set",
+                )
             )
-        )
-
-    # Check readiness enum (if present and not None)
-    readiness = status_block.get("readiness")
-    if (
-        readiness is not None
-        and expected_level in st.READINESS
-        and readiness not in st.READINESS[expected_level]
-    ):
-        findings.append(
-            Finding(
-                severity="invalid",
-                check=FRONTMATTER_CHECK,
-                file=rel,
-                message=f"{rel} has `readiness: {readiness!r}`, which is not valid for {expected_level!r}; valid values are {sorted(st.READINESS[expected_level])}",
-                remedy=f"set `readiness` to one of {sorted(st.READINESS[expected_level])}, or set it to `null` if not yet set",
-            )
-        )
 
     return findings
 

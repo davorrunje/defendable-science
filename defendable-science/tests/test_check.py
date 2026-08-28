@@ -492,8 +492,11 @@ def test_frontmatter_check_flags_an_out_of_enum_verdict() -> None:
 
     findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
 
-    assert any("verdict" in f.message and "maybe" in f.message for f in findings)
-    assert all(f.severity == "invalid" for f in findings)
+    # Exactly one finding for the invalid verdict value
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "verdict" in findings[0].message
+    assert "maybe" in findings[0].message
 
 
 def test_frontmatter_check_flags_an_out_of_enum_readiness() -> None:
@@ -502,11 +505,19 @@ def test_frontmatter_check_flags_an_out_of_enum_readiness() -> None:
 
     findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
 
-    assert any("readiness" in f.message and "nearly" in f.message for f in findings)
+    # Exactly one finding for the invalid readiness value
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "readiness" in findings[0].message
+    assert "nearly" in findings[0].message
 
 
 def test_frontmatter_check_flags_an_unreplaced_placeholder() -> None:
-    """`readiness: <synthesis | defensible>` parses as a real value (#121)."""
+    """`readiness: <synthesis | defensible>` parses as a real value (#121).
+
+    A placeholder in a field produces exactly one finding (the placeholder finding),
+    not a second enum finding. This prevents duplicate remedies for a single defect.
+    """
     files = _scaffolded()
     kappa = LAYOUT.kappa_dir / "kappa.md"
     files[kappa] = (
@@ -516,20 +527,58 @@ def test_frontmatter_check_flags_an_unreplaced_placeholder() -> None:
 
     findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
 
-    placeholder = [f for f in findings if "placeholder" in f.message]
-    assert len(placeholder) == 1
-    assert placeholder[0].severity == "invalid"
-    assert "readiness" in placeholder[0].message
-    assert "null" in placeholder[0].remedy
+    # Exactly one finding: the placeholder finding, not a second readiness-enum finding
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "placeholder" in findings[0].message
+    assert "readiness" in findings[0].message
+    assert "null" in findings[0].remedy
+
+
+def test_frontmatter_check_flags_a_placeholder_in_verdict() -> None:
+    """A placeholder in verdict yields one finding, not a second enum finding."""
+    files = _scaffolded()
+    findings_path = LAYOUT.hypothesis_dir("dc", "2026-03-04-h") / "findings.md"
+    files[findings_path] = (
+        "---\nstatus:\n  level: hypothesis\n  id: 2026-03-04-h\n"
+        "  verdict: <confirmed | refuted>\n  readiness: resolved\n---\n\n# H\n"
+    )
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    # Exactly one finding: the placeholder, not a second verdict-enum finding
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "placeholder" in findings[0].message
+    assert "verdict" in findings[0].message
+    assert "null" in findings[0].remedy
+
+
+def test_frontmatter_check_flags_a_placeholder_in_level() -> None:
+    """A placeholder in level yields one finding, not a second level-mismatch finding."""
+    files = _scaffolded()
+    files[PITCH] = "---\nstatus:\n  level: <paper | hypothesis>\n  id: dc\n---\n\n# P\n"
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    # Exactly one finding: the placeholder, not a second level-mismatch finding
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "placeholder" in findings[0].message
+    assert "level" in findings[0].message
+    assert "null" in findings[0].remedy
 
 
 def test_frontmatter_check_flags_a_level_that_contradicts_the_filename() -> None:
     files = _scaffolded()
-    files[PITCH] = _doc("hypothesis", id="dc")
+    files[PITCH] = _doc("hypothesis", id="dc", verdict="null", readiness="null")
 
     findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
 
-    assert any("level" in f.message for f in findings)
+    # Exactly one finding for the level mismatch (not additional enum findings)
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "level" in findings[0].message
 
 
 def test_frontmatter_check_flags_an_unknown_status_field() -> None:
@@ -538,7 +587,10 @@ def test_frontmatter_check_flags_an_unknown_status_field() -> None:
 
     findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
 
-    assert any("priority" in f.message for f in findings)
+    # Exactly one finding for the unknown field
+    assert len(findings) == 1
+    assert findings[0].severity == "invalid"
+    assert "priority" in findings[0].message
 
 
 def test_frontmatter_check_reports_invalid_yaml_without_a_traceback() -> None:
