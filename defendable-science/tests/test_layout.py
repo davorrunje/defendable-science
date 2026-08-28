@@ -20,6 +20,7 @@ def test_default_layout_derives_every_path_from_the_repo_root() -> None:
     assert out.literature_dir == Path("/repo/docs/research/literature")
     assert out.references == Path("/repo/docs/research/literature/references.json")
     assert out.triage == Path("/repo/docs/research/literature/triage.yml")
+    assert out.digests_dir == Path("/repo/docs/research/literature/digests")
     assert out.datasets_manifest == Path("/repo/datasets.yml")
     assert out.thesis_dir == Path("/repo/docs/research/thesis")
     assert out.aims == Path("/repo/docs/research/thesis/aims.md")
@@ -44,6 +45,25 @@ def test_paper_paths_are_derived_from_the_paper_id() -> None:
     assert out.hypothesis_dir("depth-collapse", "2026-03-04-monotone") == Path(
         "/repo/docs/research/depth-collapse/hypotheses/2026-03-04-monotone"
     )
+    assert out.positioning("depth-collapse") == Path(
+        "/repo/docs/research/depth-collapse/paper/positioning.md"
+    )
+
+
+def test_a_digest_is_named_for_its_citekey_and_follows_the_literature_dir() -> None:
+    out = lay.resolve_layout({"layout": {"literature_dir": "refs"}}, Path("/repo"))
+
+    assert out.digests_dir == Path("/repo/refs/digests")
+    assert out.digest("smith2024monotone") == Path(
+        "/repo/refs/digests/smith2024monotone.md"
+    )
+
+
+def test_positioning_is_a_staged_paper_document() -> None:
+    out = lay.Layout.default(Path("/repo"))
+
+    assert lay.STAGED_DOCUMENTS[out.positioning("p1").name] == "paper"
+    assert out.positioning("p1").parent == out.paper_docs_dir("p1")
 
 
 def test_rel_renders_a_path_for_display_and_tolerates_an_outside_path() -> None:

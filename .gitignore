@@ -2,10 +2,16 @@
 # NOTE: gitignore has no trailing comments — a mid-line '#' is part of the
 # pattern. Keep every comment on its own line. A leading '**/' is required so
 # these also match when the CLI runs from the defendable-science/ subdirectory.
+# Both forms of each path are kept on purpose: the bare ones are what the
+# literal matchers in check/checks.py and scaffold/render.py look for, the
+# '**/' ones are what make the ignore actually take effect from a subdirectory.
 # http + dataset caches (cli.py writes here)
+.defendable-science/cache/
 **/.defendable-science/cache/
 # CLI-owned API-key store (0600; ADR-0029)
+.defendable-science/keys.json
 **/.defendable-science/keys.json
+.defendable-science/rclone.conf
 **/.defendable-science/rclone.conf
 *.rclone.conf
 

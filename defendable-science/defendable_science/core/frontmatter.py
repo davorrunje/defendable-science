@@ -106,7 +106,7 @@ def set_field(fm_lines: list[str], key: str, value: str) -> list[str]:
     inline (``key: {…}``) or as an indented **block mapping** underneath, which
     is how a human following a documented example writes it. Replacing only the
     ``key:`` line of a block mapping would orphan its children and leave the
-    frontmatter unparseable, so the whole value goes. Otherwise the key is
+    frontmatter unparsable, so the whole value goes. Otherwise the key is
     inserted directly under the ``status:`` block. Indentation is taken from
     the block's children.
 

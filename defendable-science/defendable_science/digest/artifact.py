@@ -1,9 +1,10 @@
 """Extraction mode's writer — the per-paper artifact and the shared log.
 
-Extraction and depth reading share one file per paper,
-``docs/research/literature/digests/<citekey>.md``, because they are two claims
-of different strength about the same paper and both belong in its reading
-record (spec §5). They do **not** share a frontmatter key:
+Extraction and depth reading share one file per paper (for illustration, the
+default layout's ``docs/research/literature/digests/<citekey>.md``; the real
+path comes from :meth:`Layout.digest`), because they are two claims of
+different strength about the same paper and both belong in its reading record
+(spec §5). They do **not** share a frontmatter key:
 
 * depth mode writes ``status.understanding`` — *this reader understands it*;
 * extraction writes ``status.extraction`` — *these cells were extracted, each
