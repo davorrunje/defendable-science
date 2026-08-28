@@ -76,6 +76,17 @@ def test_fs_probe_reads_globs_and_reports_existence(tmp_path: Path) -> None:
     assert probe.glob(tmp_path, "**/*.md") == [tmp_path / "a" / "x.md"]
 
 
+def test_fs_probe_tells_a_directory_from_a_file(tmp_path: Path) -> None:
+    """`exists` cannot: it is true for a file *and* for a directory (#131)."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "x.md").write_text("hello", encoding="utf-8")
+    probe = FsProbe()
+
+    assert probe.is_dir(tmp_path / "a") is True
+    assert probe.is_dir(tmp_path / "a" / "x.md") is False
+    assert probe.is_dir(tmp_path / "absent") is False
+
+
 def test_fs_probe_globs_nothing_under_a_missing_root(tmp_path: Path) -> None:
     assert FsProbe().glob(tmp_path / "absent", "**/*.md") == []
 
@@ -118,33 +129,63 @@ def _matches(parts: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
 
 
 class FakeProbe:
-    """A filesystem built from a ``{path: text}`` map. Directories are implied."""
+    """A filesystem built from a ``{path: text}`` map, plus explicit directories.
 
-    def __init__(self, files: dict[Path, str], unreadable: set[Path] | None = None):
+    A directory is implied by anything beneath it, exactly as on a real
+    filesystem. `dirs` names the directories nothing lives under — an *empty*
+    directory, which is precisely the shape a mis-typed layout path takes
+    (``mkdir papers.md``), and the one shape an implied-only fake cannot express
+    (#131).
+
+    A path in `files` is a file; a path in `dirs`, and every ancestor of either,
+    is a directory. The two sets are disjoint on a real filesystem, so a fake
+    that puts the same path in both is a fake that lies.
+    """
+
+    def __init__(
+        self,
+        files: dict[Path, str],
+        unreadable: set[Path] | None = None,
+        dirs: set[Path] | None = None,
+    ):
         self.files = files
         self.unreadable = unreadable or set()
+        self.dirs = set(dirs or ())
+
+    def _directories(self) -> set[Path]:
+        """Every path that is a directory: the explicit ones and all ancestors."""
+        directories = set(self.dirs)
+        for path in (*self.files, *self.dirs):
+            directories.update(path.parents)
+        return directories
 
     def exists(self, path: Path) -> bool:
-        return path in self.files or any(path in p.parents for p in self.files)
+        return path in self.files or self.is_dir(path)
+
+    def is_dir(self, path: Path) -> bool:
+        return path in self._directories()
 
     def read_text(self, path: Path) -> str:
         if path in self.unreadable:
             raise OSError(f"{path}: simulated read failure")
         if path not in self.files:
+            # Covers a directory too: `Path.read_text` on one raises
+            # `IsADirectoryError`, which is an `OSError`.
             raise OSError(f"{path}: no such file")
         return self.files[path]
 
     def glob(self, root: Path, pattern: str) -> list[Path]:
-        """Match `pattern` against each file's path relative to `root`.
+        """Match `pattern` against each path's location relative to `root`.
 
-        Files only — the map holds no directory entries — so a pattern meant to
-        select directories (``**/*``) will not match them. Every check globs for
-        files, which is what `test_the_fake_probe_models_the_real_one` pins.
+        Directories are matched as well as files, as `Path.glob` matches them:
+        a directory named ``x.md`` is returned by ``**/*.md`` on a real
+        filesystem, so a fake that skipped it would hide a real match.
+        `test_the_fake_probe_models_the_real_one` pins that against `FsProbe`.
         """
         pat = tuple(pattern.split("/"))
         return sorted(
             p
-            for p in self.files
+            for p in {*self.files, *self._directories()}
             if root in p.parents and _matches(p.relative_to(root).parts, pat)
         )
 
@@ -176,8 +217,13 @@ def test_the_fake_probe_models_the_real_one(tmp_path: Path) -> None:
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "a" / "b" / "x.md").write_text("hi", encoding="utf-8")
     (tmp_path / "a" / "y.txt").write_text("no", encoding="utf-8")
+    # Two directories nothing lives under: one inert, one whose *name* a glob
+    # pattern matches — the case an implied-only fake would silently drop.
+    (tmp_path / "a" / "empty").mkdir()
+    (tmp_path / "a" / "dir.md").mkdir()
     fake = FakeProbe(
-        {tmp_path / "a" / "b" / "x.md": "hi", tmp_path / "a" / "y.txt": "no"}
+        {tmp_path / "a" / "b" / "x.md": "hi", tmp_path / "a" / "y.txt": "no"},
+        dirs={tmp_path / "a" / "empty", tmp_path / "a" / "dir.md"},
     )
     real = FsProbe()
 
@@ -189,6 +235,25 @@ def test_the_fake_probe_models_the_real_one(tmp_path: Path) -> None:
     assert fake.glob(tmp_path / "zz", "**/*.md") == real.glob(
         tmp_path / "zz", "**/*.md"
     )
+    # `is_dir` is the seam #131's check reads through, so it is pinned the same
+    # way: implied directory, explicit empty directory, file, and absent path.
+    for path in (
+        tmp_path / "a",
+        tmp_path / "a" / "b",
+        tmp_path / "a" / "empty",
+        tmp_path / "a" / "dir.md",
+        tmp_path / "a" / "b" / "x.md",
+        tmp_path / "a" / "y.txt",
+        tmp_path / "zz",
+    ):
+        assert fake.is_dir(path) == real.is_dir(path), path
+        assert fake.exists(path) == real.exists(path), path
+    # An empty directory exists and is a directory; nothing can be read from it.
+    assert fake.is_dir(tmp_path / "a" / "empty") is True
+    with pytest.raises(OSError, match="empty"):
+        fake.read_text(tmp_path / "a" / "empty")
+    with pytest.raises(IsADirectoryError):
+        real.read_text(tmp_path / "a" / "empty")
 
 
 def test_layout_check_is_silent_on_a_scaffolded_repo() -> None:
@@ -228,6 +293,119 @@ def test_layout_check_requires_aims_once_a_thesis_dir_exists() -> None:
     assert any(f.file == "docs/research/thesis/aims.md" for f in findings)
     assert any(f.file == "docs/research/thesis/milestones.yml" for f in findings)
     assert all("--thesis" in f.remedy for f in findings)
+
+
+# --- path-type mismatches (#131) ---------------------------------------------
+#
+# `init` probes with `path.exists()`, which is true for a file *and* for a
+# directory, so it reports `exists` over a directory sitting where `papers.md`
+# belongs and claims a clean scaffold of an unusable repo. Diagnosing that is
+# `check`'s job. Every assertion below counts *all* findings: a subset filtered
+# by path could not fail on the double-report these checks exist to avoid.
+
+#: Every file `check_layout` requires of a portfolio repo — the keys of
+#: `_scaffolded()` other than `.gitignore`, which `check_config` owns.
+REQUIRED_FILES = [
+    LAYOUT.papers_registry,
+    LAYOUT.portfolio_backlog,
+    LAYOUT.dashboard,
+    LAYOUT.references,
+    LAYOUT.triage,
+    LAYOUT.datasets_manifest,
+    LAYOUT.config_file,
+]
+
+
+def test_layout_check_flags_a_directory_where_a_file_belongs() -> None:
+    """`mkdir docs/research/papers.md` — the defect `init` reports as `exists`."""
+    files = _scaffolded()
+    del files[LAYOUT.papers_registry]
+
+    findings = c.check_layout(LAYOUT, FakeProbe(files, dirs={LAYOUT.papers_registry}))
+
+    assert len(findings) == 1, findings
+    assert findings[0].severity == "invalid"
+    assert findings[0].check == "layout"
+    assert findings[0].file == "docs/research/papers.md"
+    # The path, what it actually is, and what it has to be.
+    assert "docs/research/papers.md" in findings[0].message
+    assert "directory" in findings[0].message
+    assert "file" in findings[0].message
+    assert findings[0].remedy
+
+
+def test_layout_check_flags_a_file_where_a_directory_belongs() -> None:
+    """A file at ``literature/`` is one defect, so it is exactly one finding.
+
+    ``references.json`` and ``triage.yml`` cannot exist inside a file, so the
+    missing-file check would fire for both on top of the wrong-type finding —
+    three findings for one defect. The two absences are consequences of the
+    mis-typed ancestor, not independent facts, so they are suppressed.
+    """
+    files = _scaffolded()
+    del files[LAYOUT.references]
+    del files[LAYOUT.triage]
+    files[LAYOUT.literature_dir] = "not a directory"
+
+    findings = c.check_layout(LAYOUT, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    assert findings[0].severity == "invalid"
+    assert findings[0].check == "layout"
+    assert findings[0].file == "docs/research/literature"
+    assert "docs/research/literature" in findings[0].message
+    assert "file" in findings[0].message
+    assert "directory" in findings[0].message
+    assert findings[0].remedy
+
+
+def test_layout_check_flags_a_file_where_the_thesis_directory_belongs() -> None:
+    """A file at ``thesis/`` makes `exists` true, so the tree is still required.
+
+    Gating thesis-ness on ``is_dir`` instead would let the mis-typed path go
+    unreported altogether: no thesis tree, therefore nothing to check.
+    """
+    files = _scaffolded()
+    files[LAYOUT.thesis_dir] = "not a directory"
+
+    findings = c.check_layout(LAYOUT, FakeProbe(files))
+
+    assert len(findings) == 1, findings
+    assert findings[0].file == "docs/research/thesis"
+    assert findings[0].severity == "invalid"
+
+
+@pytest.mark.parametrize("path", REQUIRED_FILES, ids=lambda p: p.name)
+def test_a_directory_where_a_file_belongs_is_reported_exactly_once(path: Path) -> None:
+    """One defect, one finding — across all six families, not just layout.
+
+    Every other family reads required paths too, so a directory at one of them
+    would otherwise be reported both as a layout defect and as an unreadable
+    file by whichever family owns its contents.
+    """
+    files = _scaffolded_with_backend("bench")
+    del files[path]
+
+    report = c.run_checks(LAYOUT, FakeProbe(files, dirs={path}))
+
+    assert len(report.findings) == 1, report.findings
+    finding = report.findings[0]
+    assert finding.severity == "invalid"
+    assert finding.check == "layout"
+    assert finding.file == str(LAYOUT.rel(path))
+
+
+def test_a_file_where_a_directory_belongs_is_reported_exactly_once() -> None:
+    """The whole-run counterpart: a file at ``literature/`` yields one finding."""
+    files = _scaffolded_with_backend("bench")
+    del files[LAYOUT.references]
+    del files[LAYOUT.triage]
+    files[LAYOUT.literature_dir] = "not a directory"
+
+    report = c.run_checks(LAYOUT, FakeProbe(files))
+
+    assert len(report.findings) == 1, report.findings
+    assert report.findings[0].file == "docs/research/literature"
 
 
 def test_tables_check_is_silent_on_a_scaffolded_repo() -> None:

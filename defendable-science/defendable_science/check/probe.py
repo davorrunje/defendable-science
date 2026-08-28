@@ -16,7 +16,16 @@ class Probe(Protocol):
     """
 
     def exists(self, path: Path) -> bool:
-        """Return whether `path` exists."""
+        """Return whether `path` exists — as a file *or* as a directory."""
+        ...
+
+    def is_dir(self, path: Path) -> bool:
+        """Return whether `path` exists and is a directory.
+
+        Distinct from :meth:`exists`, which cannot tell a file from a
+        directory: that is exactly why a directory sitting where ``papers.md``
+        belongs went unreported until #131.
+        """
         ...
 
     def read_text(self, path: Path) -> str:
@@ -34,6 +43,10 @@ class FsProbe:
     def exists(self, path: Path) -> bool:
         """Return whether `path` exists."""
         return path.exists()
+
+    def is_dir(self, path: Path) -> bool:
+        """Return whether `path` exists and is a directory."""
+        return path.is_dir()
 
     def read_text(self, path: Path) -> str:
         """Read `path` as UTF-8.

@@ -147,6 +147,62 @@ def test_unreadable_is_distinguishable_from_valid_and_empty(
     assert "empty" not in reported[0]["message"].lower()
 
 
+def test_a_directory_where_papers_md_belongs_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On a real filesystem, not just through the fake seam (#131).
+
+    ``init`` probes with ``exists()`` and so reports this repo as a clean
+    scaffold; ``check`` is what has to say the path is unusable.
+    """
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    papers = tmp_path / "docs" / "research" / "papers.md"
+    papers.unlink()
+    papers.mkdir()
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    payload = json.loads(result.stdout)
+    reported = [f for f in payload["findings"] if "papers.md" in f["file"]]
+    assert len(reported) == 1, payload["findings"]
+    assert reported[0]["severity"] == "invalid"
+    assert reported[0]["check"] == "layout"
+    assert "is a directory" in reported[0]["message"]
+    assert "requires a file" in reported[0]["message"]
+    assert reported[0]["remedy"]
+    # And `init` really does call this repo clean, which is why `check` must not.
+    assert runner.invoke(app, ["init"]).exit_code == 0
+
+
+def test_a_file_where_the_literature_directory_belongs_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One defect, one finding: the two files it swallows are not reported."""
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    literature = tmp_path / "docs" / "research" / "literature"
+    for child in literature.iterdir():
+        child.unlink()
+    literature.rmdir()
+    literature.write_text("not a directory\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["check"])
+
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    payload = json.loads(result.stdout)
+    reported = [f for f in payload["findings"] if "literature" in f["file"]]
+    assert len(reported) == 1, payload["findings"]
+    assert reported[0]["file"] == "docs/research/literature"
+    assert reported[0]["severity"] == "invalid"
+    assert "is a file" in reported[0]["message"]
+    assert "requires a directory" in reported[0]["message"]
+    assert reported[0]["remedy"]
+
+
 def test_check_exits_one_on_an_invalid_layout_block(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

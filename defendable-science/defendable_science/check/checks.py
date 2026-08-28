@@ -68,6 +68,22 @@ _THESIS_REMEDY = (
 )
 
 
+def _is_file(probe: Probe, path: Path) -> bool:
+    """Whether `path` is a file another check family may read.
+
+    :func:`check_layout` owns every fact about a required path's presence and
+    type — that it is missing, and that it is a directory where a file belongs
+    — so no other family reads a path that is either. Without this, one defect
+    becomes two findings: the layout's ``invalid`` and, from whichever family
+    owns the file's contents, an ``unreadable`` saying it could not be read.
+
+    :param probe: The filesystem seam.
+    :param path: The path to classify.
+    :returns: ``True`` only if `path` exists and is not a directory.
+    """
+    return probe.exists(path) and not probe.is_dir(path)
+
+
 def _header(columns: list[str]) -> str:
     """Render `columns` as the markdown header row a remedy tells you to write."""
     return "| " + " | ".join(columns) + " |"
@@ -181,26 +197,105 @@ def _required_files(layout: Layout, probe: Probe) -> list[tuple[Path, str]]:
     return required
 
 
+def _required_directories(files: list[Path], repo_root: Path) -> list[Path]:
+    """Return every directory `files` implies, outermost first, without repeats.
+
+    Derived rather than declared: the directories a repo must have are exactly
+    the ones its required files live in, so there is no second list to fall out
+    of step with the first — and ``scaffold.layout`` stays the one definition of
+    the tree. A directory holding no required file (``digests/``, the kappa
+    directory) is not required, and listing it here would make ``check`` demand
+    a directory ``init`` does not create.
+
+    `repo_root` is excluded: it is the layout's *input*, not part of the tree
+    the layout defines, and rendering it repo-relative would name it ``.``.
+
+    :param files: The required files, in report order.
+    :param repo_root: The repository root, which bounds and is excluded from the
+        result.
+    :returns: The required directories, each ancestor before its descendants.
+    """
+    directories: dict[Path, None] = {}
+    for path in files:
+        # `parents` runs innermost-first; reversed puts a mis-typed ancestor
+        # ahead of the descendants it makes unreachable.
+        for parent in reversed(path.parents):
+            if repo_root in parent.parents:
+                directories[parent] = None
+    return list(directories)
+
+
+def _wrong_type(layout: Layout, path: Path, *, required: str) -> Finding:
+    """Report `path` existing as the type the layout does not need.
+
+    :param layout: The resolved layout, used to render `path` repo-relative.
+    :param path: The mis-typed path, which the caller has confirmed exists.
+    :param required: What the layout needs `path` to be — ``file`` or
+        ``directory``. The other of the two is what it actually is.
+    :returns: The ``invalid`` finding: a path in the wrong shape is not a
+        saveable state, because the repo cannot function until it is fixed.
+    """
+    actual = "file" if required == "directory" else "directory"
+    rel = layout.rel(path)
+    return Finding(
+        severity="invalid",
+        check=LAYOUT_CHECK,
+        file=str(rel),
+        message=(f"{rel} is a {actual}, but the layout requires a {required} there"),
+        remedy=(
+            f"move or delete the {actual} at {rel} — keeping anything worth "
+            f"keeping — then run `defendable-science init` to write the "
+            f"{required} it belongs to"
+        ),
+    )
+
+
 def check_layout(layout: Layout, probe: Probe) -> list[Finding]:
-    """Report every required file this repo does not have.
+    """Report every required path this repo does not have in the right shape.
+
+    Two defects, never both for one path: a required path is *missing*, or it
+    exists as the wrong type. ``init`` cannot tell them apart — it probes with
+    ``exists()``, which is true for a file and a directory alike, so it reports
+    ``exists`` over a directory sitting where ``papers.md`` belongs and calls
+    the scaffold clean (#131). Diagnosing that is ``check``'s job.
+
+    A required file absent *because* an ancestor directory is really a file is
+    reported only as the ancestor's defect: the absence is a consequence of it,
+    not an independent fact, and reporting both would make one defect look like
+    several.
 
     :param layout: The resolved layout — the one definition of where each file
         lives, so a repo with a non-default ``research_root`` is checked where
         its files actually are.
     :param probe: The filesystem seam.
-    :returns: One ``invalid`` finding per missing file, in layout order.
+    :returns: One ``invalid`` finding per defect: mis-typed directories first
+        (outermost first), then the required files in layout order.
     """
-    return [
-        Finding(
-            severity="invalid",
-            check=LAYOUT_CHECK,
-            file=str(layout.rel(path)),
-            message=f"required file {layout.rel(path)} is missing",
-            remedy=remedy,
-        )
-        for path, remedy in _required_files(layout, probe)
-        if not probe.exists(path)
-    ]
+    required = _required_files(layout, probe)
+    findings: list[Finding] = []
+    mistyped: list[Path] = []
+    for directory in _required_directories(
+        [path for path, _ in required], layout.repo_root
+    ):
+        if probe.exists(directory) and not probe.is_dir(directory):
+            mistyped.append(directory)
+            findings.append(_wrong_type(layout, directory, required="directory"))
+    for path, remedy in required:
+        if probe.is_dir(path):
+            findings.append(_wrong_type(layout, path, required="file"))
+        elif not probe.exists(path) and not any(
+            bad in path.parents for bad in mistyped
+        ):
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=LAYOUT_CHECK,
+                    file=str(layout.rel(path)),
+                    message=f"required file {layout.rel(path)} is missing",
+                    remedy=remedy,
+                )
+            )
+    return findings
 
 
 # --- tables -----------------------------------------------------------------
@@ -299,11 +394,11 @@ def registry_rows(layout: Layout, probe: Probe) -> tuple[list[Row], list[Finding
     :returns: The registry's rows and the findings about the registry file. The
         rows are empty whenever the table could not be interpreted — a header
         this could not read must not yield rows that look authoritative — and a
-        registry that is merely *absent* yields no findings at all, because
-        :func:`check_layout` owns "a required file is missing".
+        registry that is merely *absent*, or is a directory, yields no findings
+        at all, because :func:`check_layout` owns both.
     """
     path = layout.papers_registry
-    if not probe.exists(path):
+    if not _is_file(probe, path):
         return [], []
     text = _read(path, layout, probe, TABLES_CHECK)
     if isinstance(text, Finding):
@@ -437,9 +532,9 @@ def check_tables(layout: Layout, probe: Probe) -> list[Finding]:
     """Report every registry and backlog table that does not parse as its profile.
 
     Covers ``papers.md``, ``portfolio-backlog.md`` and one ``backlog.md`` per
-    registered paper — every table the rest of the tooling reads. A file that is
-    simply absent is left to :func:`check_layout`, so a missing file is reported
-    once rather than twice.
+    registered paper — every table the rest of the tooling reads. A required
+    file that is absent, or that is a directory, is left to
+    :func:`check_layout`, so one defect is reported once rather than twice.
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
@@ -447,7 +542,7 @@ def check_tables(layout: Layout, probe: Probe) -> list[Finding]:
         registered paper at a time.
     """
     rows, findings = registry_rows(layout, probe)
-    if probe.exists(layout.portfolio_backlog):
+    if _is_file(probe, layout.portfolio_backlog):
         findings.extend(
             _check_backlog(layout, probe, layout.portfolio_backlog, "paper")
         )
@@ -719,10 +814,16 @@ def _check_references(layout: Layout, probe: Probe) -> list[Finding]:
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: One finding per issue, or none if the registry is valid.
+    :returns: One finding per issue, or none if the registry is valid. A
+        registry that is absent, or is a directory, yields none:
+        :func:`check_layout` owns both, and reading it here would report one
+        defect twice.
     """
     path = layout.references
     rel = str(layout.rel(path))
+
+    if not _is_file(probe, path):
+        return []
 
     text = _read(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
@@ -750,10 +851,15 @@ def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: Findings for YAML parsing, non-mapping rows, and orphan keys.
+    :returns: Findings for YAML parsing, non-mapping rows, and orphan keys. None
+        if the sidecar is absent or is a directory — :func:`check_layout` owns
+        both.
     """
     path = layout.triage
     rel = str(layout.rel(path))
+
+    if not _is_file(probe, path):
+        return []
 
     text = _read(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
@@ -836,10 +942,15 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: One finding per structural error or validation error/warning.
+    :returns: One finding per structural error or validation error/warning. None
+        if the manifest is absent or is a directory — :func:`check_layout` owns
+        both.
     """
     path = layout.datasets_manifest
     rel = str(layout.rel(path))
+
+    if not _is_file(probe, path):
+        return []
 
     text = _read(path, layout, probe, REGISTRIES_CHECK)
     if isinstance(text, Finding):
@@ -965,7 +1076,7 @@ def _check_dashboard_consistency(
     """
     findings: list[Finding] = []
 
-    if not probe.exists(layout.dashboard):
+    if not _is_file(probe, layout.dashboard):
         return findings
 
     dashboard_text = _read(layout.dashboard, layout, probe, CROSS_ARTIFACT_CHECK)
@@ -1029,7 +1140,7 @@ def check_cross_artifact(layout: Layout, probe: Probe) -> list[Finding]:
     # Prepare for rule 3: extract declared aims if they exist
     declared_aims: set[str] = set()
     check_covers = False
-    if probe.exists(layout.aims):
+    if _is_file(probe, layout.aims):
         aims_text = _read(layout.aims, layout, probe, CROSS_ARTIFACT_CHECK)
         if not isinstance(aims_text, Finding):
             declared_aims = _extract_aim_ids(aims_text)
@@ -1176,12 +1287,16 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     :param probe: The filesystem seam.
     :returns: Findings for each issue: ``invalid`` for structural errors,
         ``unreadable`` for read failures, and ``gap`` for an unbound backend.
+        None at all if the config file is absent or is a directory: there is
+        nothing to read, and :func:`check_layout` already reports it.
     """
     findings: list[Finding] = []
 
     # Read config file
     config_path = layout.config_file
     rel_config = str(layout.rel(config_path))
+    if not _is_file(probe, config_path):
+        return []
     text = _read(config_path, layout, probe, CONFIG_CHECK)
     if isinstance(text, Finding):
         return [text]
