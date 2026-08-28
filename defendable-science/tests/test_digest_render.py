@@ -322,6 +322,48 @@ def _extract(root: Path, citekey: str, values: Mapping[str, str]) -> Path:
     return artifact
 
 
+#: A depth-mode reading record: `status.understanding`, no cells yet.
+_DEPTH_SEED = (
+    "---\nstatus:\n  understanding: {status: ok, unresolved: []}\n"
+    "  last-updated: 2026-08-01\n---\n\n# prose\n\nThe reader's own summary.\n"
+)
+
+
+def _depth_digest(
+    root: Path, citekey: str, values: Mapping[str, str] | None = None
+) -> Path:
+    """Seed a depth-mode reading record and, unless `values` is empty, its cells.
+
+    :param values: Cells to record, as `_extract` takes them. ``None`` records
+        the same fixed pair `_extract`'s default axes expect; an empty mapping
+        seeds the depth digest with **no** cells at all, for the failure-honesty
+        tests.
+    """
+    artifact = root / "docs" / "research" / "literature" / "digests" / f"{citekey}.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(_DEPTH_SEED, encoding="utf-8")
+    if values is None:
+        values = {"guarantee type": "architectural", "partial monotonicity": "no"}
+    if values:
+        cells = [
+            Cell(
+                citekey=citekey,
+                axis=axis,
+                value=value,
+                justification="out of scope" if value == "not-addressed" else None,
+                locator=None if value == "not-addressed" else "§3",
+            )
+            for axis, value in values.items()
+        ]
+        artifact_mod.write_depth_cells(
+            artifact,
+            cells,
+            log_dir=root / "docs" / "research" / "defend-log",
+            date="2026-08-28",
+        )
+    return artifact
+
+
 def _run(root: Path, monkeypatch: pytest.MonkeyPatch, *extra: str) -> Any:
     monkeypatch.chdir(root)
     return runner.invoke(app, ["digest", "extract", "render", "--paper", "p1", *extra])
@@ -360,6 +402,147 @@ def test_render_restricted_to_named_citekeys(
     assert "b2021" not in text
 
 
+# --- depth-sourced rows (defendable-science#142) --------------------------------
+
+
+def test_render_default_batch_includes_a_depth_sourced_paper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No `--citekey` needed: `has_extraction_or_cells` widens the default batch."""
+    root = _repo(tmp_path)
+    depth_artifact = _depth_digest(root, "depth2020")
+    assert artifact_mod.has_extraction(depth_artifact) is False
+
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["rendered"] == ["depth2020"]
+    text = _positioning(root).read_text(encoding="utf-8")
+    assert "| depth2020 | architectural | no |" in text
+
+
+def test_render_merges_a_depth_sourced_row_alongside_an_extracted_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Neither weakens, nor is weakened by, the other's claim (SKILL.md)."""
+    root = _repo(tmp_path)
+    _extract(
+        root, "vanilla2020", {"guarantee type": "learned", "partial monotonicity": "no"}
+    )
+    _depth_digest(root, "depth2020")
+
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["rendered"] == ["depth2020", "vanilla2020"]
+    text = _positioning(root).read_text(encoding="utf-8")
+    assert "| vanilla2020 | learned | no |" in text
+    assert "| depth2020 | architectural | no |" in text
+
+
+def test_render_of_a_depth_sourced_row_is_host_preserving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No byte outside the table changes.
+
+    The same guarantee an extracted row gets in
+    `test_the_host_document_survives_byte_identical`.
+    """
+    root = _repo(tmp_path)
+    _depth_digest(root, "depth2020")
+
+    result = _run(root, monkeypatch)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    after = _positioning(root).read_text(encoding="utf-8")
+    assert after == POSITIONING.replace(
+        "| **This paper** | architectural | yes |\n",
+        "| depth2020 | architectural | no |\n| **This paper** | architectural | yes |\n",
+    )
+
+
+def test_render_refuses_a_depth_sourced_cell_with_a_bad_locator(
+    tmp_path: Path,
+) -> None:
+    """Same `is_valid_locator` path a depth-sourced cell is held to at record time.
+
+    `render_matrix` itself never re-validates a locator's shape — that already
+    happened in `digest depth cells record`/`extract record`, which is the
+    only writer. This proves a badly-shaped locator cannot reach the writer
+    silently by exercising the shared `validate` path directly, exactly as
+    `test_extraction.py` does for an extracted cell.
+    """
+    from defendable_science.digest.extraction import (
+        compile_locator_patterns,
+        validate,
+    )
+
+    cells = [
+        Cell(
+            citekey="depth2020",
+            axis="guarantee type",
+            value="architectural",
+            locator="somewhere in the paper",
+        ),
+        Cell(
+            citekey="depth2020",
+            axis="partial monotonicity",
+            value="no",
+            locator="§3",
+        ),
+    ]
+    accepted, rejections = validate(
+        cells, ["guarantee type", "partial monotonicity"], compile_locator_patterns()
+    )
+    assert accepted == {}
+    assert any("matches no known form" in r.reason for r in rejections)
+
+
+def test_render_of_a_depth_digest_with_no_cells_fails_explicitly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never an empty/partial row, and the run must not report success."""
+    root = _repo(tmp_path)
+    _depth_digest(root, "depth2020", values={})
+    before = _positioning(root).read_bytes()
+
+    result = _run(root, monkeypatch, "--citekey", "depth2020")
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["rendered"] == []
+    assert [e["citekey"] for e in payload["errors"]] == ["depth2020"]
+    assert "no extracted-cells block" in payload["errors"][0]["reason"]
+    assert "depth2020" not in _positioning(root).read_text(encoding="utf-8")
+    assert _positioning(root).read_bytes() == before
+
+
+def test_a_bulk_render_does_not_silently_skip_a_cell_less_depth_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Naming a cell-less depth digest explicitly must fail loudly.
+
+    It is not in the default batch (nothing to render for it), but asking for
+    it by name must never report `ok: true` alongside the papers that did
+    land.
+    """
+    root = _repo(tmp_path)
+    _extract(
+        root, "vanilla2020", {"guarantee type": "learned", "partial monotonicity": "no"}
+    )
+    _depth_digest(root, "depth2020", values={})
+
+    result = _run(
+        root, monkeypatch, "--citekey", "vanilla2020", "--citekey", "depth2020"
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["rendered"] == ["vanilla2020"]
+    assert [e["citekey"] for e in payload["errors"]] == ["depth2020"]
+    text = _positioning(root).read_text(encoding="utf-8")
+    assert "| vanilla2020 |" in text
+    assert "depth2020" not in text
+
+
 def test_render_leaves_the_document_untouched_when_nothing_was_extracted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -369,7 +552,7 @@ def test_render_leaves_the_document_untouched_when_nothing_was_extracted(
     before = _positioning(root).read_bytes()
     result = _run(root, monkeypatch)
     assert result.exit_code == 1
-    assert "no extracted papers" in result.stderr
+    assert "no papers with recorded matrix cells" in result.stderr
     assert json.loads(result.stdout)["ok"] is False
     assert _positioning(root).read_bytes() == before
 

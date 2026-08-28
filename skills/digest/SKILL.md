@@ -191,13 +191,17 @@ read each paper against exactly those axes, then stop. No probing, no teaching,
 no comprehension claim.
 
 All four commands live under one CLI group (bootstrap first via
-[`../../resources/ensure-tooling.md`](../../resources/ensure-tooling.md)):
+[`../../resources/ensure-tooling.md`](../../resources/ensure-tooling.md)). A
+fifth command, `digest depth cells record`, records matrix cells for a paper
+read in **depth** mode instead — see *Depth-sourced cells*, below, after
+`render`:
 
 ```
 defendable-science digest extract axes   [--paper ID] [--positioning PATH]
 defendable-science digest extract record --cells FILE|-  [--paper ID] [--positioning PATH] [--log-dir PATH]
 defendable-science digest extract sample (--citekey KEY ...| --all) [--size N] [--verdict verified|failed] [--log-dir PATH]
 defendable-science digest extract render [--citekey KEY ...] [--paper ID] [--positioning PATH]
+defendable-science digest depth cells record --cells FILE|-  [--paper ID] [--positioning PATH] [--log-dir PATH]
 ```
 
 `--paper` and `--positioning` are inferred from the recorded layout and the cwd
@@ -416,6 +420,15 @@ written for what was actually established:
 defendable-science digest extract render
 ```
 
+Merges **every paper with recorded cells**, not only extracted ones: the
+default batch (no `--citekey`) is every digest artifact carrying either
+`status.extraction` or a cells block with no `status.extraction` — a
+depth-sourced row (see *Depth-sourced cells*, below). A depth-sourced row
+therefore renders automatically, the same as an extracted one; naming it
+explicitly with `--citekey` also works. `digest extract sample`'s own batch is
+narrower and unchanged (`status.extraction` only) — extraction's sampling
+regime never ran for a depth-sourced paper.
+
 A **merge, not a rewrite**, into the concept matrix. The author's taxonomy
 prose, PRISMA log, per-branch delta and section comments survive by
 construction — only the table's own lines are re-emitted. Rows are keyed by
@@ -470,6 +483,62 @@ A refused merge still prints its report, with the reason in `error` and
 `rendered: []` — the document is byte-identical, so no paper was merged, and
 the report must not name the ones this run *would* have written.
 
+### Depth-sourced cells — a matrix row without re-extracting (defendable-science#142)
+
+A depth digest already establishes the same kind of locatable claims the
+matrix axes ask for — problem, method, key result, assumptions, limitations —
+at a **higher** standard than extraction, because a human demonstrated
+understanding of them rather than an agent merely locating them. Re-extracting
+that paper to get it into the matrix would duplicate work and record it at
+extraction's *weaker* standard despite having met the stronger one. So a paper
+whose reading record is a depth digest can contribute a row directly:
+
+```
+defendable-science digest depth cells record --cells cells.json
+```
+
+Same shape as `digest extract record` — a JSON array of cells, the same `Cell`
+fields, the same mandatory locator (or `not-addressed` with a justification),
+validated through the exact same `extraction.validate` path (locator shape,
+every axis accounted for, no invented axis, `**This paper**` refused as a
+citekey). The cells land in the artifact's **same** delimited cells block
+`digest extract render` already reads, so a row appears with no change to the
+render side at all.
+
+**This never writes `status.extraction`.** That block describes extraction's
+own sampling regime (`in-sample` / `batch-check`) — a regime that never ran
+for a depth-read paper, and writing it here would be a false claim about that
+paper. Nor does it touch `triage.yml`'s `extracted` / `extraction-cells`
+fields, which describe the same regime. **The provenance signal is the
+*absence* of `status.extraction` on an artifact that nonetheless carries a
+cells block** — no new field, no marker in the matrix row itself. A cells
+block with `status.extraction` present is extraction-sourced (today's only
+case, unchanged); one with no `status.extraction` is depth-sourced. See
+ADR-0042 for the full reasoning, including why a marker in the rendered row
+was rejected.
+
+A row's provenance therefore lives on its **source artifact**, never on the
+row: a depth-sourced row does not weaken, and is not weakened by, an extracted
+row sitting beside it in the same matrix — they are read identically by
+`render`, and a reader who wants to know which standard produced a given row
+opens that paper's digest artifact and checks for `status.extraction`.
+
+**Requires an existing depth digest.** Unlike `extract record`, which may seed
+a fresh artifact for a paper nothing has touched, `digest depth cells record`
+refuses an artifact that does not already exist or does not yet carry
+`status.understanding` — there is nothing honest to seed if that certification
+never happened; run `digest` (depth mode) on the paper first. It also refuses
+an artifact that already carries `status.extraction`, in the other direction —
+use `digest extract record` to update those cells instead.
+
+**A depth digest with no cells recorded fails explicitly when asked for.**
+Rendering it by name (`--citekey`) reports the same "no extracted-cells
+block" refusal any unrecorded paper gets — never an empty or partial row, and
+never silently absorbed into a bulk render that then reports success. A
+cell-less depth digest is simply not part of `render`'s default batch (there
+is nothing to render for it), which is not a failure by itself; asking for it
+explicitly is what makes the absence a reportable one.
+
 ### The extraction artifact
 
 Same file depth mode uses, one per paper (for illustration: `docs/research/literature/digests/<citekey>.md`),
@@ -519,6 +588,28 @@ The file is the paper's reading record *at whatever depth it has been read*. A
 survey extracts forty papers; three later get digested properly and grow an
 `understanding` block and a written body. Nothing is migrated, and the two
 claims coexist visibly because they are genuinely different claims.
+
+Since defendable-science#142, one more shape is possible: a paper digested at
+depth first, whose reader then wants its claims in the matrix without
+re-extracting it. That artifact carries `understanding` and a written body,
+plus the same delimited cells block, but **no `extraction` key at all** —
+`digest depth cells record` writes the cells and nothing else (see
+*Depth-sourced cells*, above):
+
+```yaml
+---
+status:
+  understanding: {status: ok, unresolved: []}
+  last-updated: 2026-08-28
+---
+```
+
+The absence of `extraction` here, on an artifact that does carry a cells
+block, *is* the provenance record: it says "these cells came from a depth
+reading, not extraction's sampling regime" as plainly as the block's presence
+says the opposite for an extracted paper. Nothing new to check for a
+comprehension count, a sample verdict, or a batch check — those questions
+simply do not apply, and the absent key says so.
 
 ## Composition
 

@@ -2564,6 +2564,16 @@ extract = DocstringTyper(
     no_args_is_help=True,
 )
 digest.add_typer(extract, name="extract")
+depth = typer.Typer(
+    help="Depth mode's matrix-cell surface (defendable-science#142).",
+    no_args_is_help=True,
+)
+digest.add_typer(depth, name="depth")
+depth_cells = typer.Typer(
+    help="Matrix cells sourced from a paper's depth-mode reading, not extraction.",
+    no_args_is_help=True,
+)
+depth.add_typer(depth_cells, name="cells")
 
 _PaperOpt = Annotated[
     str | None,
@@ -2999,10 +3009,152 @@ def extract_record(
     )
 
 
+@depth_cells.command(name="record")
+def depth_cells_record(
+    cells: Annotated[
+        str,
+        typer.Option(
+            "--cells",
+            help="Depth-sourced cells: a JSON-array file path, or '-' for stdin.",
+        ),
+    ],
+    paper: _PaperOpt = None,
+    positioning: _PositioningOpt = None,
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Validate and record matrix cells for a paper read in depth mode (#142).
+
+    The same `Cell` shape, the same mandatory locator, and the same
+    `extraction.validate` path as ``digest extract record`` — a depth-sourced
+    cell is held to extraction's rules, not a weaker version of them. The
+    cells land in the artifact's **same** delimited cells block
+    ``digest extract render`` already reads, so a row lands with no change on
+    the render side.
+
+    **This never writes ``status.extraction``.** That block describes
+    extraction's own sampling regime (``in-sample`` / ``batch-check``), which
+    never ran for a depth-read paper, and writing it here would be a false
+    claim about this paper. The provenance signal is the *absence* of
+    ``status.extraction`` on an artifact that nonetheless carries a cells
+    block — see :func:`~defendable_science.digest.artifact.write_depth_cells`
+    and ADR-0042. This also never touches ``triage.yml``: its
+    ``extracted`` / ``extraction-cells`` fields describe extraction's regime
+    too, and this command runs a different one.
+
+    Requires the target artifact to already exist and carry
+    ``status.understanding`` — depth-sourced cells restate claims a depth
+    digest already certified, so there is nothing to seed if that
+    certification never happened; run `digest` (depth mode) on the paper
+    first. Refuses an artifact that already carries ``status.extraction``,
+    for the same reason in the other direction — use ``digest extract
+    record`` to update those cells instead.
+
+    :param cells: The cells to record — a JSON-array file path, or ``-`` for
+        stdin.
+    :param paper: The paper id whose concept matrix the cells are validated
+        against; inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted.
+    :raises typer.Exit: Code 0 when every paper was recorded; code 1 when
+        anything was rejected, a write failed, or the input, matrix or config
+        is unusable; code 2 if the paper cannot be resolved.
+    """
+    config, layout, path = _positioning_context(paper, positioning)
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
+    )
+    lit = _lit_block(config)
+    patterns = _locator_patterns(lit)
+    try:
+        axes = extraction_mod.axes_from_positioning(path)
+        raw = sys.stdin.read() if cells == "-" else Path(cells).read_text("utf-8")
+        parsed = _parse_cells(raw)
+    except (extraction_mod.ExtractionError, OSError) as exc:
+        typer.echo(f"digest depth cells record failed: {exc}", err=True)
+        _emit_record_report(path, axes=None, error=str(exc))
+
+    accepted, rejections = extraction_mod.validate(parsed, axes, patterns)
+    date = date_cls.today().isoformat()
+    recorded: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for citekey, paper_cells in sorted(accepted.items()):
+        artifact = layout.digest(citekey)
+        try:
+            log_entry = artifact_mod.write_depth_cells(
+                artifact, paper_cells, log_dir=log_root, date=date
+            )
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            # The sweep continues, same posture as `extract record`: a batch
+            # of several depth-read papers must not be strangled by one bad
+            # artifact, and re-running to find out which one would append a
+            # second log entry for every paper that already landed.
+            typer.echo(
+                f"digest depth cells record failed for {citekey}: {exc}", err=True
+            )
+            errors.append(
+                {"citekey": citekey, "artifact": str(artifact), "reason": str(exc)}
+            )
+            continue
+        recorded.append(
+            {
+                "citekey": citekey,
+                "artifact": str(artifact),
+                "cells": len(paper_cells),
+                "not_addressed": sum(
+                    1 for c in paper_cells if c.value == extraction_mod.NOT_ADDRESSED
+                ),
+                "log_entry": str(log_entry),
+            }
+        )
+
+    for rejection in rejections:
+        typer.echo(extraction_mod.render_rejection(rejection), err=True)
+    _emit_record_report(
+        path, axes=axes, recorded=recorded, rejected=rejections, errors=errors
+    )
+
+
 #: The verdicts a human may record on a sampled check. Deliberately not
 #: ``pending``: that is the state an extraction *starts* in, and letting this
 #: command write it would give the batch a way to quietly un-fail itself.
 _SAMPLE_VERDICTS = ("verified", "failed")
+
+
+def _digest_batch(
+    layout: Layout, command: str, member: Callable[[Path], bool]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Collect every digest artifact under the layout for which `member` holds.
+
+    Shared by `_extraction_batch` and `_render_batch`, which differ only in
+    what makes an artifact a member — everything about walking the digests
+    directory and reporting an unreadable one is otherwise identical.
+
+    :param layout: The resolved layout, which owns the digests directory.
+    :param command: The calling command, for the diagnostic — a reader must not
+        be told ``sample`` failed when they ran ``render``.
+    :param member: Whether one artifact belongs in the batch.
+    :returns: The batch's citekeys, and one error entry per unreadable artifact.
+    """
+    members: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path in sorted(layout.digests_dir.glob("*.md")):
+        try:
+            if member(path):
+                members.append(path.stem)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"{command} failed for {path.stem}: {exc}", err=True)
+            errors.append(
+                {"citekey": path.stem, "artifact": str(path), "reason": str(exc)}
+            )
+    return members, errors
 
 
 def _extraction_batch(
@@ -3016,23 +3168,38 @@ def _extraction_batch(
     reported instead of skipped: excluding it silently would let a corrupt file
     shrink the population the sample is drawn from.
 
+    Used by ``digest extract sample`` only. ``digest extract render`` uses
+    `_render_batch` instead — a depth-sourced cells block never carries
+    ``status.extraction``, and extraction's sampling regime never ran for it,
+    so the two commands deliberately see different populations
+    (defendable-science#142).
+
     :param layout: The resolved layout, which owns the digests directory.
     :param command: The calling command, for the diagnostic — a reader must not
         be told ``sample`` failed when they ran ``render``.
     :returns: The batch's citekeys, and one error entry per unreadable artifact.
     """
-    members: list[str] = []
-    errors: list[dict[str, str]] = []
-    for path in sorted(layout.digests_dir.glob("*.md")):
-        try:
-            if artifact_mod.has_extraction(path):
-                members.append(path.stem)
-        except (extraction_mod.ExtractionError, OSError) as exc:
-            typer.echo(f"{command} failed for {path.stem}: {exc}", err=True)
-            errors.append(
-                {"citekey": path.stem, "artifact": str(path), "reason": str(exc)}
-            )
-    return members, errors
+    return _digest_batch(layout, command, artifact_mod.has_extraction)
+
+
+def _render_batch(
+    layout: Layout, command: str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Collect every digest artifact ``digest extract render``'s default batch covers.
+
+    Wider than `_extraction_batch`: a member is any artifact carrying
+    ``status.extraction`` (today's extraction-sourced case) **or** a cells
+    block with no ``status.extraction`` (a depth-sourced row,
+    defendable-science#142). Using `_extraction_batch` here would silently
+    exclude every depth-sourced row from a default (no ``--citekey``) render
+    while the run still reported ``ok: true`` — exactly the silent-skip
+    failure #142's acceptance criteria forbid.
+
+    :param layout: The resolved layout, which owns the digests directory.
+    :param command: The calling command, for the diagnostic.
+    :returns: The batch's citekeys, and one error entry per unreadable artifact.
+    """
+    return _digest_batch(layout, command, artifact_mod.has_extraction_or_cells)
 
 
 def _note_error(
@@ -3425,18 +3592,26 @@ def extract_render(
         list[str] | None,
         typer.Option(
             "--citekey",
-            help="Render only these papers; repeatable. Every extracted paper "
-            "by default.",
+            help="Render only these papers; repeatable. Every paper with "
+            "recorded matrix cells by default.",
         ),
     ] = None,
     paper: _PaperOpt = None,
     positioning: _PositioningOpt = None,
 ) -> None:
-    """Merge the extracted cells into ``positioning.md``'s concept matrix (§9).
+    """Merge recorded cells into ``positioning.md``'s concept matrix (§9).
 
     A merge, not a rewrite. The author's taxonomy prose, PRISMA log, per-branch
     delta and section comments survive by construction, because only the
     matrix table's own lines are re-emitted.
+
+    Merges cells recorded either way — ``digest extract record``
+    (extraction-sourced) or ``digest depth cells record`` (depth-sourced,
+    defendable-science#142) — since both write into the same delimited cells
+    block this command reads. Neither weakens nor is weakened by the other:
+    a row's provenance lives on its source artifact (``status.extraction``
+    present or absent), never on the row itself, and this command does not
+    distinguish them when merging.
 
     **Nothing is ever deleted.** A row in the file that this run has no cells
     for is left exactly as it is, and a paper leaving the survey is removed by
@@ -3456,7 +3631,9 @@ def extract_render(
     file is left byte-identical rather than written at a guess.
 
     :param citekey: A paper to render; repeatable. Defaults to every digest
-        artifact carrying a ``status.extraction`` block.
+        artifact carrying recorded matrix cells — extraction-sourced
+        (``status.extraction``) or depth-sourced (a cells block with no
+        ``status.extraction``).
     :param paper: The paper id whose positioning document holds the matrix;
         inferred from the cwd when omitted.
     :param positioning: An explicit positioning document, overriding the layout.
@@ -3475,27 +3652,30 @@ def extract_render(
     if citekey:
         batch = sorted(set(citekey))
     else:
-        batch, errors = _extraction_batch(layout, "digest extract render")
+        batch, errors = _render_batch(layout, "digest extract render")
     if not batch and errors:
         # An empty batch that is empty *because nothing could be read* is not
-        # an empty batch — whether anything was extracted is unknown, and
+        # an empty batch — whether anything has recorded cells is unknown, and
         # "run `digest extract record`" would be the wrong repair. The headline
         # sentence has to say which of the two happened, not just the errors
         # underneath it.
         error = (
             f"digest extract render failed: {len(errors)} artifact(s) under "
             f"{layout.digests_dir} could not be read and none could be loaded, "
-            "so whether any paper has been extracted is unknown; nothing was "
-            f"rendered and {path} was not touched — repair them and re-run"
+            "so whether any paper has recorded matrix cells is unknown; "
+            f"nothing was rendered and {path} was not touched — repair them "
+            "and re-run"
         )
         typer.echo(error, err=True)
     elif not batch:
-        # Not "rendered zero rows": no paper was extracted, and the matrix is
-        # left alone rather than rewritten to say so.
+        # Not "rendered zero rows": no paper has recorded cells, and the
+        # matrix is left alone rather than rewritten to say so.
         error = (
-            f"digest extract render failed: no extracted papers under "
-            f"{layout.digests_dir} — nothing was rendered and {path} was not "
-            "touched; run `digest extract record` first"
+            f"digest extract render failed: no papers with recorded matrix "
+            f"cells under {layout.digests_dir} — nothing was rendered and "
+            f"{path} was not touched; run `digest extract record` "
+            "(extraction mode) or `digest depth cells record` (depth mode) "
+            "first"
         )
         typer.echo(error, err=True)
     rows = _cells_to_render(layout, batch, errors)
