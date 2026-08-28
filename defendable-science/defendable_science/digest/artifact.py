@@ -89,7 +89,11 @@ class ExtractionStatus:
         :func:`~.extraction.validate`, which the ``digest extract record``
         command fuses to this writer (spec §3.3), so a cell recorded through
         any public surface has been shape-checked too.
-    :param in_sample: Whether **this** paper was drawn into the checked sample.
+    :param in_sample: Whether a human checked **this** paper's cells against its
+        sources. Not "was nominated for checking": a draw that is never followed
+        by a verdict has established nothing, so only ``digest extract sample
+        --verdict`` ever sets it true (see :func:`set_in_sample`). Written
+        ``False`` at record time, when no sample has been drawn yet.
     :param batch_check: The verdict on the *batch* this paper was extracted in
         — one of `BATCH_CHECK_VERDICTS`. Separate from `in_sample` because they
         answer different questions: a single field would have to read ``failed``
@@ -457,7 +461,10 @@ def write_extraction(
     :param artifact: The per-paper digest artifact to write.
     :param cells: This paper's validated cells; must be non-empty and all about
         the same paper.
-    :param in_sample: Whether this paper was drawn into the checked sample.
+    :param in_sample: Whether a human has checked this paper's cells against its
+        sources — ``False`` from ``digest extract record``, which runs before
+        any sample is drawn. Re-extracting a paper resets it, so the flag can
+        never outlive the cells it certified.
     :param batch_check: The batch's verdict, from `BATCH_CHECK_VERDICTS`.
     :param log_dir: The accountability-log directory (`DEFAULT_LOG_DIR`).
     :param date: ISO date, for ``status.last-updated`` and the log entry.

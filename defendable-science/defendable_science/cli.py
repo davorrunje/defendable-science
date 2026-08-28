@@ -2583,6 +2583,57 @@ def _apply_verdict(
     return updated, log_entries
 
 
+def _emit_sample_report(
+    *,
+    members: list[str],
+    verdict: str | None,
+    errors: list[dict[str, str]],
+    sample: list[str] | None = None,
+    sampled: list[dict[str, Any]] | None = None,
+    not_shown: list[str] | None = None,
+    updated: list[str] | None = None,
+    log_entries: list[str] | None = None,
+) -> None:
+    """Print the run's JSON report and exit.
+
+    ``size`` counts the papers *drawn*; ``sampled`` lists the ones whose cells
+    could actually be shown to the human. They differ exactly when a drawn
+    artifact could not be read, and ``not_shown`` names those papers rather than
+    leaving a reader to diff two lists — the report must not imply the run
+    established more than it did.
+
+    :param members: The batch.
+    :param verdict: The verdict recorded, if any.
+    :param errors: Everything that failed.
+    :param sample: The drawn citekeys.
+    :param sampled: The drawn papers whose cells were read, with those cells.
+    :param not_shown: Drawn papers whose cells could not be read.
+    :param updated: Members whose ``batch-check`` was written.
+    :param log_entries: Check-log entries written.
+    :raises typer.Exit: Code 0 when the batch is non-empty and nothing failed;
+        code 1 otherwise.
+    """
+    ok = bool(members) and not errors
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "batch": members,
+                "size": len(sample or []),
+                "sample": sample or [],
+                "verdict": verdict,
+                "sampled": sampled or [],
+                "not_shown": not_shown or [],
+                "updated": updated or [],
+                "log_entries": log_entries or [],
+                "errors": errors,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
+
+
 @extract.command(name="sample")
 def extract_sample(
     citekey: Annotated[
@@ -2630,6 +2681,13 @@ def extract_sample(
     why the draw itself writes nothing: an unanswered draw has established
     nothing about any paper.
 
+    ``verified`` is refused outright — nothing written, exit 1 — if any drawn
+    paper's cells could not be read, because the human cannot have verified what
+    they were never shown. ``failed`` is a finding rather than a claim, so it
+    lands regardless. On ``--all``, an artifact that cannot be read stops the run
+    before the draw: membership is unknowable, and since the draw is a function
+    of membership, sampling around it would change which papers get checked.
+
     The verdict call re-draws over the batch it is given, so **give it the same
     batch and the same ``--size``**. Both are deterministic, so identical
     arguments mark exactly the papers the draw reported; a different membership
@@ -2651,8 +2709,8 @@ def extract_sample(
         the run's evidence lands where a reviewer looks for it.
     :raises typer.Exit: Code 0 when the sample was drawn (and, with
         ``--verdict``, recorded on every member); code 1 when the batch is
-        empty or any member could not be read or updated; code 2 on a usage
-        error.
+        empty or unknowable, when any member could not be read or updated, or
+        when a ``verified`` verdict was refused; code 2 on a usage error.
     """
     if bool(citekey) == all_papers:
         raise typer.BadParameter(
@@ -2678,6 +2736,23 @@ def extract_sample(
         else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
     )
 
+    if all_papers and errors:
+        # Before drawing, and before writing anything. The draw is a
+        # deterministic function of the membership set, so sampling around an
+        # unreadable artifact would change *which* papers get checked — making
+        # a file unreadable would become a way to re-roll the sample, in the one
+        # feature built to prevent that. And a verdict recorded here would be a
+        # statement about a population the run has just admitted it cannot
+        # determine.
+        typer.echo(
+            f"digest extract sample failed: {len(errors)} artifact(s) under "
+            f"{layout.digests_dir} could not be read, so the batch cannot be "
+            "determined; nothing was drawn and nothing was written — repair "
+            "them, or name the batch explicitly with --citekey",
+            err=True,
+        )
+        _emit_sample_report(members=[], verdict=verdict, errors=errors)
+
     sample: list[str] = []
     if members:
         sample = sampling_mod.select_sample(
@@ -2694,10 +2769,24 @@ def extract_sample(
             err=True,
         )
     drawn_cells, sampled = _read_sampled_cells(layout, sample, errors)
+    not_shown = [key for key in sample if key not in drawn_cells]
 
     updated: list[str] = []
     log_entries: list[str] = []
-    if verdict is not None:
+    if verdict == "verified" and not_shown:
+        # `failed` is a finding and lands regardless; `verified` is a *claim*,
+        # and the check it claims did not happen for these papers. Exit 1 alone
+        # would not do: the exit code is transient, and the artifact is what
+        # every downstream reader consults.
+        typer.echo(
+            "digest extract sample: refusing to record a verified batch — "
+            f"{len(not_shown)} of the {len(sample)} drawn papers "
+            f"({', '.join(not_shown)}) could not be shown to the human, so the "
+            "verification the verdict claims did not happen; repair them and "
+            "re-run, or record `failed`",
+            err=True,
+        )
+    elif verdict is not None:
         updated, log_entries = _apply_verdict(
             layout,
             members,
@@ -2707,24 +2796,16 @@ def extract_sample(
             errors=errors,
         )
 
-    ok = bool(members) and not errors
-    typer.echo(
-        json.dumps(
-            {
-                "ok": ok,
-                "batch": members,
-                "size": len(sample),
-                "sample": sample,
-                "verdict": verdict,
-                "sampled": sampled,
-                "updated": updated,
-                "log_entries": log_entries,
-                "errors": errors,
-            },
-            indent=2,
-        )
+    _emit_sample_report(
+        members=members,
+        sample=sample,
+        verdict=verdict,
+        sampled=sampled,
+        not_shown=not_shown,
+        updated=updated,
+        log_entries=log_entries,
+        errors=errors,
     )
-    raise typer.Exit(code=0 if ok else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover
