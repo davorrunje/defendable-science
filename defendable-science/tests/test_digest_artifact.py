@@ -552,3 +552,143 @@ def test_set_batch_check_reports_an_artifact_without_frontmatter(
     target.write_text("# just prose\n", encoding="utf-8")
     with pytest.raises(ex.ExtractionError, match="no YAML frontmatter"):
         art.set_batch_check(target, "verified")
+
+
+# --- a hand-written block-style status.extraction (spec §5's own shape) --------
+
+#: Spec §5's example, literally: a human following the documented shape writes
+#: `extraction` as an indented block mapping, not as a flow mapping.
+SPEC_BLOCK_ARTIFACT = """---
+status:
+  understanding: {status: pending, unresolved: []}    # depth mode; untouched
+  extraction:
+    cells: 8
+    locators: ok
+    in-sample: false
+    batch-check: pending
+  last-updated: 2026-08-28
+---
+
+Prose.
+"""
+
+
+def test_writing_over_a_block_style_extraction_leaves_parseable_frontmatter(
+    tmp_path: Path,
+) -> None:
+    """The whole block mapping is the key's value, so the whole block goes.
+
+    Replacing only the `extraction:` line orphaned its children and produced a
+    frontmatter no parser would read — while reporting a completed write.
+    """
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(SPEC_BLOCK_ARTIFACT, encoding="utf-8")
+    _write(target, tmp_path / "log")
+
+    assert _status(target)["extraction"] == {
+        "cells": 2,
+        "locators": "ok",
+        "in-sample": False,
+        "batch-check": "pending",
+    }
+    assert _status(target)["understanding"] == {"status": "pending", "unresolved": []}
+    assert "Prose." in target.read_text(encoding="utf-8").splitlines()
+    assert art.read_cells(target) == _cells()
+
+
+def test_set_batch_check_over_a_block_style_extraction_keeps_its_other_keys(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(SPEC_BLOCK_ARTIFACT, encoding="utf-8")
+    art.set_batch_check(target, "failed")
+
+    assert _status(target)["extraction"] == {
+        "cells": 8,
+        "locators": "ok",
+        "in-sample": False,
+        "batch-check": "failed",
+    }
+    assert str(_status(target)["last-updated"]) == "2026-08-28"
+
+
+def test_a_block_style_value_does_not_swallow_the_keys_after_it(
+    tmp_path: Path,
+) -> None:
+    """Only the nested lines are the value; `last-updated` is a sibling."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(SPEC_BLOCK_ARTIFACT, encoding="utf-8")
+    _write(target, tmp_path / "log")
+
+    assert set(_status(target)) == {"understanding", "extraction", "last-updated"}
+
+
+def test_a_blank_line_inside_the_block_does_not_orphan_its_tail(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  extraction:\n    cells: 8\n\n    locators: ok\n"
+        "  last-updated: 2026-08-01\n---\n",
+        encoding="utf-8",
+    )
+    _write(target, tmp_path / "log")
+
+    assert _status(target)["extraction"]["cells"] == 2
+    assert set(_status(target)) == {"extraction", "last-updated"}
+
+
+def test_a_blank_line_after_the_block_survives(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  extraction:\n    cells: 8\n\ntitle: x\n---\n",
+        encoding="utf-8",
+    )
+    _write(target, tmp_path / "log")
+
+    fm, _ = split_frontmatter(target.read_text(encoding="utf-8"))
+    assert "" in fm
+    assert "title: x" in fm
+
+
+def test_a_comment_inside_the_replaced_block_is_refused_not_destroyed(
+    tmp_path: Path,
+) -> None:
+    """`patch_triage`'s posture: refuse what cannot be round-tripped."""
+    target = tmp_path / f"{CITEKEY}.md"
+    original = (
+        "---\nstatus:\n  extraction:\n    cells: 8  # counted by hand\n"
+        "    batch-check: pending\n---\n"
+    )
+    target.write_text(original, encoding="utf-8")
+    with pytest.raises(ex.ExtractionError, match="carrying a comment"):
+        _write(target, tmp_path / "log")
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_a_comment_on_the_extraction_line_itself_is_preserved(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  extraction:  # hand-seeded\n    cells: 8\n---\n",
+        encoding="utf-8",
+    )
+    _write(target, tmp_path / "log")
+
+    fm, _ = split_frontmatter(target.read_text(encoding="utf-8"))
+    assert any(ln.endswith("# hand-seeded") for ln in fm)
+    assert _status(target)["extraction"]["cells"] == 2
+
+
+def test_set_batch_check_reports_a_block_value_json_cannot_rewrite(
+    tmp_path: Path,
+) -> None:
+    """An unquoted date under `extraction` decodes to `datetime.date`."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  extraction:\n    cells: 8\n    checked-on: 2026-08-28\n---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ex.ExtractionError, match="cannot be rewritten"):
+        art.set_batch_check(target, "failed")

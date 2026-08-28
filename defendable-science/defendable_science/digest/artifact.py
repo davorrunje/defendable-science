@@ -80,9 +80,13 @@ class ExtractionStatus:
     """The ``status.extraction`` block written into a paper's artifact.
 
     :param cells: How many cells were recorded for this paper.
-    :param locators: Whether every value-bearing cell carries a locator.
-        Only ever ``ok``: :func:`write_extraction` refuses to write anything
-        else rather than record a claim it cannot make (spec §3.3).
+    :param locators: Whether every value-bearing cell carries a **non-empty**
+        locator. Only ever ``ok``: :func:`write_extraction` refuses to write a
+        cell without one, so there is no other value it could hold. It is not
+        a claim about locator *shape* — that check belongs to
+        :func:`~.extraction.validate`, which the ``digest extract record``
+        command fuses to this writer (spec §3.3), so a cell recorded through
+        any public surface has been shape-checked too.
     :param in_sample: Whether **this** paper was drawn into the checked sample.
     :param batch_check: The verdict on the *batch* this paper was extracted in
         — one of `BATCH_CHECK_VERDICTS`. Separate from `in_sample` because they
@@ -303,6 +307,26 @@ def _extraction_mapping(fm_lines: list[str], path: Path) -> dict[str, Any]:
     return block
 
 
+def _dump_block(block: dict[str, Any], path: Path) -> str:
+    """Re-render a parsed ``status.extraction`` mapping as one YAML flow line.
+
+    The mapping came back from the YAML parser, so it can hold a type JSON
+    cannot render — an unquoted ISO date decodes to `datetime.date`, and
+    ``json.dumps`` raises `TypeError` on it. Left unguarded that is a raw
+    traceback out of a file a human edits, so it is reported as what it is.
+
+    :raises ExtractionError: If the block holds a value JSON cannot render.
+    """
+    try:
+        return json.dumps(block)
+    except TypeError as exc:
+        raise ExtractionError(
+            f"{path}: 'status.extraction' holds a value that cannot be "
+            f"rewritten ({exc}); this block is written by `digest extract "
+            "record` — remove the hand-added key, or quote its value"
+        ) from exc
+
+
 def _check_verdict(verdict: str) -> None:
     """Refuse a verdict outside `BATCH_CHECK_VERDICTS`."""
     if verdict not in BATCH_CHECK_VERDICTS:
@@ -454,7 +478,7 @@ def set_batch_check(
         fm_lines, body = split_frontmatter(path.read_text(encoding="utf-8"))
         block = _extraction_mapping(fm_lines, path)
         block["batch-check"] = verdict
-        fm_lines = set_field(fm_lines, EXTRACTION_KEY, json.dumps(block))
+        fm_lines = set_field(fm_lines, EXTRACTION_KEY, _dump_block(block, path))
         if date is not None:
             fm_lines = set_field(fm_lines, "last-updated", date)
     except FrontmatterError as exc:
