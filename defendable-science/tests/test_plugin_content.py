@@ -95,7 +95,7 @@ path = "docs/research/hypothesis.md"
         # The fenced paths should NOT be in the offenders
         # Verify they're not reported as offenders
         offender_lines = [n for n, _ in prose_offenders]
-        assert 7 not in offender_lines
-        assert 18 not in offender_lines
+        assert 6 not in offender_lines  # line 6 is inside fence (lines 5-8)
+        assert 14 not in offender_lines  # line 14 is inside fence (lines 12-15)
     finally:
         test_skill.unlink(missing_ok=True)
