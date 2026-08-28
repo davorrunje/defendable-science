@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from defendable_science.check.model import Finding
+from defendable_science.check.model import Finding, Report
 from defendable_science.core.config import load_config_text
 from defendable_science.dataset import manifest as mf
 from defendable_science.exploration.backlog import (
@@ -1274,3 +1274,31 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
         )
 
     return findings
+
+
+# --- run_checks: compose all six families ------------------------------------
+
+
+def run_checks(layout: Layout, probe: Probe) -> Report:
+    """Compose all six check families into a single report.
+
+    Runs checks in order: layout, tables, frontmatter, registries, config,
+    cross-artifact. The order ensures that each family's findings are grouped
+    together, and any unreadable files are reported consistently across all
+    families.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: The composed report with findings from all six families.
+    """
+    findings: list[Finding] = []
+
+    # Run in fixed order: layout, tables, frontmatter, registries, config, cross-artifact
+    findings.extend(check_layout(layout, probe))
+    findings.extend(check_tables(layout, probe))
+    findings.extend(check_frontmatter(layout, probe))
+    findings.extend(check_registries(layout, probe))
+    findings.extend(check_config(layout, probe))
+    findings.extend(check_cross_artifact(layout, probe))
+
+    return Report(findings=findings)

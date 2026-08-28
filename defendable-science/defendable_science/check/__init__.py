@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from defendable_science.check.checks import run_checks
 from defendable_science.check.model import (
     FAILING,
     SEVERITIES,
@@ -19,4 +20,5 @@ __all__ = [
     "Probe",
     "Report",
     "Severity",
+    "run_checks",
 ]

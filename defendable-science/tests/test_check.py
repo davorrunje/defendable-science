@@ -663,6 +663,31 @@ def test_frontmatter_check_accepts_a_freshly_rendered_document() -> None:
     assert findings == []
 
 
+def test_frontmatter_check_produces_one_finding_per_defect_across_fields() -> None:
+    """A placeholder in one field must not suppress defects in another.
+
+    A document with `readiness: <synthesis | defensible>` and `verdict: maybe`
+    should produce exactly two findings: one for the placeholder, one for the
+    invalid verdict. The placeholder suppresses enum checking on that field, but
+    not on other fields.
+    """
+    files = _scaffolded()
+    files[PITCH] = (
+        "---\nstatus:\n  level: paper\n  id: dc\n"
+        "  readiness: <synthesis | defensible>\n  verdict: maybe\n---\n\n# Pitch\n"
+    )
+
+    findings = c.check_frontmatter(LAYOUT, FakeProbe(files))
+
+    # Exactly two findings: placeholder in readiness and invalid verdict
+    assert len(findings) == 2
+    severities = {f.severity for f in findings}
+    assert severities == {"invalid"}
+    messages = {f.message for f in findings}
+    assert any("placeholder" in msg and "readiness" in msg for msg in messages)
+    assert any("verdict" in msg and "maybe" in msg for msg in messages)
+
+
 def test_staged_documents_globs_research_root() -> None:
     """staged_documents finds all markdown files in research_root with STAGED_DOCUMENTS names."""
     files = _scaffolded()
