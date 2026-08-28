@@ -79,7 +79,8 @@ def test_fetch_and_verify_tier_a(
     monkeypatch.chdir(_tier_a_project(tmp_path))
     fetch = runner.invoke(app, ["dataset", "fetch", "ds-a"])
     assert fetch.exit_code == 0
-    assert json.loads(fetch.stdout) == ["data/f.bin"]
+    # Fetch returns the absolute path to the Tier-A file
+    assert json.loads(fetch.stdout) == [str(tmp_path / "data/f.bin")]
     verify = runner.invoke(app, ["dataset", "verify", "ds-a"])
     assert verify.exit_code == 0
     assert json.loads(verify.stdout)["ok"] is True
@@ -104,17 +105,21 @@ def test_fetch_verify_audit_use_configured_cache_dir(
     original_verify = retrieval_mod.verify
     original_audit = retrieval_mod.audit
 
-    def _fetch_spy(entry, *, cache_dir, mirror=None, **kw):  # type: ignore[no-untyped-def]
+    def _fetch_spy(entry, *, cache_dir, mirror=None, repo_root=None, **kw):  # type: ignore[no-untyped-def]
         seen.append(Path(cache_dir))
-        return original_fetch(entry, cache_dir=cache_dir, mirror=mirror, **kw)
+        return original_fetch(
+            entry, cache_dir=cache_dir, mirror=mirror, repo_root=repo_root, **kw
+        )
 
-    def _verify_spy(entry, *, cache_dir):  # type: ignore[no-untyped-def]
+    def _verify_spy(entry, *, cache_dir, repo_root=None):  # type: ignore[no-untyped-def]
         seen.append(Path(cache_dir))
-        return original_verify(entry, cache_dir=cache_dir)
+        return original_verify(entry, cache_dir=cache_dir, repo_root=repo_root)
 
-    def _audit_spy(manifest, *, cache_dir, mirror=None):  # type: ignore[no-untyped-def]
+    def _audit_spy(manifest, *, cache_dir, mirror=None, repo_root=None):  # type: ignore[no-untyped-def]
         seen.append(Path(cache_dir))
-        return original_audit(manifest, cache_dir=cache_dir, mirror=mirror)
+        return original_audit(
+            manifest, cache_dir=cache_dir, mirror=mirror, repo_root=repo_root
+        )
 
     monkeypatch.setattr(retrieval_mod, "fetch", _fetch_spy)
     monkeypatch.setattr(retrieval_mod, "verify", _verify_spy)

@@ -72,6 +72,7 @@ def _resolve_file(
     cache_dir: Path,
     mirror: Mirror | None,
     tier_b_fetch: TierBFetcher,
+    repo_root: Path,
 ) -> Path:
     """Resolve one file through the chain, verifying at every hop.
 
@@ -81,12 +82,21 @@ def _resolve_file(
     mirror never got to answer, and for Tier C would tell a human to acquire by
     hand bytes that may be sitting behind an expired credential.
 
+    :param entry: The dataset entry whose file to resolve.
+    :param ref: The file reference to resolve.
+    :param cache_dir: The content-addressed cache directory.
+    :param mirror: Optional private mirror (populated on first acquisition).
+    :param tier_b_fetch: The Tier-B fetcher (injectable; defaults to pooch).
+    :param repo_root: The repository root directory, used to anchor Tier-A paths.
     :raises RetrievalError: If the chain is exhausted without verified bytes.
     :raises MirrorUnreachableError: If a configured mirror could not be reached.
     """
     # Tier A: the file is committed in-repo at its path; verify in place.
     if entry.tier == "A":
         repo_path = Path(ref.path)
+        # Anchor relative paths to the repo root; keep absolute paths unchanged.
+        if not repo_path.is_absolute():
+            repo_path = repo_root / repo_path
         if verified(repo_path, ref.sha256):
             return repo_path
         raise RetrievalError(f"{entry.id}: Tier-A file {ref.path} missing or corrupt")
@@ -130,6 +140,7 @@ def fetch(
     cache_dir: str | Path,
     mirror: Mirror | None = None,
     tier_b_fetch: TierBFetcher = _pooch_fetch,
+    repo_root: str | Path | None = None,
 ) -> list[Path]:
     """Materialize every file of `entry` through the resolution chain.
 
@@ -137,13 +148,21 @@ def fetch(
     :param cache_dir: The content-addressed cache directory.
     :param mirror: Optional private mirror (populated on first acquisition).
     :param tier_b_fetch: The Tier-B fetcher (injectable; defaults to pooch).
+    :param repo_root: The repository root directory, used to anchor Tier-A paths.
+        Defaults to the current working directory.
     :returns: The verified on-disk paths, one per file.
     :raises RetrievalError: If any file cannot be resolved and verified.
     """
     cache = Path(cache_dir)
+    root = Path(repo_root) if repo_root is not None else Path.cwd()
     return [
         _resolve_file(
-            entry, ref, cache_dir=cache, mirror=mirror, tier_b_fetch=tier_b_fetch
+            entry,
+            ref,
+            cache_dir=cache,
+            mirror=mirror,
+            tier_b_fetch=tier_b_fetch,
+            repo_root=root,
         )
         for ref in entry.files
     ]
@@ -170,7 +189,12 @@ class VerifyReport:
         return not self.missing and not self.corrupt
 
 
-def verify(entry: DatasetEntry, *, cache_dir: str | Path) -> VerifyReport:
+def verify(
+    entry: DatasetEntry,
+    *,
+    cache_dir: str | Path,
+    repo_root: str | Path | None = None,
+) -> VerifyReport:
     """Re-hash an entry's on-disk files against the manifest, offline.
 
     Never downloads. Tier-A files are checked at their repo path; Tier-B/C files
@@ -178,14 +202,23 @@ def verify(entry: DatasetEntry, *, cache_dir: str | Path) -> VerifyReport:
 
     :param entry: The dataset entry to verify.
     :param cache_dir: The content-addressed cache directory.
+    :param repo_root: The repository root directory, used to anchor Tier-A paths.
+        Defaults to the current working directory.
     :returns: A per-file verification report. A present-but-unreadable file
         (``OSError`` while hashing) is folded into ``corrupt`` rather than
         crashing the offline report.
     """
     cache = Path(cache_dir)
+    root = Path(repo_root) if repo_root is not None else Path.cwd()
     report = VerifyReport(entry_id=entry.id)
     for ref in entry.files:
-        path = Path(ref.path) if entry.tier == "A" else blob_path(cache, ref.sha256)
+        if entry.tier == "A":
+            path = Path(ref.path)
+            # Anchor relative paths to the repo root; keep absolute paths unchanged.
+            if not path.is_absolute():
+                path = root / path
+        else:
+            path = blob_path(cache, ref.sha256)
         if not path.is_file():
             report.missing.append(ref.path)
             continue
@@ -223,7 +256,11 @@ class AuditReport:
 
 
 def audit(
-    manifest: Manifest, *, cache_dir: str | Path, mirror: Mirror | None = None
+    manifest: Manifest,
+    *,
+    cache_dir: str | Path,
+    mirror: Mirror | None = None,
+    repo_root: str | Path | None = None,
 ) -> AuditReport:
     """Audit fixity + mirror presence + manifest completeness across a manifest.
 
@@ -239,11 +276,13 @@ def audit(
     :param manifest: The parsed manifest.
     :param cache_dir: The content-addressed cache directory.
     :param mirror: Optional mirror to probe for presence.
+    :param repo_root: The repository root directory, used to anchor Tier-A paths.
+        Defaults to the current working directory.
     :returns: The combined audit report.
     """
     report = AuditReport(validation=manifest_mod.validate(manifest))
     for entry in manifest.datasets:
-        report.fixity.append(verify(entry, cache_dir=cache_dir))
+        report.fixity.append(verify(entry, cache_dir=cache_dir, repo_root=repo_root))
         if mirror is not None:
             report.mirror_present[entry.id] = _mirror_presence(mirror, entry)
     return report
