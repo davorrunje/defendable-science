@@ -120,10 +120,26 @@ holds no gate list is reported *unknown*, never as an empty set of gates.
   completion bar.** Rejected under §3.6, which is a design invariant rather than
   a missing feature. Named gaps carry the same information and cannot be gamed
   into a target.
-- **Deriving the authoritative document from stage order.** It works for
-  hypotheses (`findings.md` last) and papers (`decision.md` last) and fails for
-  a thesis, which is adjudicated by `aims.md` *before* `kappa.md`. The mapping is
-  written once, in `scaffold.layout.AUTHORITATIVE_DOCUMENTS`.
+- **Deriving the authoritative document from stage order.** It happens to give
+  the right answer for all three levels today (`findings.md`, `decision.md`,
+  `kappa.md` are each last), which is exactly why it is not relied on: which
+  document adjudicates is a fact about the methodology, not about a position in
+  a list, and a staged document appended to a level must not silently become its
+  verdict source. The mapping is written once, in
+  `scaffold.layout.AUTHORITATIVE_DOCUMENTS`, and guarded against the shipped
+  templates.
+
+  An earlier revision of this ADR recorded the thesis's adjudicating document as
+  `aims.md`, following a stale line in `progress/SKILL.md`'s "Where the status
+  block lives" table. That was wrong, and the templates — which are what an
+  author actually fills in — always said so: `thesis/kappa.md` marks
+  `signed-off-by` *"REQUIRED for defensibility"*, and `thesis/aims.md` says *"the
+  defensibility sign-off lives in kappa.md, not here"*. The consequence was a
+  thesis whose kappa was signed and dated rendering as `framing`, with the
+  kappa's blockers dropped. Corrected: **`kappa.md` adjudicates**, falling back
+  to `aims.md` when no kappa exists yet, and `aims.md` keeps owning the aim list
+  that `covers:` is matched against. `SKILL.md`'s table was corrected to match
+  the templates rather than the reverse.
 - **Discovering papers from the `papers.md` registry.** It would give the
   hypothesis → paper chain for free, but a paper on disk yet unregistered would
   be invisible, and an unreadable registry would yield a confidently empty

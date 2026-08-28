@@ -115,7 +115,13 @@ own lighter `understanding` + `last-updated` (written by `defend`), which progre
 |---|---|---|
 | hypothesis | `…/hypotheses/<slug>/findings.md` | `verdict` (confirmed/refuted/inconclusive), `readiness`, `evidence`, sign-off. Before `findings.md` exists, readiness is `pending`, inferred from the furthest completed stage. |
 | paper | `…/<paper>/paper/decision.md` | `verdict: publish\|no-go`, `readiness` (drafting/under-review/published), sign-off. |
-| thesis | thesis aims file (for illustration: `docs/research/thesis/aims.md`) | `readiness: framing\|synthesis\|defensible`, the defensibility sign-off, and the machine-readable **aim list** that `paper → thesis` roll-up matches against each paper's `covers:`. Milestones stay in the thesis milestones file. |
+| thesis | the kappa file (for illustration: `docs/research/thesis/kappa/kappa.md`) | `readiness: framing\|synthesis\|defensible` and the **defensibility sign-off** — the kappa is where the through-line is stated, so it is where defensibility is signed. Before a kappa exists the thesis is legitimately framing-only and is read from the aims file. |
+
+The aims file (for illustration: `docs/research/thesis/aims.md`) is *not* the
+adjudicating artifact — its own template says the defensibility sign-off lives
+in the kappa — but it does own the machine-readable **aim list** that the
+`paper → thesis` roll-up matches against each paper's `covers:`. Both are read,
+for different reasons. Milestones stay in the thesis milestones file.
 
 ## Definition of done
 

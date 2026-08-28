@@ -476,7 +476,7 @@ def test_a_thesis_groups_its_aims_and_kappa_into_one_artifact() -> None:
     projection = col.collect(LAYOUT, FakeProbe(files))
 
     assert [(a.level, a.link) for a in projection.artifacts] == [
-        ("thesis", "thesis/aims.md")
+        ("thesis", "thesis/kappa/kappa.md")
     ]
 
 
@@ -758,3 +758,38 @@ def test_a_milestone_key_with_no_value_is_empty_not_unknown() -> None:
 
     assert projection.milestones == pm.Milestones()
     assert projection.findings == ()
+
+
+def test_a_thesis_is_adjudicated_by_its_kappa_not_its_aims() -> None:
+    """The defensibility sign-off lives in `kappa.md`; the templates say so."""
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc(
+        "thesis", id="t", readiness="framing", **{"last-updated": "2026-01-01"}
+    )
+    files[LAYOUT.kappa_dir / "kappa.md"] = _doc(
+        "thesis",
+        id="t",
+        readiness="defensible",
+        blockers="[aim-1 has no paper]",
+        **{"signed-off-by": "D. Runje", "last-updated": "2026-08-20"},
+    )
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+    thesis = projection.artifacts[0]
+
+    assert thesis.link == "thesis/kappa/kappa.md"
+    assert thesis.readiness == "defensible"
+    assert thesis.signed_off is True
+    assert thesis.blockers == ("aim-1 has no paper",)
+
+
+def test_a_thesis_with_no_kappa_yet_is_projected_from_its_aims() -> None:
+    """An early thesis is legitimately framing-only, not unprojectable."""
+    files = _scaffolded()
+    files[LAYOUT.aims] = _doc("thesis", id="t", readiness="framing")
+
+    projection = col.collect(LAYOUT, FakeProbe(files))
+
+    assert [(a.link, a.readiness) for a in projection.artifacts] == [
+        ("thesis/aims.md", "framing")
+    ]

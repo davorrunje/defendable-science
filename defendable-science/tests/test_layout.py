@@ -304,3 +304,29 @@ def test_only_the_named_keys_are_compared() -> None:
     requested = lay.layout_from_overrides({"thesis_dir": "phd"}, Path("/repo"))
 
     assert lay.layout_conflicts(recorded, requested, ["research_root"]) == []
+
+
+def test_every_authoritative_document_is_a_staged_document_of_its_level() -> None:
+    """A typo here would silently make an artifact unprojectable."""
+    assert {
+        name: lay.STAGED_DOCUMENTS[name]
+        for name in lay.AUTHORITATIVE_DOCUMENTS.values()
+    } == {"findings.md": "hypothesis", "decision.md": "paper", "kappa.md": "thesis"}
+    assert set(lay.AUTHORITATIVE_DOCUMENTS) == set(lay.STAGED_DOCUMENTS.values())
+
+
+def test_the_thesis_is_adjudicated_where_the_templates_sign_it() -> None:
+    """The shipped templates are the source of truth, not prose about them.
+
+    `kappa.md` marks `signed-off-by` REQUIRED for defensibility and `aims.md`
+    says the sign-off is not there — so the document `progress` reads the
+    verdict block from is `kappa.md`. This guard exists because the constant
+    once said `aims.md`, following a stale line in `progress/SKILL.md`.
+    """
+    templates = Path(__file__).resolve().parents[2] / "resources" / "templates"
+    kappa = (templates / "thesis" / "kappa.md").read_text(encoding="utf-8")
+    aims = (templates / "thesis" / "aims.md").read_text(encoding="utf-8")
+
+    assert lay.AUTHORITATIVE_DOCUMENTS["thesis"] == "kappa.md"
+    assert "REQUIRED for defensibility" in kappa
+    assert "the defensibility sign-off lives in kappa.md, not here" in aims
