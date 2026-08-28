@@ -43,35 +43,52 @@ def axes_from_positioning(path: str | Path) -> list[str]:
     The axes are the matrix header minus its first column, which labels the
     row rather than naming an attribute.
 
+    Every refusal below names the offending file and says what to do about it:
+    this function's whole job is to stop a survey that would otherwise produce
+    confidently-shaped, meaningless cells, so a diagnosis without a remedy
+    would only move the dead end one step later.
+
     :param path: The positioning document.
     :returns: The axes, in the matrix's own column order.
     :raises ExtractionError: If the file is missing; if it has no
         ``Concept matrix`` section, or that section has no table, or its table
-        is ragged; if the header carries unreplaced template placeholders or an
-        unnamed column; if there are no axes beyond the row label; or if two
-        axes share a name.
+        is missing its GFM separator, or is ragged; if the header carries
+        unreplaced template placeholders or an unnamed column; if there are no
+        axes beyond the row label; or if two axes share a name.
     """
     target = Path(path)
     if not target.is_file():
         raise ExtractionError(f"{target}: positioning document not found")
     text = target.read_text(encoding="utf-8")
     try:
-        doc = parse_document(text, under_heading=CONCEPT_MATRIX_HEADING)
+        doc = parse_document(
+            text, under_heading=CONCEPT_MATRIX_HEADING, row_label="concept-matrix"
+        )
     except TableError as exc:
-        raise ExtractionError(f"{target}: {exc}") from exc
+        raise ExtractionError(
+            f"{target}: {exc} — give every row one cell per header column"
+        ) from exc
     if doc.header is None:
         if _MATRIX_HEADING_LINE.search(text) is None:
             raise ExtractionError(
-                f"{target}: no '{CONCEPT_MATRIX_HEADING}' section — run "
-                "`literature position --level paper` first"
+                f"{target}: no '{CONCEPT_MATRIX_HEADING}' section — ask the "
+                "`literature` skill for `position --level paper` to write one"
+            )
+        if doc.saw_table_shape:
+            raise ExtractionError(
+                f"{target}: the '{CONCEPT_MATRIX_HEADING}' table is missing its "
+                "`|---|---|` separator line under the header row — add it so the "
+                "matrix parses as a table"
             )
         raise ExtractionError(
-            f"{target}: the '{CONCEPT_MATRIX_HEADING}' section holds no table"
+            f"{target}: the '{CONCEPT_MATRIX_HEADING}' section holds no table — add "
+            "the matrix, one column per attribute your delta turns on"
         )
     axes = [c.strip() for c in doc.header[1:]]
     if not axes:
         raise ExtractionError(
-            f"{target}: the concept matrix has no comparison axes, only a row label"
+            f"{target}: the concept matrix has no comparison axes, only a row "
+            "label — add one column per attribute your delta turns on"
         )
     placeholders = [a for a in axes if PLACEHOLDER_RE.match(a)]
     if placeholders:
@@ -80,11 +97,17 @@ def axes_from_positioning(path: str | Path) -> list[str]:
             f"placeholders {placeholders} — replace them with the attributes "
             "your delta turns on before extracting against them"
         )
-    if any(not a for a in axes):
+    unnamed = [i for i, a in enumerate(axes, start=2) if not a]
+    if unnamed:
         raise ExtractionError(
-            f"{target}: the concept matrix has an unnamed column — every axis "
-            "needs a name a reader can answer against"
+            f"{target}: the concept matrix has unnamed columns at position(s) "
+            f"{unnamed} (1-based, counting the row label) — name each one after "
+            "the attribute it compares, or delete it"
         )
-    if len(set(axes)) != len(axes):
-        raise ExtractionError(f"{target}: duplicate axis names in {axes}")
+    duplicates = sorted({a for a in axes if axes.count(a) > 1})
+    if duplicates:
+        raise ExtractionError(
+            f"{target}: duplicate axis names {duplicates} in the concept matrix "
+            "— rename them so each axis is distinct, or drop the repeat"
+        )
     return axes
