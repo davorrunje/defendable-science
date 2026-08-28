@@ -63,12 +63,13 @@ environment changes** (installing `uv`/Python is the user's call), **honest stop
   `>=0.3.0,<0.4.0`), not an exact string-lock — the lower bound is the minimum
   package version the plugin's skills need, the upper bound the next incompatible
   boundary. Bump the lower bound deliberately, when a skill starts calling a CLI
-  capability an earlier release did not have. **Why it reads `0.3.0`:** the
-  `literature fetch | confirm | verify | mirror` verbs moved it past `0.2.x`, and
-  the same unreleased `0.3.0` is where `research-init`'s `defendable-science init`
-  (and the forthcoming `check`) land — so the bound already covers them and does
-  not move again for them. The package's own releases (PEP 440, `v*` tags → PyPI)
-  proceed on their own cadence.
+  capability an earlier release did not have. **Why it reads `0.3.0`:** that is
+  the release carrying the `literature fetch | confirm | verify | mirror` verbs,
+  which moved the bound past `0.2.x`, together with `research-init`'s
+  `defendable-science init` and the repo-validation `check` alongside it — so the
+  bound already covers all of them and does not move again for them. The
+  package's own releases (PEP 440, `v*` tags → PyPI) proceed on their own
+  cadence.
 - **rclone** (the private-mirror engine) is a separate single static binary — **not
   a Python dependency**; `defendable-science` shells out to it. It is **optional**: only
   private-mirror operations need it (Tier-A git/LFS and Tier-B `pooch` fetch do

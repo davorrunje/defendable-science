@@ -72,12 +72,15 @@ Every **machine-read** file is rendered by the package that owns its shape —
 two `init` runs agree and why the files parse for every command that reads them.
 Registries land **empty but valid**, never as prose to be fixed up later.
 
-What `init` does *not* write: the per-paper tree. A paper's `backlog.md` and its
-staged documents arrive when a backlog row is promoted
-(`defendable-science backlog promote --scaffold`); the prose skeletons the author
-fills come from [`resources/templates/`](../../resources/templates/). Every
-hypothesis / paper / thesis artifact carries the status frontmatter block that
-feeds `progress`.
+What `init` does *not* write: the per-paper tree. A paper's root, its empty
+`backlog.md` and a tracked `paper/pitch.md` stub arrive when a portfolio-backlog
+row is promoted (`defendable-science backlog promote <row-id> --level paper
+--scaffold --backend <binding>`; `--level` defaults to `hypothesis`, and the
+paper level requires the backend binding). The remaining staged documents —
+`positioning.md`, `ledger.md`, `decision.md` — are written by `paper-synthesis`
+at their own stages, from the prose skeletons in
+[`resources/templates/`](../../resources/templates/). Every hypothesis / paper /
+thesis artifact carries the status frontmatter block that feeds `progress`.
 
 The default layout, for orientation (a repo may record a different one — see
 Adopt, step 2):
@@ -164,11 +167,14 @@ consumer):
    available as the author's choice**, no longer the only option.
    Sequencing, given that `init` renders `config.yml` itself and never rewrites
    an existing one: run `defendable-science init --dry-run` first — it writes
-   nothing and reports every path it *would* touch, which is what to read back
-   to the author. Then run `init`, add the confirmed block to the `config.yml`
-   it rendered, and run `init` once more so anything still missing lands in the
-   recorded locations. Registries the first run left in the default locations
-   are empty; delete them.
+   nothing and reports every path it *would* touch. With no `layout:` block
+   recorded yet, those are the **default** paths, so read them back as the
+   proposal the block is about to override, not as a preview of where files will
+   end up. Then run `init`, add the confirmed block to the `config.yml` it
+   rendered, and run `init` once more so anything still missing lands in the
+   recorded locations. Finally delete the empty registries the first run left
+   behind **for the keys the block moved** — a key the block leaves at its
+   default has its live file exactly where the first run put it.
 
 3. **Literature.** Reference PDFs + digests + any existing bibliography →
    `literature/references.json` (CSL-JSON) + `triage.yml`, with **roles tagged**
@@ -214,8 +220,8 @@ cannot classify with confidence is surfaced as an open question, not decided.
   engineering-delegation contract) — design, planning, implementation, and test
   authoring for the experiment-backend harness are not this skill's job; it only
   *binds* the harness in config.
-- **Regenerates** `dashboard.md` via `progress dashboard` once the registries
-  hold content — never hand-edit it.
+- **Regenerates** `dashboard.md` via [`progress`](../progress/SKILL.md) once the
+  registries hold content — never hand-edit it.
 
 ## Guardrails
 

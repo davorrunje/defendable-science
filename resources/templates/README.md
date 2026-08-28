@@ -46,7 +46,7 @@ same files at the paths it recorded.
 | `dashboard.md` | `defendable-science init` (a stub saying it has not been generated); `progress` regenerates it | `docs/research/dashboard.md` |
 | `references.json` | `defendable-science init` (empty CSL-JSON) | `docs/research/literature/references.json` |
 | `triage.yml` | `defendable-science init` | `docs/research/literature/triage.yml` |
-| `datasets.yml` | `defendable-science init`; `dataset register` appends entries | `datasets.yml` |
+| `datasets.yml` | `defendable-science init`; the `dataset` skill's `register` verb appends entries | `datasets.yml` |
 | `config.yml` | `defendable-science init` — every binding `null`, never a placeholder | `.defendable-science/config.yml` |
 | `rclone.conf.example` | `defendable-science init` (remote name and type only) | `.defendable-science/rclone.conf.example` |
 | `.gitignore` | `defendable-science init` — **append-only merge**, never a rewrite | repo root |
@@ -70,10 +70,12 @@ separate progress file.
 
 The **definition** of the field set, its order, and the per-level enums lives in
 `defendable-science/defendable_science/scaffold/status.py`; what follows is the
-human-facing reference that mirrors it, with example values filled in. The two
-cannot drift: `defendable-science/tests/test_status.py` checks this block's
-fields and their order against `status.render`, the same guard it runs over the
-nine shipped templates.
+human-facing reference that mirrors it, with example values filled in. **The
+field set and its order cannot drift** —
+`defendable-science/tests/test_status.py` checks this block against
+`status.render`, the same guard it runs over the nine shipped templates. The
+enums in the comments below are *not* guarded, so read
+`status.VERDICTS`/`status.READINESS` if a value here looks wrong.
 
 **Field set:**
 

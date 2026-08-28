@@ -160,6 +160,9 @@ def test_rendered_dashboard_says_it_has_no_generator_yet() -> None:
     assert "GENERATED" in text
     assert "progress" in text
     assert "0" not in text.split("\n")[0]  # never a fabricated count
+    # `progress` is a skill; there is no `progress dashboard` command. A shipped
+    # file naming one sends the reader straight to a shell error.
+    assert "progress dashboard" not in text
 
 
 def test_rendered_rclone_example_carries_no_credentials() -> None:

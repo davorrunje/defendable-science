@@ -44,11 +44,13 @@ methodology's; the command names are the tool's.
 and holds **no secrets and no blobs above Tier A** — metadata, checksums, tiers,
 licenses, retrieval recipes, and datasheet links.
 
-Every `dataset` command finds it for you: the path comes from the repo layout
-(`layout.datasets_manifest` in `.defendable-science/config.yml`, defaulting to
-`datasets.yml` at the repo root), so no command in this guide passes
-`--manifest`. The flag still exists and still wins when you pass it — use it to
-point at a manifest that is not this repo's.
+Every command that reads the manifest finds it for you: the path comes from the
+repo layout (`layout.datasets_manifest` in `.defendable-science/config.yml`,
+defaulting to `datasets.yml` at the repo root), so no command in this guide
+passes `--manifest`. The flag still exists and still wins when you pass it — use
+it to point at a manifest that is not this repo's. The one command with no
+`--manifest` at all is `dataset ingest`: it reads a Croissant document you name
+and never opens the manifest.
 
 > **Ask the assistant.** Scaffold the dataset registry for this repo
 > (`dataset` in `init` mode) — I want `datasets.yml`, the gitignored cache dir,
