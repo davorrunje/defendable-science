@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from defendable_science.core.gitignore import check_ignore
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -34,6 +36,15 @@ class Probe(Protocol):
 
     def glob(self, root: Path, pattern: str) -> list[Path]:
         """Return sorted matches of `pattern` under `root` (empty if absent)."""
+        ...
+
+    def is_gitignored(self, root: Path, path: str) -> bool | None:
+        """Return whether `path` (relative to `root`) is gitignored there.
+
+        :returns: ``True``/``False`` if the question could be answered, or
+            ``None`` if it could not (git absent, or `root` is not a git work
+            tree) — callers must treat that as its own outcome (#138, #139).
+        """
         ...
 
 
@@ -70,3 +81,7 @@ class FsProbe:
         if not root.is_dir():
             return []
         return sorted(root.glob(pattern))
+
+    def is_gitignored(self, root: Path, path: str) -> bool | None:
+        """Return whether `path` is gitignored in `root`, via ``git check-ignore``."""
+        return check_ignore(root, path)

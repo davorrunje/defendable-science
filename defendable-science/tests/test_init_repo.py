@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,91 @@ def test_init_reports_gitignore_as_exists_when_nothing_is_missing(repo: Path) ->
     statuses = _init(repo)
 
     assert "exists:.gitignore" in statuses
+
+
+# --- git-semantics coverage (#139): equivalent-but-differently-spelled -------
+#
+# `repo` (unlike these) is never a git work tree, so the tests above exercise
+# the literal-membership fast path and the git-absent fallback by construction
+# — `check_ignore` answers `None` for every entry there, which degrades to
+# exactly the pre-#139 behaviour. These pin the git-covered path itself.
+
+
+@pytest.mark.parametrize(
+    "gitignore_text",
+    [
+        "**/.defendable-science/cache/\n"
+        "**/.defendable-science/rclone.conf\n"
+        "**/.defendable-science/keys.json\n",
+        "/.defendable-science/cache/\n"
+        "/.defendable-science/rclone.conf\n"
+        "/.defendable-science/keys.json\n",
+        ".defendable-science/\n",  # a covering parent for all three entries
+    ],
+    ids=["double-star", "leading-slash", "covering-parent"],
+)
+def test_init_leaves_an_already_covered_gitignore_byte_identical(
+    repo: Path, gitignore_text: str
+) -> None:
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # nosec B603 B607
+    (repo / ".gitignore").write_text(gitignore_text, encoding="utf-8")
+
+    statuses = _init(repo)
+
+    assert "exists:.gitignore" in statuses
+    assert not any(s.startswith("merged:") for s in statuses)
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == gitignore_text
+
+
+def test_init_still_appends_a_genuinely_uncovered_entry_in_a_git_repo(
+    repo: Path,
+) -> None:
+    """The true-negative regression guard, now inside a real git work tree."""
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # nosec B603 B607
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+
+    statuses = _init(repo)
+
+    assert "merged:.gitignore" in statuses
+    text = (repo / ".gitignore").read_text(encoding="utf-8")
+    assert "__pycache__/" in text
+    assert r.DEFAULT_CACHE_DIR in text
+
+
+def test_init_falls_back_to_literal_matching_outside_a_git_work_tree(
+    repo: Path,
+) -> None:
+    """No ``git init`` here — `check_ignore` answers `None`, not `True` (#139).
+
+    A non-literal-but-equivalent spelling is therefore *not* recognised as
+    covering the entry, and `init` appends its own literal line. Not the
+    ideal outcome, but the required degradation: never error, never silently
+    skip the merge (a scaffold that quietly declines to ignore the key store
+    is worse than a duplicate line).
+    """
+    (repo / ".gitignore").write_text(
+        "**/.defendable-science/cache/\n", encoding="utf-8"
+    )
+
+    statuses = _init(repo)
+
+    assert "merged:.gitignore" in statuses
+    lines = (repo / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "**/.defendable-science/cache/" in lines  # original, untouched
+    assert lines.count(r.DEFAULT_CACHE_DIR) == 1  # the appended literal line
+
+
+def test_init_dry_run_reports_exists_for_an_already_covered_gitignore(
+    repo: Path,
+) -> None:
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # nosec B603 B607
+    text = ".defendable-science/\n"  # covers all three entries
+    (repo / ".gitignore").write_text(text, encoding="utf-8")
+
+    statuses = _init(repo, dry_run=True)
+
+    assert "exists:.gitignore" in statuses
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == text
 
 
 def test_dry_run_writes_nothing(repo: Path) -> None:

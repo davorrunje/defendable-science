@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import date
 from pathlib import Path  # noqa: TC003
 
@@ -18,6 +19,9 @@ runner = CliRunner()
 
 
 def _init(root: Path, *, thesis: bool = False) -> None:
+    # A real git work tree, so `check`'s cache_dir-coverage rule (#138) can
+    # give a definite answer via `git check-ignore` rather than "undeterminable".
+    subprocess.run(["git", "init", "-q", str(root)], check=True)  # nosec B603 B607
     args = ["init", "--root", str(root)] + (["--thesis"] if thesis else [])
     assert runner.invoke(app, args).exit_code == 0
 
