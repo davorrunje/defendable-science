@@ -8,6 +8,10 @@
 > (defendable-science#66). The in-repo path below remains available as an
 > explicit opt-in and is still gitignored by `research-init`.
 
+> **Refined by ADR-0043.** The "no Pydantic" driver below is superseded: Pydantic is
+> now permitted where data enters the process, which includes reading the key store.
+> The rest of this decision stands.
+
 ## Context
 
 The skills reach external services that key-gate their useful rate limits —

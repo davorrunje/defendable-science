@@ -2,6 +2,9 @@
 
 - Status: accepted · Date: 2026-08-27 · Deciders: Davor Runje
 
+> **Refined by ADR-0043.** The "no Pydantic" clause in the light-dependency argument
+> below is superseded by ADR-0043. The rest of this decision stands.
+
 ## Context
 
 ADR-0037 established a three-way match gate (accept / quarantine / refuse) over

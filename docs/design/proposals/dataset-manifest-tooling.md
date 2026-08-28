@@ -2,6 +2,11 @@
 
 `Status: implemented (designed 2026-07-18) · Skill: dataset`
 
+> **Amended by [ADR-0043](../../../decisions/0043-pydantic-at-the-parsing-boundary.md).**
+> The "no `pydantic`" constraint recorded below no longer holds. Croissant ingest now
+> validates its top level through a Pydantic boundary model; everything else in this
+> proposal stands as shipped.
+
 ## Context
 
 The `dataset` skill keeps a single, git-tracked, public registry (`datasets.yml`)
