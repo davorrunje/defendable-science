@@ -136,13 +136,14 @@ actionable message, matching the config-error convention ADR-0031 established
   failure this ADR exists to end, so it is tracked as
   [#124](https://github.com/davorrunje/defendable-science/issues/124) rather than
   left implied by the key's existence.
-- **A known asymmetry, stated rather than hidden:** `layout:` keys are confined
-  to the repository, but `cache_dir` is only *anchored*, not confined, so
-  `cache_dir: ../../elsewhere` still escapes. ADR-0031 deliberately allows an
-  off-repo cache (a scratch volume, a CI mount), so closing this needs a
-  decision rather than a patch. Tracked as
-  [#123](https://github.com/davorrunje/defendable-science/issues/123); not fixed
-  here.
+- **The asymmetry with `cache_dir` has since been resolved, not left standing.**
+  When this ADR was written, `layout:` keys were confined to the repository while
+  `cache_dir` was only *anchored* to it, so `cache_dir: ../../elsewhere` still
+  escaped. That is no longer true: a **relative** `cache_dir` is now confined by
+  the same rule, while an **absolute** one is still honoured, because ADR-0031
+  deliberately allows an off-repo cache (a scratch volume, a CI mount) and that is
+  how such a cache is expressed. See ADR-0031 § Consequences and
+  [#123](https://github.com/davorrunje/defendable-science/issues/123).
 - **The recordable surface is a commitment.** Four keys is now the contract
   `adopt` and `check` are written against; widening it later is cheap, narrowing
   it is a breaking change for any repo that recorded a key.

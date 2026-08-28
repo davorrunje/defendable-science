@@ -118,7 +118,9 @@ def render_config(cache_dir: str = DEFAULT_CACHE_DIR) -> str:
 # parse as a real value and be read as a real binding.
 
 # The CLI's dataset + HTTP caches both live under exactly this path (ADR-0031);
-# the scaffolded .gitignore excludes it.
+# the scaffolded .gitignore excludes it. A relative value is resolved against the
+# repository root, not the working directory, and must stay inside the repo. For a
+# cache outside the repo — a scratch volume, a CI mount — give an absolute path.
 cache_dir: {cache_dir}
 
 # The repo-local harness implementing the experiment-backend contract
