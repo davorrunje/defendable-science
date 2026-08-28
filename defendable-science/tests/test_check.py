@@ -770,10 +770,14 @@ def test_registries_check_reports_every_manifest_error() -> None:
 
     findings = c.check_registries(LAYOUT, FakeProbe(files))
 
-    messages = " ".join(f.message for f in findings)
+    error_findings = [
+        f for f in findings if f.severity == "invalid" and f.file == "datasets.yml"
+    ]
+    messages = " ".join(f.message for f in error_findings)
     assert "version" in messages
     assert "license" in messages
-    assert all(f.file == "datasets.yml" for f in findings if "entry" in f.message)
+    # Should have at least 5 errors (version, tier, license, redistributable, access)
+    assert len(error_findings) >= 5
 
 
 def test_registries_check_flags_an_unparseable_manifest() -> None:
@@ -892,8 +896,8 @@ def test_registries_check_triage_orphan_when_references_unreadable() -> None:
     orphan_findings = [
         f for f in findings if f.severity == "invalid" and "smith2020" in f.message
     ]
-    assert len(unreadable_findings) >= 1  # references is unreadable
-    assert len(orphan_findings) >= 1  # smith2020 is orphan
+    assert len(unreadable_findings) == 1  # references is unreadable
+    assert len(orphan_findings) == 1  # smith2020 is orphan
 
 
 def test_registries_check_reports_manifest_warnings() -> None:

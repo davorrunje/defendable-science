@@ -683,72 +683,6 @@ def check_frontmatter(layout: Layout, probe: Probe) -> list[Finding]:
 REGISTRIES_CHECK = "registries"
 
 
-def _parse_json_array(text: str, file_rel: str) -> list[object] | Finding:
-    """Parse JSON text as an array, or return an invalid finding.
-
-    :param text: The JSON text to parse.
-    :param file_rel: The repo-relative path (for error messages).
-    :returns: The parsed array, or an ``invalid`` Finding.
-    """
-    import json
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        return Finding(
-            severity="invalid",
-            check=REGISTRIES_CHECK,
-            file=file_rel,
-            message=f"invalid JSON: {exc}",
-            remedy="repair the JSON syntax",
-        )
-    if not isinstance(data, list):
-        return Finding(
-            severity="invalid",
-            check=REGISTRIES_CHECK,
-            file=file_rel,
-            message=(
-                f"expected a JSON array of CSL-JSON items, got {type(data).__name__}"
-            ),
-            remedy="change the top level to a JSON array: [...]",
-        )
-    return data
-
-
-def _parse_datasets_yaml(text: str, file_rel: str) -> dict[str, object] | Finding:
-    """Parse datasets.yml YAML text as a mapping, or return an invalid finding.
-
-    :param text: The YAML text to parse.
-    :param file_rel: The repo-relative path (for error messages).
-    :returns: The parsed mapping, or an ``invalid`` Finding.
-    """
-    import yaml
-
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        return Finding(
-            severity="invalid",
-            check=REGISTRIES_CHECK,
-            file=file_rel,
-            message=f"invalid YAML: {exc}",
-            remedy="repair the YAML syntax",
-        )
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        return Finding(
-            severity="invalid",
-            check=REGISTRIES_CHECK,
-            file=file_rel,
-            message=(
-                f"expected a YAML mapping at the top level, got {type(data).__name__}"
-            ),
-            remedy="change the top level to a YAML mapping: ...",
-        )
-    return data
-
-
 def check_registries(layout: Layout, probe: Probe) -> list[Finding]:
     """Report every problem with references, triage, and datasets registries.
 
@@ -777,8 +711,6 @@ def check_registries(layout: Layout, probe: Probe) -> list[Finding]:
 def _check_references(layout: Layout, probe: Probe) -> list[Finding]:
     """Check ``references.json`` for structural validity.
 
-    Parses the JSON array and checks that each entry has an 'id' field.
-
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
     :returns: One finding per issue, or none if the registry is valid.
@@ -790,42 +722,21 @@ def _check_references(layout: Layout, probe: Probe) -> list[Finding]:
     if isinstance(text, Finding):
         return [text]
 
-    # Parse the JSON array
-    items = _parse_json_array(text, rel)
-    if isinstance(items, Finding):
-        return [items]
-
-    findings: list[Finding] = []
-
-    # Check that each entry has an 'id' field
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            findings.append(
-                Finding(
-                    severity="invalid",
-                    check=REGISTRIES_CHECK,
-                    file=rel,
-                    message=(
-                        f"entry {index} is not an object (got {type(item).__name__})"
-                    ),
-                    remedy="each entry must be a JSON object: {...}",
-                )
+    # Use the text-level loader to validate structure and ids
+    try:
+        reg.load_registry_text(text, path)
+    except reg.RegistryError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=REGISTRIES_CHECK,
+                file=rel,
+                message=str(exc),
+                remedy="repair the registry: it must be a JSON array of CSL-JSON objects with required 'id' fields",
             )
-        elif "id" not in item:
-            findings.append(
-                Finding(
-                    severity="invalid",
-                    check=REGISTRIES_CHECK,
-                    file=rel,
-                    message=(
-                        f"entry {index} has no 'id' field; the id keys each "
-                        "reference across triage.yml, the backlog, and other tools"
-                    ),
-                    remedy="add an 'id' field to each entry, or remove entries without ids",
-                )
-            )
+        ]
 
-    return findings
+    return []
 
 
 def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
@@ -884,12 +795,13 @@ def _check_triage(layout: Layout, probe: Probe) -> list[Finding]:
     ref_text = _read(ref_path, layout, probe, REGISTRIES_CHECK)
     valid_ids: set[str] = set()
     if not isinstance(ref_text, Finding):
-        items = _parse_json_array(ref_text, ref_rel)
-        if not isinstance(items, Finding):
-            # Extract ids from valid items (skip non-objects)
-            for item in items:
-                if isinstance(item, dict) and "id" in item:
-                    valid_ids.add(str(item["id"]))
+        try:
+            registry = reg.load_registry_text(ref_text, ref_path)
+            valid_ids = {entry.citekey for entry in registry.entries}
+        except reg.RegistryError:
+            # If references.json is invalid, the references check will flag it;
+            # we still check triage keys, but against an empty set
+            pass
 
     # Check for orphan keys (triage keys with no matching reference id)
     findings.extend(
@@ -927,33 +839,9 @@ def _check_datasets(layout: Layout, probe: Probe) -> list[Finding]:
     if isinstance(text, Finding):
         return [text]
 
-    # Parse the YAML
-    data = _parse_datasets_yaml(text, rel)
-    if isinstance(data, Finding):
-        return [data]
-
-    # Try to build a manifest from the parsed data
-    # (replicating manifest.load's logic but using our parsed YAML)
+    # Use the text-level loader to validate structure and decode entries
     try:
-        mirror = None
-        if (mraw := data.get("mirror")) is not None:
-            if not isinstance(mraw, dict):
-                raise mf.ManifestError(f"{rel}: 'mirror' must be a mapping")
-            mirror = mf.Mirror(
-                rclone_remote=mf._opt_str(mraw.get("rclone_remote")),
-                base_path=mf._opt_str(mraw.get("base_path")),
-                hash=mf._opt_str(mraw.get("hash")),
-            )
-
-        datasets_raw = data.get("datasets") or []
-        if not isinstance(datasets_raw, list):
-            raise mf.ManifestError(f"{rel}: 'datasets' must be a list")
-        manifest = mf.Manifest(
-            mirror=mirror,
-            datasets=[
-                mf._decode_entry(entry, i) for i, entry in enumerate(datasets_raw)
-            ],
-        )
+        manifest = mf.load_text(text, path)
     except mf.ManifestError as exc:
         return [
             Finding(
