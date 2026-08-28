@@ -501,9 +501,10 @@ def check(
 ) -> None:
     """Report the repo's validity state as JSON.
 
-    Runs six check families (layout, tables, frontmatter, registries, config,
-    cross-artifact) and emits findings grouped by severity. Exit code is keyed
-    to severity: ``invalid`` or ``unreadable`` → 1; ``gap`` or clean → 0.
+    Runs seven check families (layout, tables, frontmatter, extraction,
+    registries, config, cross-artifact) and emits findings grouped by
+    severity. Exit code is keyed to severity: ``invalid`` or ``unreadable`` →
+    1; ``gap`` or clean → 0.
 
     A missing or invalid layout block is fatal — the checker cannot know where
     anything is — so the check exits 1 with a message and no findings JSON. So

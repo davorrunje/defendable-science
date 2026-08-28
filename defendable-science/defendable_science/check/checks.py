@@ -27,11 +27,13 @@ are successful science, not findings.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from defendable_science.check.model import Finding, Report
 from defendable_science.core.config import load_config_text
 from defendable_science.dataset import manifest as mf
+from defendable_science.digest import artifact as artifact_mod
+from defendable_science.digest import extraction as extraction_mod
 from defendable_science.exploration.backlog import (
     REGISTRY_COLUMNS,
     Backlog,
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from defendable_science.check.probe import Probe
+    from defendable_science.digest.extraction import Cell
     from defendable_science.exploration.backlog import Level, Row
     from defendable_science.scaffold.layout import Layout
 
@@ -786,6 +789,354 @@ def check_frontmatter(layout: Layout, probe: Probe) -> list[Finding]:
     return findings
 
 
+# --- extraction-status checks -------------------------------------------------
+
+EXTRACTION_CHECK = "extraction"
+
+
+def digest_artifacts(layout: Layout, probe: Probe) -> list[Path]:
+    """Return every digest artifact under ``layout.digests_dir``.
+
+    Digest artifacts are not staged documents in the hypothesis/paper/thesis
+    sense — they are not in `STAGED_DOCUMENTS` and :func:`check_frontmatter`
+    never scans them (defendable-science#147) — so this is a second, separate
+    listing, the same way `staged_documents` is the one `check_frontmatter`
+    walks.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Sorted absolute paths to every ``*.md`` file directly under
+        ``layout.digests_dir`` (empty if the directory does not exist).
+    """
+    return probe.glob(layout.digests_dir, "*.md")
+
+
+def _extraction_locator_patterns(layout: Layout, probe: Probe) -> list[re.Pattern[str]]:
+    """Return the locator patterns cell locators are checked against.
+
+    Reads ``literature.extraction.locator_patterns`` from ``config.yml`` the
+    same way ``cli.py``'s own extraction command does
+    (``_lit_block``/``_locator_patterns``), but never raises or reports a
+    finding of its own: a missing, unreadable, or malformed config is already
+    :func:`check_config`'s finding to make, and duplicating it here would
+    report one defect twice. Falling back to the default pattern set on any
+    of those costs nothing but a slightly stricter locator-shape check — never
+    a false pass — because a configured pattern set only ever *widens* what a
+    locator may look like (see `~.extraction.DEFAULT_LOCATOR_PATTERNS`).
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Compiled locator patterns: the configured set if the config and
+        its ``literature.extraction.locator_patterns`` key are present and
+        well-formed, else the default set alone.
+    """
+    default = extraction_mod.compile_locator_patterns(None)
+    if not is_file(probe, layout.config_file):
+        return default
+    try:
+        config = load_config_text(probe.read_text(layout.config_file))
+    except (OSError, ValueError):
+        return default
+    lit = config.get("literature")
+    if not isinstance(lit, dict):
+        return default
+    extraction_block = lit.get("extraction")
+    if not isinstance(extraction_block, dict):
+        return default
+    configured = extraction_block.get("locator_patterns")
+    if not isinstance(configured, list) or not all(
+        isinstance(p, str) for p in configured
+    ):
+        return default
+    try:
+        return extraction_mod.compile_locator_patterns(configured)
+    except extraction_mod.ExtractionError:
+        return default
+
+
+def _check_extraction_fields(rel: str, extraction: dict[str, Any]) -> list[Finding]:
+    """Report bad values on ``status.extraction``'s scalar fields.
+
+    :param rel: The artifact's repo-relative path, for the findings.
+    :param extraction: The parsed ``status.extraction`` mapping.
+    :returns: One ``invalid`` finding per bad field.
+    """
+    findings: list[Finding] = []
+
+    batch_check = extraction.get("batch-check")
+    if batch_check not in artifact_mod.BATCH_CHECK_VERDICTS:
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=(
+                    f"{rel} has `batch-check: {batch_check!r}`, which is not "
+                    f"one of {list(artifact_mod.BATCH_CHECK_VERDICTS)}"
+                ),
+                remedy=(
+                    f"set `batch-check` to one of "
+                    f"{list(artifact_mod.BATCH_CHECK_VERDICTS)}, matching the "
+                    "verdict `digest extract sample --verdict` recorded, or "
+                    "re-run extraction"
+                ),
+            )
+        )
+
+    locators = extraction.get("locators")
+    if locators not in artifact_mod.LOCATORS_WRITTEN_VALUES:
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=(
+                    f"{rel} has `locators: {locators!r}`, which `digest "
+                    "extract record` never writes; the only value it writes "
+                    f"is {sorted(artifact_mod.LOCATORS_WRITTEN_VALUES)}"
+                ),
+                remedy=(
+                    "re-run `digest extract record` to regenerate the block "
+                    "rather than hand-editing `locators`"
+                ),
+            )
+        )
+
+    in_sample = extraction.get("in-sample")
+    if not isinstance(in_sample, bool):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=(
+                    f"{rel} has `in-sample: {in_sample!r}`, which is not a boolean"
+                ),
+                remedy=(
+                    "set `in-sample` to `true` or `false`, or re-run `digest "
+                    "extract sample` to set it from an actual check"
+                ),
+            )
+        )
+
+    return findings
+
+
+def _check_cell(rel: str, cell: Cell, patterns: list[re.Pattern[str]]) -> list[Finding]:
+    """Report why one recorded cell does not carry the evidence it claims to.
+
+    :param rel: The artifact's repo-relative path, for the finding.
+    :param cell: One cell read back by :func:`~.artifact.cells_from_text`.
+    :param patterns: Compiled locator patterns.
+    :returns: At most one ``invalid`` finding.
+    """
+    if cell.value == extraction_mod.NOT_ADDRESSED:
+        if not (cell.justification or "").strip():
+            return [
+                Finding(
+                    severity="invalid",
+                    check=EXTRACTION_CHECK,
+                    file=rel,
+                    message=(
+                        f"{rel}: the {cell.axis!r} cell is "
+                        f"{extraction_mod.NOT_ADDRESSED!r} with no "
+                        "justification"
+                    ),
+                    remedy=(
+                        f"add a `justification` to the {cell.axis!r} cell "
+                        "saying what puts it out of the paper's scope, or "
+                        "re-run `digest extract record`"
+                    ),
+                )
+            ]
+        return []
+    locator = cell.locator
+    if locator is None or not locator.strip():
+        return [
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=f"{rel}: the {cell.axis!r} cell has no locator",
+                remedy=(
+                    f"add a locator to the {cell.axis!r} cell (e.g. '§3' or "
+                    f"'p. 7'), or record it as "
+                    f"{extraction_mod.NOT_ADDRESSED!r} with a justification"
+                ),
+            )
+        ]
+    if not extraction_mod.is_valid_locator(locator, patterns):
+        return [
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=(
+                    f"{rel}: the {cell.axis!r} cell has locator "
+                    f"{locator!r}, which matches no known form"
+                ),
+                remedy=(
+                    f"fix the {cell.axis!r} cell's locator to a recognised "
+                    "form (e.g. '§3', 'p. 7', 'Eq. (4)', 'Thm. 2'), or extend "
+                    "`literature.extraction.locator_patterns` in config.yml"
+                ),
+            )
+        ]
+    return []
+
+
+def _check_extraction_cells(
+    rel: str,
+    path: Path,
+    text: str,
+    extraction: dict[str, Any],
+    patterns: list[re.Pattern[str]],
+) -> list[Finding]:
+    """Report a wrong ``cells`` count, and every cell missing its evidence.
+
+    Reuses :func:`~.artifact.cells_from_text` — the same parser
+    ``digest extract record`` reads back with — rather than re-parsing the
+    fenced YAML block, so a block this reports as sound can never be one the
+    writer itself would refuse.
+
+    :param rel: The artifact's repo-relative path, for the findings.
+    :param path: The artifact's absolute path, for the parser's own errors.
+    :param text: The artifact's full contents, already read through `probe`.
+    :param extraction: The parsed ``status.extraction`` mapping.
+    :param patterns: Compiled locator patterns.
+    :returns: ``invalid`` findings: a malformed or missing cells block despite
+        a ``status.extraction`` block claiming one, a wrong ``cells`` count,
+        or a per-cell locator/justification problem.
+    """
+    try:
+        cells = artifact_mod.cells_from_text(text, path)
+    except extraction_mod.ExtractionError as exc:
+        return [
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=str(exc),
+                remedy=(
+                    f"{rel} declares a `status.extraction` block but its "
+                    "extracted-cells block is missing or malformed; "
+                    "repair it or re-run `digest extract record`"
+                ),
+            )
+        ]
+
+    findings: list[Finding] = []
+    claimed = extraction.get("cells")
+    if not isinstance(claimed, int) or isinstance(claimed, bool):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=f"{rel} has `cells: {claimed!r}`, which is not an integer",
+                remedy=(
+                    "set `cells` to the actual number of cells in the "
+                    "extracted-cells block, or re-run `digest extract record`"
+                ),
+            )
+        )
+    elif claimed != len(cells):
+        findings.append(
+            Finding(
+                severity="invalid",
+                check=EXTRACTION_CHECK,
+                file=rel,
+                message=(
+                    f"{rel} claims `cells: {claimed}`, but its "
+                    f"extracted-cells block holds {len(cells)} cell(s)"
+                ),
+                remedy=(
+                    "re-run `digest extract record` to regenerate the block "
+                    "rather than hand-editing `cells`"
+                ),
+            )
+        )
+
+    for cell in cells:
+        findings.extend(_check_cell(rel, cell, patterns))
+
+    return findings
+
+
+def check_extraction(layout: Layout, probe: Probe) -> list[Finding]:
+    """Report every digest artifact whose ``status.extraction`` block is unsound.
+
+    Extraction mode (#100) writes a second status contract into a paper's
+    digest artifact — ``status.extraction`` — that ``progress`` reads into its
+    own dashboard row (``skills/progress/SKILL.md``). Nothing validated it
+    before this check existed: a hand-edited ``cells`` count, a
+    ``batch-check`` typed by hand with no real check, or a cell missing its
+    locator produced a confidently *wrong* dashboard row rather than an error
+    (#147).
+
+    Reuses the writer's own parsers
+    (:func:`~.artifact.extraction_status_from_text`,
+    :func:`~.artifact.cells_from_text`) and the extraction library's own
+    rules (:func:`~.extraction.is_valid_locator`,
+    :data:`~.artifact.BATCH_CHECK_VERDICTS`) rather than reimplementing them,
+    so a block this reports as sound can never be one the writer, or
+    ``digest extract sample``, would refuse.
+
+    An artifact with no ``status.extraction`` block is not a finding at all —
+    it may be a depth-mode-only reading record, or a paper never digested,
+    and both are legitimately silent here. An artifact carrying both
+    ``understanding`` and ``extraction`` is validated only against
+    ``extraction``'s own rules; ``understanding`` is a different, stronger
+    claim this check does not touch.
+
+    :param layout: The resolved layout.
+    :param probe: The filesystem seam.
+    :returns: Findings for each unsound ``status.extraction`` block.
+        ``unreadable`` for a digest artifact that could not be read at all;
+        ``invalid`` for every other defect — a malformed frontmatter block, a
+        cells-block mismatch, a bad enum, a wrong type, or a cell missing its
+        locator or justification. Every one of these is a structurally wrong
+        value in a machine-read contract, never a legitimately-incomplete
+        state, so none is a ``gap``.
+    """
+    findings: list[Finding] = []
+    patterns: list[re.Pattern[str]] | None = None
+
+    for path in digest_artifacts(layout, probe):
+        rel = str(layout.rel(path))
+        text = read_or_finding(path, layout, probe, EXTRACTION_CHECK)
+        if isinstance(text, Finding):
+            findings.append(text)
+            continue
+
+        try:
+            extraction = artifact_mod.extraction_status_from_text(text, path)
+        except extraction_mod.ExtractionError as exc:
+            findings.append(
+                Finding(
+                    severity="invalid",
+                    check=EXTRACTION_CHECK,
+                    file=rel,
+                    message=str(exc),
+                    remedy=(
+                        f"fix the YAML frontmatter in {rel}, or remove the "
+                        "malformed status block"
+                    ),
+                )
+            )
+            continue
+        if extraction is None:
+            continue
+
+        if patterns is None:
+            patterns = _extraction_locator_patterns(layout, probe)
+
+        findings.extend(_check_extraction_fields(rel, extraction))
+        findings.extend(_check_extraction_cells(rel, path, text, extraction, patterns))
+
+    return findings
+
+
 # --- registries checks -------------------------------------------------------
 
 REGISTRIES_CHECK = "registries"
@@ -1469,16 +1820,16 @@ def check_config(layout: Layout, probe: Probe) -> list[Finding]:
     return findings
 
 
-# --- run_checks: compose all six families ------------------------------------
+# --- run_checks: compose all seven families -----------------------------------
 
 
 def run_checks(layout: Layout, probe: Probe) -> Report:
-    """Compose all six check families into a single report.
+    """Compose all seven check families into a single report.
 
-    Runs checks in order: layout, tables, frontmatter, registries, config,
-    cross-artifact. The order ensures that each family's findings are grouped
-    together, and any unreadable files are reported consistently across all
-    families.
+    Runs checks in order: layout, tables, frontmatter, extraction, registries,
+    config, cross-artifact. The order ensures that each family's findings are
+    grouped together, and any unreadable files are reported consistently
+    across all families.
 
     Deduplicates findings that share the same severity, file, and message
     (which may occur when multiple families read the same unreadable file).
@@ -1486,14 +1837,17 @@ def run_checks(layout: Layout, probe: Probe) -> Report:
 
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: The composed report with deduplicated findings from all six families.
+    :returns: The composed report with deduplicated findings from all seven
+        families.
     """
     findings: list[Finding] = []
 
-    # Run in fixed order: layout, tables, frontmatter, registries, config, cross-artifact
+    # Run in fixed order: layout, tables, frontmatter, extraction, registries,
+    # config, cross-artifact
     findings.extend(check_layout(layout, probe))
     findings.extend(check_tables(layout, probe))
     findings.extend(check_frontmatter(layout, probe))
+    findings.extend(check_extraction(layout, probe))
     findings.extend(check_registries(layout, probe))
     findings.extend(check_config(layout, probe))
     findings.extend(check_cross_artifact(layout, probe))

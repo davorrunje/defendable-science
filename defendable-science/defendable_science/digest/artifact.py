@@ -54,6 +54,13 @@ if TYPE_CHECKING:
 #: population (spec §8).
 BATCH_CHECK_VERDICTS = ("pending", "verified", "failed")
 
+#: The only value ``status.extraction.locators`` is ever written with (see
+#: `ExtractionStatus.locators`). Not a claim about locator *shape* — that is
+#: `~.extraction.is_valid_locator` — but about the field itself: a value
+#: outside this set was never written by this module, so it is a hand-edit,
+#: not a leftover from a real run (defendable-science#147).
+LOCATORS_WRITTEN_VALUES = frozenset({"ok"})
+
 #: The frontmatter key extraction owns. Deliberately not ``understanding``.
 EXTRACTION_KEY = "extraction"
 
@@ -237,27 +244,27 @@ def _load_payload(payload: str, path: Path) -> tuple[str, list[Any]]:
     return citekey, items
 
 
-def read_cells(artifact: str | Path) -> list[Cell]:
-    """Read a paper's recorded cells back out of its artifact.
+def cells_from_text(text: str, path: Path) -> list[Cell]:
+    """Parse a paper's recorded cells out of already-read artifact `text`.
 
-    The inverse of :func:`write_extraction`'s body write, and the source the
-    ``positioning.md`` matrix is rendered from — the row is a projection of
-    these, never authored independently (spec §5).
+    The text-level counterpart of :func:`read_cells`, for a caller — namely
+    ``check`` — that reads the artifact through its own I/O seam rather than
+    the filesystem directly (defendable-science#147). :func:`read_cells`
+    delegates here after doing its own file read, so there is exactly one
+    parser, not two that could drift.
 
     Fails loudly rather than returning an empty list: a paper with no block has
     not been extracted, and reporting that as "extracted, zero cells" would be
     a finding about the paper rather than about the file.
 
-    :param artifact: The per-paper digest artifact.
+    :param text: The artifact's full contents, already read.
+    :param path: The artifact's path, named in any raised error.
     :returns: The recorded cells, in the order they were written.
-    :raises ExtractionError: If the artifact is missing, has no frontmatter, or
-        its cells block is absent or malformed.
+    :raises ExtractionError: If `text` has no frontmatter, or its cells block
+        is absent or malformed.
     """
-    path = Path(artifact)
-    if not path.is_file():
-        raise ExtractionError(f"{path}: digest artifact not found")
     try:
-        _, body = split_frontmatter(path.read_text(encoding="utf-8"))
+        _, body = split_frontmatter(text)
     except FrontmatterError as exc:
         raise ExtractionError(f"{path}: {exc}") from exc
     span = _locate_block(body, path)
@@ -269,6 +276,24 @@ def read_cells(artifact: str | Path) -> list[Cell]:
     begin, end = span
     citekey, items = _load_payload(_fenced_payload(body[begin + 1 : end], path), path)
     return [_cell_from_item(item, citekey, path) for item in items]
+
+
+def read_cells(artifact: str | Path) -> list[Cell]:
+    """Read a paper's recorded cells back out of its artifact.
+
+    The inverse of :func:`write_extraction`'s body write, and the source the
+    ``positioning.md`` matrix is rendered from — the row is a projection of
+    these, never authored independently (spec §5).
+
+    :param artifact: The per-paper digest artifact.
+    :returns: The recorded cells, in the order they were written.
+    :raises ExtractionError: If the artifact is missing, has no frontmatter, or
+        its cells block is absent or malformed.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    return cells_from_text(path.read_text(encoding="utf-8"), path)
 
 
 def _cell_from_item(item: Any, citekey: str, path: Path) -> Cell:
@@ -327,6 +352,31 @@ def _extraction_mapping(fm_lines: list[str], path: Path) -> dict[str, Any]:
     return block
 
 
+def extraction_status_from_text(text: str, path: Path) -> dict[str, Any] | None:
+    """Return the artifact's ``status.extraction`` mapping from already-read `text`.
+
+    The text-level counterpart of :func:`has_extraction` / :func:`_status_extraction`,
+    for a caller — namely ``check`` — that reads the artifact through its own
+    I/O seam rather than the filesystem directly (defendable-science#147).
+
+    ``None`` means *this paper was never extracted* — a fact. Frontmatter that
+    will not parse is a different thing entirely and raises, because an
+    unreadable artifact reported as an unextracted one is exactly the silent
+    substitution the failure-honesty rule forbids.
+
+    :param text: The artifact's full contents, already read.
+    :param path: The artifact's path, named in any raised error.
+    :returns: The ``status.extraction`` mapping, or ``None`` if absent.
+    :raises ExtractionError: If `text` has no frontmatter, an unterminated
+        frontmatter block, or frontmatter that is not valid YAML.
+    """
+    try:
+        fm_lines, _body = split_frontmatter(text)
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    return _status_extraction(fm_lines, path)
+
+
 def has_extraction(artifact: str | Path) -> bool:
     """Whether `artifact` carries a ``status.extraction`` block.
 
@@ -344,11 +394,8 @@ def has_extraction(artifact: str | Path) -> bool:
     path = Path(artifact)
     if not path.is_file():
         raise ExtractionError(f"{path}: digest artifact not found")
-    try:
-        fm_lines, _body = split_frontmatter(path.read_text(encoding="utf-8"))
-    except FrontmatterError as exc:
-        raise ExtractionError(f"{path}: {exc}") from exc
-    return _status_extraction(fm_lines, path) is not None
+    text = path.read_text(encoding="utf-8")
+    return extraction_status_from_text(text, path) is not None
 
 
 def _dump_block(block: dict[str, Any], path: Path) -> str:
