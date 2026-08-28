@@ -463,8 +463,18 @@ It splits into four independently reviewable pieces:
 
 1. `defend --target cited-work` consuming extraction cells directly — the locators exist
    precisely so it can, and wiring it is what closes the loop from extraction to verification.
+   **Filed as [#141](https://github.com/davorrunje/defendable-science/issues/141).**
 2. Rendering a matrix row for a paper whose cells came from depth mode rather than extraction —
    a depth digest also produces locatable claims, and today they cannot feed the matrix.
+   **Filed as [#142](https://github.com/davorrunje/defendable-science/issues/142).**
+
+*Added during implementation — four defects the reviews surfaced, none of which this section
+anticipated:* [#143](https://github.com/davorrunje/defendable-science/issues/143) (`patch_triage`
+and YAML anchors), [#144](https://github.com/davorrunje/defendable-science/issues/144) (orphan
+`.tmp` on a failed atomic replace), [#145](https://github.com/davorrunje/defendable-science/issues/145)
+(fence-handling gaps in `core/mdtable.py` and the extraction heading probe), and
+[#146](https://github.com/davorrunje/defendable-science/issues/146) (the extraction log entry
+named from the artifact stem rather than the citekey).
 
 ## 14. Open questions
 
