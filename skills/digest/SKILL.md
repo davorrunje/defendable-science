@@ -204,8 +204,8 @@ defendable-science digest extract render [--citekey KEY ...] [--paper ID] [--pos
 when omitted (ADR-0039); pass them only when running from outside a paper
 directory or against a document the layout does not own.
 
-**One report shape across the four.** Every verb prints a JSON report on
-**every** outcome, refusals included, and every report carries:
+**One report shape across the four.** Once a verb starts, it prints a JSON
+report on **every** outcome, refusals included, and every report carries:
 
 - `ok` — `true` exactly when the command exited 0. Never read success off any
   other key.
@@ -214,9 +214,13 @@ directory or against a document the layout does not own.
   merge). Per-item failures live in each verb's own buckets (`rejected[]`,
   `errors[]`, `triage_not_updated[]`) and are **not** duplicated here.
 
-Exit 2 is Click's, and only Click's: a usage error (an unknown option, a
-missing required one, `--paper` unresolvable) prints a usage message, not a
-report. Anything else prints one.
+Some failures happen **before** a verb starts, and print only a diagnostic
+line — so parse defensively rather than assuming JSON on every non-zero exit.
+An unknown option or a missing required one is Click's usage error, exit 2.
+Running from outside any paper without `--paper` also exits 2, naming the
+option to pass. And a malformed `.defendable-science/config.yml` — an invalid
+`layout:` block, or a locator-pattern set that cannot be combined — fails the
+shared setup every command group uses, before this group's code runs at all.
 
 ### 1. `axes` — get the question set, before reading anything
 
