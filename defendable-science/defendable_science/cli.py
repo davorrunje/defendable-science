@@ -2564,12 +2564,12 @@ extract = DocstringTyper(
     no_args_is_help=True,
 )
 digest.add_typer(extract, name="extract")
-depth = typer.Typer(
+depth = DocstringTyper(
     help="Depth mode's matrix-cell surface (defendable-science#142).",
     no_args_is_help=True,
 )
 digest.add_typer(depth, name="depth")
-depth_cells = typer.Typer(
+depth_cells = DocstringTyper(
     help="Matrix cells sourced from a paper's depth-mode reading, not extraction.",
     no_args_is_help=True,
 )
