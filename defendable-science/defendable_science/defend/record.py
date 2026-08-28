@@ -15,11 +15,17 @@ ADR-0033 (evidentiary points, shared with the ``digest`` skill).
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import date as date_cls
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from defendable_science.core.frontmatter import (
+    FrontmatterError,
+    rebuild,
+    set_field,
+    split_frontmatter,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -109,73 +115,11 @@ def _unresolved_gaps(points: list[PointRecord]) -> list[str]:
 
 
 # --- frontmatter patching ---------------------------------------------------
-
-
-def _split_frontmatter(text: str) -> tuple[list[str], list[str]]:
-    """Split a markdown doc into (frontmatter lines, body lines).
-
-    :raises RecordError: If there is no terminated ``---`` frontmatter block.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        raise RecordError("artifact has no YAML frontmatter")
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            return lines[1:i], lines[i + 1 :]
-    raise RecordError("artifact has an unterminated frontmatter block")
-
-
-def _rebuild(fm_lines: list[str], body_lines: list[str]) -> str:
-    """Reassemble a document from frontmatter and body lines."""
-    parts = ["---", *fm_lines, "---", *body_lines]
-    return "\n".join(parts) + "\n"
-
-
-def _set_field(fm_lines: list[str], key: str, value: str) -> list[str]:
-    """Set ``status.<key>`` to `value`, preserving any trailing comment.
-
-    Replaces the existing line if present; otherwise inserts it directly under
-    the ``status:`` block. Indentation is taken from the block's children.
-
-    :param fm_lines: The frontmatter lines (mutated copy returned).
-    :param key: The child key under ``status:`` (e.g. ``understanding``).
-    :param value: The rendered YAML value.
-    :returns: The updated frontmatter lines.
-    :raises RecordError: If there is no ``status:`` block.
-    """
-    lines = list(fm_lines)
-    status_idx = next(
-        (i for i, ln in enumerate(lines) if re.match(r"^status:\s*$", ln)), None
-    )
-    if status_idx is None:
-        raise RecordError("artifact frontmatter has no 'status:' block")
-
-    child_indent = "  "
-    for ln in lines[status_idx + 1 :]:
-        if ln.strip() and (stripped_indent := len(ln) - len(ln.lstrip())) > 0:
-            child_indent = " " * stripped_indent
-            break
-
-    key_pat = re.compile(rf"^{re.escape(child_indent)}{re.escape(key)}:\s*(.*)$")
-    for i in range(status_idx + 1, len(lines)):
-        line = lines[i]
-        # Stop at a dedent back to top level (end of the status block).
-        if line.strip() and not line.startswith(child_indent):
-            break
-        match = key_pat.match(line)
-        if match:
-            # A YAML comment needs whitespace before '#' (or the value is entirely
-            # a comment); a '#' *inside* a value is not a comment delimiter.
-            raw_value = match.group(1)
-            comment = ""
-            cmatch = re.search(r"\s#(.*)$", f" {raw_value}")
-            if cmatch:
-                comment = f"  # {cmatch.group(1).strip()}"
-            lines[i] = f"{child_indent}{key}: {value}{comment}"
-            return lines
-
-    lines.insert(status_idx + 1, f"{child_indent}{key}: {value}")
-    return lines
+#
+# The line-level helpers live in ``core.frontmatter`` — ``digest`` extraction
+# needs the same editing for ``status.extraction`` and must not reach into this
+# module's privates. Their `FrontmatterError` is re-raised as `RecordError`
+# here so this front-end's public contract (and its messages) are unchanged.
 
 
 def patch_understanding(
@@ -196,10 +140,13 @@ def patch_understanding(
     if status not in ("ok", "gaps"):
         raise RecordError(f"status must be 'ok' or 'gaps', got {status!r}")
     understanding = json.dumps({"status": status, "unresolved": gaps})
-    fm_lines, body_lines = _split_frontmatter(text)
-    fm_lines = _set_field(fm_lines, "understanding", understanding)
-    fm_lines = _set_field(fm_lines, "last-updated", last_updated)
-    return _rebuild(fm_lines, body_lines)
+    try:
+        fm_lines, body_lines = split_frontmatter(text)
+        fm_lines = set_field(fm_lines, "understanding", understanding)
+        fm_lines = set_field(fm_lines, "last-updated", last_updated)
+    except FrontmatterError as exc:
+        raise RecordError(str(exc)) from exc
+    return rebuild(fm_lines, body_lines)
 
 
 # --- the accountability log -------------------------------------------------
@@ -345,14 +292,35 @@ def record(
     )
 
 
-def _append_log(log_dir: Path, entry: LogEntry) -> Path:
-    """Write a per-examination log file (unique name), returning its path."""
+def append_log_entry(log_dir: Path, date: str, stem: str, body: str) -> Path:
+    """Write a uniquely-named log file under `log_dir`, returning its path.
+
+    One writer owns the accountability-log directory so its naming stays
+    consistent across the examination kinds that write into it — ``defend``'s
+    per-point record and ``digest`` extraction's per-paper cells both land
+    here, and the log is only independently reviewable if it is one trail.
+
+    Never overwrites: a second entry for the same artifact on the same day gets
+    a ``-2`` suffix, because the log is append-only evidence.
+
+    :param log_dir: The accountability-log directory (created if absent).
+    :param date: ISO date, used as the filename prefix.
+    :param stem: The artifact stem, used as the filename body.
+    :param body: The rendered YAML to write.
+    :returns: The path written.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(entry.artifact).stem
-    target = log_dir / f"{entry.date}-{stem}.yml"
+    target = log_dir / f"{date}-{stem}.yml"
     n = 2
     while target.exists():
-        target = log_dir / f"{entry.date}-{stem}-{n}.yml"
+        target = log_dir / f"{date}-{stem}-{n}.yml"
         n += 1
-    target.write_text(_log_yaml(entry), encoding="utf-8")
+    target.write_text(body, encoding="utf-8")
     return target
+
+
+def _append_log(log_dir: Path, entry: LogEntry) -> Path:
+    """Write a per-examination log file (unique name), returning its path."""
+    return append_log_entry(
+        log_dir, entry.date, Path(entry.artifact).stem, _log_yaml(entry)
+    )

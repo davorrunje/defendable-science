@@ -33,8 +33,9 @@ lifecycle §5 (`../../docs/design/01-lifecycle.md`).
 
 Do **not** use progress to decide a verdict, rank artifacts by "productivity," or
 compute a completion percentage — those are firewall/anti-Goodhart violations
-(see Guardrails). Status frontmatter is *written* by the resolve skills and by
-`defend` (the `understanding` field); progress only *reads* it.
+(see Guardrails). Status frontmatter is *written* by the resolve skills, by
+`defend` (the `understanding` field) and by `digest` extraction mode (the
+`extraction` field); progress only *reads* it.
 
 ## Verbs
 
@@ -138,12 +139,30 @@ Output shape everywhere: `{covered / total by state}` + `{explicit blockers}` +
 
 A fourth roll-up, independent of the hypothesis/paper/thesis hierarchy above
 (`status literature`): scan digest artifacts (for illustration: `docs/research/literature/digests/*.md`)
-frontmatter directly — the `understanding` block the `digest` skill writes via
-`defend record --target paper-comprehension` (ADR-0033) — and report, per
-digested paper, `{digested & understood / gaps unresolved}`, joined against
-`triage.yml` by citekey for context (role, disposition). Same anti-Goodhart
-posture as everywhere else in this skill: coverage + named gaps, never a count
-of "papers read" as a productivity signal.
+frontmatter directly and report **two rows**, joined against `triage.yml` by
+citekey for context (role, disposition).
+
+| Row | Read from | Reports |
+|---|---|---|
+| digested | `status.understanding` — written by `digest` depth mode via `defend record --target paper-comprehension` (ADR-0033) | per paper, `{digested & understood / gaps unresolved}` |
+| extracted | `status.extraction` — written by `digest` extraction mode | per paper, `{cells N / in-sample yes\|no / batch-check pending\|verified\|failed}` |
+
+**The two rows are never summed, averaged, or merged**, and neither is the
+other's subset. They certify different things: `understanding` means a human
+demonstrated comprehension of the paper; `extraction` means cells were recorded
+with locators and a human checked a deterministic sample of them. A survey
+author must see `extracted 40 / digested 3`, not one blended number — folding
+them together is guarantee inflation, and it would report a paper nobody read
+as read. A paper may legitimately carry both blocks, one, or neither.
+
+Report a batch's `batch-check` honestly: `pending` is *unchecked*, not passing,
+and `failed` applies to every paper in that extraction run, sampled or not —
+it is a finding about the batch, not about the individual paper. A paper with
+no `status.extraction` block was never extracted; leave it out of the extracted
+row rather than counting it as zero cells.
+
+Same anti-Goodhart posture as everywhere else in this skill: coverage + named
+gaps, never a count of "papers read" as a productivity signal.
 
 ## Anti-Goodhart
 

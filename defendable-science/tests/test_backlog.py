@@ -276,7 +276,7 @@ def test_registry_root_outside_the_repo_is_reported_in_full(tmp_path: Path) -> N
 
 
 def test_split_cells_without_borders() -> None:
-    assert b._split_cells("a | b | c") == ["a", "b", "c"]
+    assert b.split_cells("a | b | c") == ["a", "b", "c"]
 
 
 def test_loads_ragged_row_raises() -> None:
@@ -559,7 +559,7 @@ def test_registry_row_lands_inside_the_table(tmp_path: Path) -> None:
     assert "| second | docs/research/second | sim |\n\n## Scope notes" in text
     assert text.endswith("- **first** — the anchor paper.\n")
     # Still one table: the parser sees both rows.
-    doc = b._parse_document(text)
+    doc = b.parse_document(text)
     assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
 
 
@@ -572,7 +572,7 @@ def test_registry_extra_columns_are_filled_empty(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     b.append_papers_registry(papers, "second", "docs/research/second", "sim")
-    doc = b._parse_document(papers.read_text(encoding="utf-8"))
+    doc = b.parse_document(papers.read_text(encoding="utf-8"))
     assert doc.rows[1] == {
         "paper-id": "second",
         "root": "docs/research/second",
@@ -604,6 +604,19 @@ def test_registry_malformed_table_raises(tmp_path: Path) -> None:
         b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
 
 
+def test_registry_ragged_row_raises_naming_the_registry(tmp_path: Path) -> None:
+    # A short registry row would silently pad required columns; the diagnostic
+    # must name the artifact the human edited, not the backlog.
+    papers = tmp_path / "papers.md"
+    papers.write_text(
+        "| paper-id | root | backend |\n|---|---|---|\n| first |\n", encoding="utf-8"
+    )
+    before = papers.read_text(encoding="utf-8")
+    with pytest.raises(b.BacklogError, match="ragged registry row"):
+        b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
+    assert papers.read_text(encoding="utf-8") == before
+
+
 def test_registry_absent_file_creates_three_column_table(tmp_path: Path) -> None:
     papers = tmp_path / "nested" / "papers.md"
     b.append_papers_registry(papers, "p1", "docs/research/p1", "bench")
@@ -629,7 +642,7 @@ def test_scaffold_paper_row_is_inside_the_table(tmp_path: Path) -> None:
     layout.research_root.mkdir(parents=True)
     layout.papers_registry.write_text(_REGISTRY_DOC, encoding="utf-8")
     b.scaffold_paper(layout, "second", "a follow-up paper", backend="sim")
-    doc = b._parse_document(layout.papers_registry.read_text(encoding="utf-8"))
+    doc = b.parse_document(layout.papers_registry.read_text(encoding="utf-8"))
     assert [r["paper-id"] for r in doc.rows] == ["first", "second"]
     assert doc.rows[1]["root"] == "docs/research/second"
     assert doc.postamble.startswith("\n## Scope notes")
@@ -741,7 +754,7 @@ def test_promote_scaffold_paper_registers_and_reports(
     }
     assert (root / "paper" / "pitch.md").is_file()
     assert (root / "backlog.md").is_file()
-    registry = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    registry = b.parse_document((research / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows == [
         {
             "paper-id": "depth-collapse",
@@ -959,7 +972,7 @@ def test_scaffold_paper_registers_the_root_relative_to_the_layouts_repo_root(
 
     b.scaffold_paper(flat, "dc", "Depth collapse", backend="bench")
 
-    doc = b._parse_document(flat.papers_registry.read_text(encoding="utf-8"))
+    doc = b.parse_document(flat.papers_registry.read_text(encoding="utf-8"))
     assert doc.rows == [{"paper-id": "dc", "root": "writing/dc", "backend": "bench"}]
 
 
@@ -1121,7 +1134,7 @@ def test_promote_scaffold_needs_no_path_options(
 
     assert result.exit_code == 0, result.stdout
     assert (research / "depth-collapse" / "paper" / "pitch.md").is_file()
-    registry = b._parse_document((research / "papers.md").read_text(encoding="utf-8"))
+    registry = b.parse_document((research / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows[0]["root"] == "docs/research/depth-collapse"
 
 
@@ -1171,7 +1184,7 @@ def test_promote_scaffold_registers_under_a_non_default_research_root(
     )
 
     assert result.exit_code == 0, result.stdout
-    registry = b._parse_document((writing / "papers.md").read_text(encoding="utf-8"))
+    registry = b.parse_document((writing / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows == [
         {"paper-id": "dc", "root": "writing/dc", "backend": "bench"}
     ]
@@ -1214,7 +1227,7 @@ def test_an_explicit_research_root_is_still_rendered_against_the_repo_root(
     )
 
     assert result.exit_code == 0, result.stdout
-    registry = b._parse_document((writing / "papers.md").read_text(encoding="utf-8"))
+    registry = b.parse_document((writing / "papers.md").read_text(encoding="utf-8"))
     assert registry.rows[0]["root"] == "writing/dc"
 
 
@@ -1240,3 +1253,50 @@ def test_registry_dumps_carries_a_heading_and_no_data_rows() -> None:
     assert "| paper-id | root | backend |" in text
     assert "|---" in text
     assert text.count("\n|") == 2  # header + separator only
+
+
+_REGISTRY_WITH_FENCED_EXAMPLE = """# Papers
+
+Register a paper by adding a row:
+
+```markdown
+| paper-id | root | backend |
+|---|---|---|
+| example | docs/research/example | bench |
+```
+
+| paper-id | root | backend |
+|---|---|---|
+| first | docs/research/first | bench |
+
+## Scope notes
+"""
+
+
+def test_registry_row_never_lands_in_a_fenced_example(tmp_path: Path) -> None:
+    """A how-to fence is documentation, not the registry (ruling AG)."""
+    papers = tmp_path / "papers.md"
+    papers.write_text(_REGISTRY_WITH_FENCED_EXAMPLE, encoding="utf-8")
+    b.append_papers_registry(papers, "second", "docs/research/second", "sim")
+    text = papers.read_text(encoding="utf-8")
+    fence = _REGISTRY_WITH_FENCED_EXAMPLE[
+        _REGISTRY_WITH_FENCED_EXAMPLE.index(
+            "```markdown"
+        ) : _REGISTRY_WITH_FENCED_EXAMPLE.index("\n\n| paper-id")
+    ]
+    assert fence in text  # byte-identical, example row and all
+    assert text == _REGISTRY_WITH_FENCED_EXAMPLE.replace(
+        "| first | docs/research/first | bench |\n",
+        "| first | docs/research/first | bench |\n| second | docs/research/second | sim |\n",
+    )
+
+
+def test_backlog_loads_past_a_fenced_example_table(tmp_path: Path) -> None:
+    """`Backlog.loads` reads the real table, not the one in the code fence."""
+    text = (
+        "# Backlog\n\nFormat:\n\n```\n| id | title |\n|---|---|\n| X1 | example |\n"
+        "```\n\n| id | status |\n|---|---|\n| h1 | parked |\n"
+    )
+    backlog = b.Backlog.loads(text, "hypothesis")
+    assert [row["id"] for row in backlog.rows] == ["h1"]
+    assert "| X1 | example |" in backlog.preamble

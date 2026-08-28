@@ -51,5 +51,6 @@ Migrates to the plugin's `decisions/` alongside `resources/references/`.
 | [0037](0037-literature-asset-acquisition.md) | Literature asset acquisition — substrate spine under CSL `custom`, three-way match gate with an author hard gate | accepted |
 | [0038](0038-venue-resolvers-trusted-not-gated.md) | Rung 6 (`venue_resolvers`) is *trusted*, not gated — the audit trail records that no verification was performed instead of a fabricated three-axis `accept` | accepted |
 | [0039](0039-recorded-consumer-layout.md) | Consumer layout = a bounded `layout:` block of four recordable roots (rejecting one `research_root` override and a full per-file map); inside a paper is derived, thesis-ness is a fact on disk | accepted |
+| [0040](0040-digest-extraction-mode.md) | `digest` extraction mode — a second, weaker claim kept structurally separate from comprehension (`status.extraction` never `status.understanding`; two `progress` rows, never summed); the human checks a deterministic sample; a failed sample condemns the batch, not the paper | accepted |
 
 Format: MADR (Markdown Any Decision Records). Deciders: Davor Runje (with Claude).

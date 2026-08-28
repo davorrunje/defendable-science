@@ -110,6 +110,34 @@ Snowball steps use the same `defendable-science literature` commands (`resolve` 
    branch + current SOTA + the most-likely-cited-against + a simplest floor.
    Match splits / tuning budget / compute.
 
+**The matrix header is a machine-read question set.** At `--level paper`,
+`digest`'s extraction mode (`../digest/SKILL.md`) reads the `## Concept matrix`
+header as the literal list of questions to ask of every surveyed paper — the
+first column labels the row, every other column is an axis — and renders rows
+back into that table. So the header has hard shape rules, and `digest extract`
+**refuses rather than guessing** when they are broken. Get them right when you
+write the matrix, and preserve them when you edit it:
+
+- **One section named `Concept matrix`, holding exactly one table.** Two
+  sections with that heading, or a second table inside the section, and *which
+  table is the matrix* has no answer.
+- **No duplicate column names**, the row-label column included. Two columns of
+  one name collapse into a single cell, which would destroy the row labels.
+- **No unnamed columns, and no unreplaced `<attr N>` placeholders.** Extracting
+  forty papers against `<attr 1>` is worse than useless — choose the attributes
+  your delta turns on first.
+- **The header is the whole question set.** An axis absent from it cannot be
+  recorded, and every axis in it must be accounted for per paper (a paper that
+  says nothing on an axis gets an explicit `not-addressed` with a
+  justification, never an omission).
+- **`**This paper**` is your own delta** — extraction never reads or writes
+  that row.
+
+Rows are keyed by citekey in the first column and matched on exact equality, so
+rename a row label and the next render adds a *second* row for that paper
+rather than overwriting yours. Extraction never deletes a row: a paper that
+leaves the survey, you remove by hand.
+
 **Level tuning.** `hypothesis` → a fast **adversarial precedent rapid-review**:
 "would a reviewer say this is already known?" → verdict + the 1–3 papers that
 would reject it + the surviving delta; feeds `strategy.md`. `paper` → full

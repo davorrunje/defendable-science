@@ -18,7 +18,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date as date_cls
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
 import typer
 
@@ -30,6 +30,10 @@ from defendable_science.core.mirror import Mirror
 from defendable_science.dataset import manifest as manifest_mod
 from defendable_science.dataset import retrieval as retrieval_mod
 from defendable_science.defend import record as record_mod
+from defendable_science.digest import artifact as artifact_mod
+from defendable_science.digest import extraction as extraction_mod
+from defendable_science.digest import render as render_mod
+from defendable_science.digest import sampling as sampling_mod
 from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
@@ -38,6 +42,7 @@ from defendable_science.scaffold.init_repo import init_repo
 from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
 
 if TYPE_CHECKING:
+    import re
     from collections.abc import Iterator
 
     from defendable_science.core.http import HttpClient
@@ -2124,6 +2129,915 @@ def path() -> None:
     """Print the resolved key-store path."""
     typer.echo(str(keys_mod.store_path()))
     raise typer.Exit(code=0)
+
+
+# --- digest extract (defendable-science#100, spec §3.1) -------------------------------
+digest = typer.Typer(help="Reading-record helpers (digest).", no_args_is_help=True)
+app.add_typer(digest, name="digest")
+extract = typer.Typer(
+    help="Extraction mode: breadth reading into located matrix cells.",
+    no_args_is_help=True,
+)
+digest.add_typer(extract, name="extract")
+
+_PaperOpt = Annotated[
+    str | None,
+    typer.Option("--paper", help="Paper id; inferred from the cwd if omitted."),
+]
+_PositioningOpt = Annotated[
+    str | None,
+    typer.Option(
+        "--positioning", help="Positioning document; from the layout if omitted."
+    ),
+]
+
+
+def _positioning_context(
+    paper: str | None, positioning: str | None
+) -> tuple[dict[str, Any], Layout, Path]:
+    """Resolve the config, the layout, and the positioning document to read.
+
+    The *precedence* is :func:`_lit_registry_paths`'s — an explicit value wins,
+    otherwise the layout supplies the default — but the anchoring deliberately
+    is not. A configured path in ``config.yml`` describes a location in the
+    repository, so that function anchors it to the repo root; a path typed on
+    the command line means what it says relative to the cwd, so it is taken as
+    given here. Do not "reconcile" the two: they are answering different
+    questions.
+
+    Resolution lives here rather than in
+    :mod:`defendable_science.digest.extraction`, which only ever sees a path.
+
+    :param paper: The paper id, or ``None`` to infer it from the cwd.
+    :param positioning: An explicit positioning path, which always wins.
+    :returns: The config mapping, the resolved layout, and the document path.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block; code 2 when
+        ``--paper`` is omitted and the cwd is outside every paper.
+    """
+    config, layout = _layout_or_exit()
+    if positioning is not None:
+        return config, layout, Path(positioning)
+    paper_id = paper or _paper_dir_or_exit(layout, "--paper").name
+    return config, layout, layout.positioning(paper_id)
+
+
+def _locator_patterns(lit: dict[str, Any] | None) -> list[re.Pattern[str]]:
+    """Compile the locator pattern set, extended by config (spec §7.3).
+
+    :param lit: The parsed ``literature:`` config block, or ``None``.
+    :returns: The compiled matchers for :func:`~.extraction.is_valid_locator`.
+    :raises typer.Exit: Code 1 if ``literature.extraction`` is not a mapping, if
+        ``locator_patterns`` is not a list of strings, or if a configured
+        pattern is invalid or cannot be combined with the rest.
+    """
+    raw = lit.get("extraction") if lit is not None else None
+    if raw is not None and not isinstance(raw, dict):
+        typer.echo(
+            "invalid .defendable-science/config.yml: 'literature.extraction' "
+            "must be a mapping",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    configured = raw.get("locator_patterns") if raw is not None else None
+    if configured is not None and (
+        not isinstance(configured, list)
+        or not all(isinstance(p, str) for p in configured)
+    ):
+        typer.echo(
+            "invalid .defendable-science/config.yml: "
+            "'literature.extraction.locator_patterns' must be a list of "
+            "regular-expression strings",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    try:
+        return extraction_mod.compile_locator_patterns(configured)
+    except extraction_mod.ExtractionError as exc:
+        typer.echo(f"invalid .defendable-science/config.yml: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@extract.command(name="axes")
+def extract_axes(paper: _PaperOpt = None, positioning: _PositioningOpt = None) -> None:
+    """Print the extraction question set — the concept matrix's axes (spec §6.1).
+
+    Run before reading anything: it is what tells the agent which cells the
+    matrix expects, and it refuses a matrix that is not ready to be extracted
+    against rather than letting 40 papers be read against ``<attr 1>``.
+
+    :param paper: The paper id whose positioning document holds the matrix;
+        inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :raises typer.Exit: Code 0 with the axes as JSON; code 1 if the document is
+        missing or its matrix cannot yield axes; code 2 if the paper cannot be
+        resolved.
+    """
+    _config, _layout, path = _positioning_context(paper, positioning)
+    axes: list[str] | None = None
+    error: str | None = None
+    try:
+        axes = extraction_mod.axes_from_positioning(path)
+    except extraction_mod.ExtractionError as exc:
+        typer.echo(f"digest extract axes failed: {exc}", err=True)
+        error = str(exc)
+    # Emitted on the refusal too, and `axes` is then `null` rather than `[]`:
+    # all four verbs report the same way, and a caller must never be able to
+    # read a matrix this run could not parse as a matrix with no axes.
+    # `positioning` is reported absolute whichever branch resolved it: a
+    # consumer keying or diffing runs must not see two shapes for one document.
+    typer.echo(
+        json.dumps(
+            {
+                "ok": error is None,
+                "positioning": str(path.resolve()),
+                "axes": axes,
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if error is None else 1)
+
+
+def _parse_cells(raw: str) -> list[extraction_mod.Cell]:
+    """Parse the ``--cells`` JSON array into `Cell`s (spec §7.1).
+
+    An empty array is refused rather than treated as "nothing to do": a run that
+    recorded no cells and exited 0 would report a failed extraction as a
+    completed one.
+
+    :param raw: The JSON text read from the file or stdin.
+    :returns: The parsed cells, in file order.
+    :raises extraction_mod.ExtractionError: If the text is not a non-empty JSON
+        array of well-formed cell objects.
+    """
+    if not raw.strip():
+        raise extraction_mod.ExtractionError(
+            "--cells is empty; expected a JSON array of cell objects"
+        )
+    try:
+        data: object = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise extraction_mod.ExtractionError(
+            f"--cells is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(data, list):
+        raise extraction_mod.ExtractionError("--cells must be a JSON array")
+    if not data:
+        raise extraction_mod.ExtractionError(
+            "--cells is an empty array; there is nothing to record"
+        )
+    cells: list[extraction_mod.Cell] = []
+    for index, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise extraction_mod.ExtractionError(
+                f"--cells item {index} must be a JSON object, got {type(item).__name__}"
+            )
+        try:
+            cells.append(extraction_mod.cell_from_mapping(item))
+        except extraction_mod.ExtractionError as exc:
+            raise extraction_mod.ExtractionError(
+                f"--cells item {index}: {exc}"
+            ) from exc
+    return cells
+
+
+def _emit_record_report(
+    positioning: Path,
+    *,
+    axes: list[str] | None,
+    error: str | None = None,
+    recorded: list[dict[str, Any]] | None = None,
+    rejected: list[extraction_mod.Rejection] | None = None,
+    errors: list[dict[str, str]] | None = None,
+    triage_not_updated: list[dict[str, str]] | None = None,
+) -> NoReturn:
+    """Print ``record``'s JSON report and exit.
+
+    Emitted on every outcome, the unusable-input one included — a caller
+    scripting the four ``extract`` verbs must not have to special-case a run
+    that produced no JSON at all. ``error`` carries the whole-run failure that
+    stopped the command before it could validate anything; the per-paper
+    failures stay in their own three buckets, which mean different things and
+    must not be conflated. ``axes`` is ``null``, never ``[]``, when the matrix
+    could not be read: a matrix with no axes is a different fact.
+
+    :param positioning: The positioning document, reported absolute.
+    :param axes: The matrix's axes, or ``None`` if they could not be read.
+    :param error: The whole-run failure, if any.
+    :param recorded: The papers whose cells landed.
+    :param rejected: The validation refusals.
+    :param errors: The papers whose artifact write failed.
+    :param triage_not_updated: The papers whose cells landed but whose triage
+        row did not.
+    :raises typer.Exit: Code 0 when everything landed; code 1 otherwise.
+    """
+    recorded = recorded or []
+    rejected = rejected or []
+    errors = errors or []
+    triage_not_updated = triage_not_updated or []
+    ok = not (error or rejected or errors or triage_not_updated)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "positioning": str(positioning.resolve()),
+                "axes": axes,
+                "recorded": recorded,
+                "rejected": [dataclasses.asdict(r) for r in rejected],
+                "errors": errors,
+                "triage_not_updated": triage_not_updated,
+                "not_addressed": sum(r["not_addressed"] for r in recorded),
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
+
+
+@extract.command(name="record")
+def extract_record(
+    cells: Annotated[
+        str,
+        typer.Option(
+            "--cells", help="Extracted cells: a JSON-array file path, or '-' for stdin."
+        ),
+    ],
+    paper: _PaperOpt = None,
+    positioning: _PositioningOpt = None,
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Validate extracted cells and record them — one inseparable action (§3.3).
+
+    Validation is not a separate step this command *calls first*; it is the only
+    source of the cells it writes. A paper is accepted whole or not at all, so a
+    rejected paper leaves no artifact, no log entry and no partial row, while the
+    rest of the batch is still recorded (spec §7.2 rule 4).
+
+    Writes ``status.extraction`` — never ``status.understanding``: extraction
+    certifies located cells checked by sample, which is a weaker claim than
+    verified comprehension, and the two must not share a field (spec §3.2).
+
+    Each recorded paper then gets ``extracted`` and ``extraction-cells`` on its
+    ``triage.yml`` row — facts about the run, never ``disposition``, which is
+    the human's decision. The cells are written first, so a triage refusal (a
+    hand-annotated sidecar :func:`~.literature.registry.patch_triage` will not
+    rewrite) cannot discard an extraction that already landed; the refusal is
+    reported under ``triage_not_updated``, apart from ``errors``, and still
+    exits 1. Each such entry carries a ``kind``: ``refused`` (the human must
+    edit the sidecar by hand) or ``failed`` (the write itself did not happen).
+
+    :param cells: The cells to record — a JSON-array file path, or ``-`` for
+        stdin.
+    :param paper: The paper id whose concept matrix the cells are validated
+        against; inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted. The default comes from the layout rather
+        than the cwd because this command is meant to be run from inside a paper
+        directory, and a cwd-relative default would bury the run's evidence
+        there, where no reviewer would look for it.
+    :raises typer.Exit: Code 0 when every paper was recorded; code 1 when
+        anything was rejected, a write failed, a triage row could not be
+        updated, or the input, matrix or config is unusable; code 2 if the
+        paper cannot be resolved.
+    """
+    config, layout, path = _positioning_context(paper, positioning)
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
+    )
+    lit = _lit_block(config)
+    patterns = _locator_patterns(lit)
+    _registry_path, triage_path = _lit_registry_paths(lit, layout)
+    try:
+        axes = extraction_mod.axes_from_positioning(path)
+        raw = sys.stdin.read() if cells == "-" else Path(cells).read_text("utf-8")
+        parsed = _parse_cells(raw)
+    except (extraction_mod.ExtractionError, OSError) as exc:
+        typer.echo(f"digest extract record failed: {exc}", err=True)
+        _emit_record_report(path, axes=None, error=str(exc))
+
+    accepted, rejections = extraction_mod.validate(parsed, axes, patterns)
+    date = date_cls.today().isoformat()
+    recorded: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    triage_not_updated: list[dict[str, str]] = []
+    for citekey, paper_cells in sorted(accepted.items()):
+        artifact = layout.digest(citekey)
+        try:
+            # `init` does not scaffold literature/digests/ — the first recorded
+            # paper creates it.
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            log_entry = artifact_mod.write_extraction(
+                artifact,
+                paper_cells,
+                in_sample=False,
+                batch_check="pending",
+                log_dir=log_root,
+                date=date,
+            )
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            # The sweep continues and the report is still emitted. Aborting here
+            # would leave the author knowing only that *something* failed, while
+            # some papers had already landed — and re-running the whole batch to
+            # find out would append a second log entry for each of those.
+            typer.echo(f"digest extract record failed for {citekey}: {exc}", err=True)
+            errors.append(
+                {"citekey": citekey, "artifact": str(artifact), "reason": str(exc)}
+            )
+            continue
+        recorded.append(
+            {
+                "citekey": citekey,
+                "artifact": str(artifact),
+                "cells": len(paper_cells),
+                "not_addressed": sum(
+                    1 for c in paper_cells if c.value == extraction_mod.NOT_ADDRESSED
+                ),
+                "log_entry": str(log_entry),
+            }
+        )
+        # Second, and only once the cells are on disk: a refusal here must not
+        # discard an extraction that already landed (spec §7.5). Two factual
+        # scalars, never `disposition` — the disposition state machine is the
+        # human's decision, and a machine advancing it would be exactly the
+        # agency violation this tool exists to prevent.
+        try:
+            triage_path.parent.mkdir(parents=True, exist_ok=True)
+            registry_mod.patch_triage(
+                triage_path,
+                citekey,
+                {"extracted": date, "extraction-cells": len(paper_cells)},
+            )
+        except (registry_mod.RegistryError, OSError) as exc:
+            # Not a write *failure* of the artifact — the cells landed — so this
+            # is reported apart from `errors`, where it would read as a lost
+            # artifact. But the two ways it can happen call for different human
+            # action, and a reader must not have to regex an exception message
+            # to tell them apart: `refused` is `patch_triage` declining to
+            # destroy a hand-annotated sidecar's PRISMA rationales (its message
+            # names the fields to set by hand), `failed` is the OS refusing the
+            # write at all.
+            kind = (
+                "refused" if isinstance(exc, registry_mod.RegistryError) else "failed"
+            )
+            typer.echo(f"triage not updated for {citekey}: {exc}", err=True)
+            triage_not_updated.append(
+                {"citekey": citekey, "kind": kind, "reason": str(exc)}
+            )
+
+    for rejection in rejections:
+        typer.echo(extraction_mod.render_rejection(rejection), err=True)
+    _emit_record_report(
+        path,
+        axes=axes,
+        recorded=recorded,
+        rejected=rejections,
+        errors=errors,
+        triage_not_updated=triage_not_updated,
+    )
+
+
+#: The verdicts a human may record on a sampled check. Deliberately not
+#: ``pending``: that is the state an extraction *starts* in, and letting this
+#: command write it would give the batch a way to quietly un-fail itself.
+_SAMPLE_VERDICTS = ("verified", "failed")
+
+
+def _extraction_batch(
+    layout: Layout, command: str
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Collect every digest artifact that records an extraction (ruling AL).
+
+    A digest with no ``status.extraction`` block was never extracted — a
+    depth-mode reading record is the common case — so it is not part of an
+    extraction batch and gets no verdict. An artifact that cannot be *read* is
+    reported instead of skipped: excluding it silently would let a corrupt file
+    shrink the population the sample is drawn from.
+
+    :param layout: The resolved layout, which owns the digests directory.
+    :param command: The calling command, for the diagnostic — a reader must not
+        be told ``sample`` failed when they ran ``render``.
+    :returns: The batch's citekeys, and one error entry per unreadable artifact.
+    """
+    members: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path in sorted(layout.digests_dir.glob("*.md")):
+        try:
+            if artifact_mod.has_extraction(path):
+                members.append(path.stem)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"{command} failed for {path.stem}: {exc}", err=True)
+            errors.append(
+                {"citekey": path.stem, "artifact": str(path), "reason": str(exc)}
+            )
+    return members, errors
+
+
+def _note_error(
+    errors: list[dict[str, str]], citekey: str, artifact: Path, reason: str
+) -> None:
+    """Append an error entry unless this exact fact is already reported.
+
+    A missing artifact fails both the cell read and the verdict write with the
+    same message; reporting it twice would suggest two problems.
+    """
+    entry = {"citekey": citekey, "artifact": str(artifact), "reason": reason}
+    if entry not in errors:
+        typer.echo(f"digest extract sample failed for {citekey}: {reason}", err=True)
+        errors.append(entry)
+
+
+def _read_sampled_cells(
+    layout: Layout, sample: list[str], errors: list[dict[str, str]]
+) -> tuple[dict[str, list[extraction_mod.Cell]], list[dict[str, Any]]]:
+    """Read each drawn paper's cells — what the human is asked to check.
+
+    The report carries the axis, the value and the locator for every cell,
+    because the question the human answers is *does the source at that locator
+    actually say this?* (spec §8). A paper whose cells cannot be read is an
+    error, never an empty cell list: "nothing to check here" is the one answer
+    an unreadable artifact must not produce.
+
+    :param layout: The resolved layout, which owns the artifact paths.
+    :param sample: The drawn citekeys.
+    :param errors: The run's error list, appended to in place.
+    :returns: The cells per drawn paper, and the report's ``sampled`` entries.
+    """
+    drawn_cells: dict[str, list[extraction_mod.Cell]] = {}
+    sampled: list[dict[str, Any]] = []
+    for key in sample:
+        target = layout.digest(key)
+        try:
+            drawn_cells[key] = artifact_mod.read_cells(target)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            _note_error(errors, key, target, str(exc))
+            continue
+        sampled.append(
+            {
+                "citekey": key,
+                "artifact": str(target),
+                "cells": [dataclasses.asdict(c) for c in drawn_cells[key]],
+            }
+        )
+    return drawn_cells, sampled
+
+
+def _apply_verdict(
+    layout: Layout,
+    members: list[str],
+    *,
+    verdict: str,
+    drawn_cells: dict[str, list[extraction_mod.Cell]],
+    log_root: Path,
+    errors: list[dict[str, str]],
+) -> tuple[list[str], list[str]]:
+    """Write the human's verdict onto **every** member of the batch (spec §8).
+
+    Unsampled members included: the verdict is a finding about the population
+    the sample was drawn from. The drawn papers additionally get
+    ``in-sample: true`` and a check-log entry — they are the only ones a human
+    actually looked at, and claiming a check that did not happen, in either
+    place, would forge the evidence trail. The two frontmatter keys are written
+    through separate calls precisely so they cannot drift into meaning one
+    thing (spec §5).
+
+    A failure on one member is reported and the sweep continues; aborting would
+    leave the batch half-marked with no report of which half.
+
+    :param layout: The resolved layout.
+    :param members: Every citekey in the batch.
+    :param verdict: The verdict to write.
+    :param drawn_cells: The cells read for each sampled paper.
+    :param log_root: The accountability-log directory.
+    :param errors: The run's error list, appended to in place.
+    :returns: The citekeys updated, and the log entries written.
+    """
+    date = date_cls.today().isoformat()
+    updated: list[str] = []
+    log_entries: list[str] = []
+    for key in members:
+        target = layout.digest(key)
+        try:
+            artifact_mod.set_batch_check(target, verdict, date=date)
+            updated.append(key)
+            if key in drawn_cells:
+                artifact_mod.set_in_sample(target, in_sample=True, date=date)
+                log_entries.append(
+                    str(
+                        artifact_mod.append_check_log(
+                            target,
+                            key,
+                            drawn_cells[key],
+                            verdict=verdict,
+                            batch=members,
+                            log_dir=log_root,
+                            date=date,
+                        )
+                    )
+                )
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            _note_error(errors, key, target, str(exc))
+    return updated, log_entries
+
+
+def _emit_sample_report(
+    *,
+    members: list[str],
+    verdict: str | None,
+    errors: list[dict[str, str]],
+    error: str | None = None,
+    sample: list[str] | None = None,
+    sampled: list[dict[str, Any]] | None = None,
+    not_shown: list[str] | None = None,
+    updated: list[str] | None = None,
+    log_entries: list[str] | None = None,
+) -> NoReturn:
+    """Print the run's JSON report and exit.
+
+    ``size`` counts the papers *drawn*; ``sampled`` lists the ones whose cells
+    could actually be shown to the human. They differ exactly when a drawn
+    artifact could not be read, and ``not_shown`` names those papers rather than
+    leaving a reader to diff two lists — the report must not imply the run
+    established more than it did.
+
+    ``verdict`` is what was **recorded**, not what was asked for: a run that
+    refused a ``verified`` verdict reports ``null`` there and names the request
+    under ``verdict_requested``. The two are separate keys because a key called
+    ``verdict`` reading ``verified`` on a run that wrote nothing is one careless
+    read away from being taken for the outcome — and the outcome is what a
+    verdict key will be read as, whatever the neighbouring keys say.
+
+    :param members: The batch.
+    :param verdict: The verdict asked for, if any; reported as recorded only
+        when it actually landed on a member.
+    :param errors: Everything that failed, per paper.
+    :param error: The whole-run failure that stopped the command, if any —
+        an unknowable batch, an empty one, or a refused ``verified`` verdict.
+    :param sample: The drawn citekeys.
+    :param sampled: The drawn papers whose cells were read, with those cells.
+    :param not_shown: Drawn papers whose cells could not be read.
+    :param updated: Members whose ``batch-check`` was written.
+    :param log_entries: Check-log entries written.
+    :raises typer.Exit: Code 0 when the batch is non-empty and nothing failed;
+        code 1 otherwise.
+    """
+    written = updated or []
+    ok = bool(members) and not errors and error is None
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "batch": members,
+                "size": len(sample or []),
+                "sample": sample or [],
+                # Non-null only if it landed somewhere: a verdict nobody
+                # recorded is a request, and belongs under the other key.
+                "verdict": verdict if written else None,
+                "verdict_requested": verdict,
+                "sampled": sampled or [],
+                "not_shown": not_shown or [],
+                "updated": written,
+                "log_entries": log_entries or [],
+                "errors": errors,
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
+
+
+@extract.command(name="sample")
+def extract_sample(
+    citekey: Annotated[
+        list[str] | None,
+        typer.Option("--citekey", help="A batch member; repeatable."),
+    ] = None,
+    all_papers: Annotated[
+        bool,
+        typer.Option("--all", help="Every digest carrying a status.extraction block."),
+    ] = False,
+    size: Annotated[
+        int | None,
+        typer.Option("--size", help="How many papers to draw; max(3, 10%) by default."),
+    ] = None,
+    verdict: Annotated[
+        str | None,
+        typer.Option(
+            "--verdict",
+            help="Record the human's verdict on the batch: verified | failed.",
+        ),
+    ] = None,
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Draw the batch's deterministic sample, and record the human's verdict.
+
+    Two invocations, on purpose. The first draws — the same papers for the same
+    batch, in this process and every future one, so nobody can re-roll until an
+    easy sample comes up (spec §3.5) — and reports each drawn paper's cells with
+    their locators, which is exactly what the human is asked to check them
+    against. Nothing is written. The second passes ``--verdict`` over the same
+    batch and records the answer. The questioning itself is the skill's job: a
+    CLI prompt would put the agent between the human and the sources.
+
+    A ``failed`` verdict lands on **every** member, sampled or not, and touches
+    no cell. A process that produced one confidently-wrong cell in a sample of
+    three probably produced more in the other thirty-seven, so the finding is
+    about the batch; silently repairing the caught cell would convert that
+    signal into a tidy-looking local fix (spec §8). The drawn papers also get
+    ``in-sample: true``, which means *a human checked these cells* — which is
+    why the draw itself writes nothing: an unanswered draw has established
+    nothing about any paper.
+
+    ``verified`` is refused outright — nothing written, exit 1 — if any drawn
+    paper's cells could not be read, because the human cannot have verified what
+    they were never shown. ``failed`` is a finding rather than a claim, so it
+    lands regardless. On ``--all``, an artifact that cannot be read stops the run
+    before the draw: membership is unknowable, and since the draw is a function
+    of membership, sampling around it would change which papers get checked.
+
+    The verdict call re-draws over the batch it is given, so **give it the same
+    batch and the same ``--size``**. Both are deterministic, so identical
+    arguments mark exactly the papers the draw reported; a different membership
+    set or ``--size`` is a different batch, and marks a different set of papers
+    as checked.
+
+    Never writes ``status.understanding``. Extraction certifies located cells
+    checked by sample, which is a weaker claim than verified comprehension.
+
+    :param citekey: A batch member, repeatable. Mutually exclusive with
+        ``--all``, and exactly one of the two is required.
+    :param all_papers: Take the batch to be every digest artifact carrying a
+        ``status.extraction`` block.
+    :param size: How many papers to draw; ``max(3, 10%)`` of the batch by
+        default — a convention, not a statistical guarantee (spec §14).
+    :param verdict: ``verified`` or ``failed``; omitted, the command only draws.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted — anchored to the layout, never the cwd, so
+        the run's evidence lands where a reviewer looks for it.
+    :raises typer.Exit: Code 0 when the sample was drawn (and, with
+        ``--verdict``, recorded on every member); code 1 when the batch is
+        empty or unknowable, when any member could not be read or updated, or
+        when a ``verified`` verdict was refused; code 2 on a usage error.
+    """
+    if bool(citekey) == all_papers:
+        raise typer.BadParameter(
+            "give exactly one of --citekey (repeatable) or --all: the batch is "
+            "what the sample is drawn from and what a verdict applies to, so it "
+            "cannot be guessed"
+        )
+    if verdict is not None and verdict not in _SAMPLE_VERDICTS:
+        raise typer.BadParameter(
+            f"--verdict must be one of {list(_SAMPLE_VERDICTS)}, got {verdict!r}"
+        )
+    if size is not None and size < 1:
+        raise typer.BadParameter("--size must be at least 1")
+
+    _config, layout = _layout_or_exit()
+    if all_papers:
+        members, errors = _extraction_batch(layout, "digest extract sample")
+    else:
+        members, errors = sorted(set(citekey or [])), []
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
+    )
+
+    if all_papers and errors:
+        # Before drawing, and before writing anything. The draw is a
+        # deterministic function of the membership set, so sampling around an
+        # unreadable artifact would change *which* papers get checked — making
+        # a file unreadable would become a way to re-roll the sample, in the one
+        # feature built to prevent that. And a verdict recorded here would be a
+        # statement about a population the run has just admitted it cannot
+        # determine.
+        unknowable = (
+            f"digest extract sample failed: {len(errors)} artifact(s) under "
+            f"{layout.digests_dir} could not be read, so the batch cannot be "
+            "determined; nothing was drawn and nothing was written — repair "
+            "them, or name the batch explicitly with --citekey"
+        )
+        typer.echo(unknowable, err=True)
+        _emit_sample_report(
+            members=[], verdict=verdict, errors=errors, error=unknowable
+        )
+
+    # The headline of a whole-run failure, reported in the JSON as well as on
+    # stderr: a caller reading only the report must not have to infer why an
+    # empty draw is empty.
+    error: str | None = None
+    sample: list[str] = []
+    if members:
+        sample = sampling_mod.select_sample(
+            members,
+            size if size is not None else sampling_mod.default_size(len(members)),
+        )
+    else:
+        # Not a passed sample of size zero: no paper was checked, and saying so
+        # is the whole point of the command.
+        error = (
+            f"digest extract sample failed: no extracted papers under "
+            f"{layout.digests_dir} — nothing was sampled and nothing was "
+            "checked; run `digest extract record` first"
+        )
+        typer.echo(error, err=True)
+    drawn_cells, sampled = _read_sampled_cells(layout, sample, errors)
+    not_shown = [key for key in sample if key not in drawn_cells]
+
+    updated: list[str] = []
+    log_entries: list[str] = []
+    if verdict == "verified" and not_shown:
+        # `failed` is a finding and lands regardless; `verified` is a *claim*,
+        # and the check it claims did not happen for these papers. Exit 1 alone
+        # would not do: the exit code is transient, and the artifact is what
+        # every downstream reader consults.
+        error = (
+            "digest extract sample: refusing to record a verified batch — "
+            f"{len(not_shown)} of the {len(sample)} drawn papers "
+            f"({', '.join(not_shown)}) could not be shown to the human, so the "
+            "verification the verdict claims did not happen; repair them and "
+            "re-run, or record `failed`"
+        )
+        typer.echo(error, err=True)
+    elif verdict is not None:
+        updated, log_entries = _apply_verdict(
+            layout,
+            members,
+            verdict=verdict,
+            drawn_cells=drawn_cells,
+            log_root=log_root,
+            errors=errors,
+        )
+
+    _emit_sample_report(
+        members=members,
+        sample=sample,
+        verdict=verdict,
+        error=error,
+        sampled=sampled,
+        not_shown=not_shown,
+        updated=updated,
+        log_entries=log_entries,
+        errors=errors,
+    )
+
+
+def _cells_to_render(
+    layout: Layout, batch: list[str], errors: list[dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """Read each paper's recorded cells into the merge's ``rows`` argument.
+
+    A paper whose artifact cannot be read contributes **no** row rather than an
+    empty one: an empty row would overwrite the author's matrix line with
+    blanks on the strength of a file this run could not read.
+
+    :param layout: The resolved layout, which owns the artifact paths.
+    :param batch: The citekeys to render.
+    :param errors: The run's error list, appended to in place.
+    :returns: citekey → axis → value, for the papers that could be read.
+    """
+    rows: dict[str, dict[str, str]] = {}
+    for citekey in batch:
+        target = layout.digest(citekey)
+        try:
+            cells = artifact_mod.read_cells(target)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"digest extract render failed for {citekey}: {exc}", err=True)
+            errors.append(
+                {"citekey": citekey, "artifact": str(target), "reason": str(exc)}
+            )
+            continue
+        rows[citekey] = {cell.axis: cell.value for cell in cells}
+    return rows
+
+
+@extract.command(name="render")
+def extract_render(
+    citekey: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--citekey",
+            help="Render only these papers; repeatable. Every extracted paper "
+            "by default.",
+        ),
+    ] = None,
+    paper: _PaperOpt = None,
+    positioning: _PositioningOpt = None,
+) -> None:
+    """Merge the extracted cells into ``positioning.md``'s concept matrix (§9).
+
+    A merge, not a rewrite. The author's taxonomy prose, PRISMA log, per-branch
+    delta and section comments survive by construction, because only the
+    matrix table's own lines are re-emitted.
+
+    **Nothing is ever deleted.** A row in the file that this run has no cells
+    for is left exactly as it is, and a paper leaving the survey is removed by
+    hand — automatic deletion is the one operation here with no safe failure
+    mode. ``**This paper**`` is likewise never touched: it is the author's own
+    delta. Rows are keyed by citekey in the matrix's first column, matched on
+    exact equality, so a hand-edited row *label* is not overwritten — it stops
+    matching, and this command adds a **second** row for that paper. Restore
+    the label rather than re-editing it. Two smaller costs of the row being a
+    projection (spec §5): the matrix is re-emitted canonically, so hand-aligned
+    column padding is collapsed and GFM alignment specifiers are dropped.
+
+    A paper whose artifact cannot be read is reported and its row left alone —
+    the rest of the batch still lands, because skipping it changes nothing on
+    disk while refusing the whole merge would strand every other paper's cells.
+    A matrix that cannot be located unambiguously is a refusal instead: the
+    file is left byte-identical rather than written at a guess.
+
+    :param citekey: A paper to render; repeatable. Defaults to every digest
+        artifact carrying a ``status.extraction`` block.
+    :param paper: The paper id whose positioning document holds the matrix;
+        inferred from the cwd when omitted.
+    :param positioning: An explicit positioning document, overriding the layout.
+    :raises typer.Exit: Code 0 when every named paper was merged; code 1 when
+        the batch is empty, a paper's cells could not be read, the matrix is
+        not renderable, or the document could not be written; code 2 if the
+        paper cannot be resolved.
+    """
+    _config, layout, path = _positioning_context(paper, positioning)
+    errors: list[dict[str, str]] = []
+    # The headline of a whole-run failure — an unknowable batch, an empty one,
+    # or a refused merge — reported in the JSON as well as on stderr, so that a
+    # caller reading only the report is never left with an unexplained
+    # ``ok: false``.
+    error: str | None = None
+    if citekey:
+        batch = sorted(set(citekey))
+    else:
+        batch, errors = _extraction_batch(layout, "digest extract render")
+    if not batch and errors:
+        # An empty batch that is empty *because nothing could be read* is not
+        # an empty batch — whether anything was extracted is unknown, and
+        # "run `digest extract record`" would be the wrong repair. The headline
+        # sentence has to say which of the two happened, not just the errors
+        # underneath it.
+        error = (
+            f"digest extract render failed: {len(errors)} artifact(s) under "
+            f"{layout.digests_dir} could not be read and none could be loaded, "
+            "so whether any paper has been extracted is unknown; nothing was "
+            f"rendered and {path} was not touched — repair them and re-run"
+        )
+        typer.echo(error, err=True)
+    elif not batch:
+        # Not "rendered zero rows": no paper was extracted, and the matrix is
+        # left alone rather than rewritten to say so.
+        error = (
+            f"digest extract render failed: no extracted papers under "
+            f"{layout.digests_dir} — nothing was rendered and {path} was not "
+            "touched; run `digest extract record` first"
+        )
+        typer.echo(error, err=True)
+    rows = _cells_to_render(layout, batch, errors)
+    changed = False
+    rendered = sorted(rows)
+    if rows:
+        try:
+            before = path.read_text(encoding="utf-8")
+            merged = render_mod.render_matrix(path, rows)
+            if merged != before:
+                path.write_text(merged, encoding="utf-8")
+                changed = True
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            # The refusal leaves the document byte-identical, so no paper was
+            # merged: `rendered` is emptied rather than left naming the papers
+            # this run *would* have written.
+            error = f"digest extract render failed: {exc}"
+            typer.echo(error, err=True)
+            rendered = []
+    ok = bool(batch) and not errors and error is None
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "positioning": str(path.resolve()),
+                "batch": batch,
+                "rendered": rendered,
+                "changed": changed,
+                "errors": errors,
+                "error": error,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

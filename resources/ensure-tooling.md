@@ -68,6 +68,11 @@ environment changes** (installing `uv`/Python is the user's call), **honest stop
   which moved the bound past `0.2.x`, together with `research-init`'s
   `defendable-science init` and the repo-validation `check` alongside it — so the
   bound already covers all of them and does not move again for them. The
+  `digest extract axes | record | sample | render` group that extraction mode
+  calls lands in that same unreleased `0.3.0` line, so it needs **no** further
+  move of the lower bound; it does mean a consumer on a published `0.2.x` will
+  not have those verbs, which is exactly what the `>=0.3.0` floor already tells
+  them. The
   package's own releases (PEP 440, `v*` tags → PyPI) proceed on their own
   cadence.
 - **rclone** (the private-mirror engine) is a separate single static binary — **not

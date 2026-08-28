@@ -113,6 +113,15 @@ class Layout:
         """The triage decision sidecar."""
         return self.literature_dir / "triage.yml"
 
+    @property
+    def digests_dir(self) -> Path:
+        """The directory holding one ``digest`` artifact per read paper."""
+        return self.literature_dir / "digests"
+
+    def digest(self, citekey: str) -> Path:
+        """Return the digest artifact of `citekey`."""
+        return self.digests_dir / f"{citekey}.md"
+
     # --- config ---
 
     @property
@@ -159,6 +168,10 @@ class Layout:
     def paper_docs_dir(self, paper_id: str) -> Path:
         """Return the staged-document directory of `paper_id`."""
         return self.paper_dir(paper_id) / "paper"
+
+    def positioning(self, paper_id: str) -> Path:
+        """Return the positioning document of `paper_id`."""
+        return self.paper_docs_dir(paper_id) / "positioning.md"
 
     def hypothesis_dir(self, paper_id: str, slug: str) -> Path:
         """Return one hypothesis folder of `paper_id`."""

@@ -555,6 +555,24 @@ def _has_comments(text: str) -> bool:
     return any(line.lstrip().startswith("#") for line in text.splitlines())
 
 
+def _aliased_rows(raw: dict[Any, Any]) -> list[list[str]]:
+    """Return the groups of citekeys whose rows are the *same* Python object.
+
+    ``yaml.safe_load`` gives every alias of one anchor the same object, so
+    ``b2021: *shared`` is not a copy of ``a2020`` — it *is* ``a2020``. Identity
+    is the exact test for that and cannot false-positive: two rows written out
+    separately are distinct objects however identical they read.
+
+    :param raw: The top-level mapping, as :func:`triage_mapping` returned it.
+    :returns: One sorted citekey list per shared object, groups sorted; empty
+        when no two rows are the same object.
+    """
+    by_object: dict[int, list[str]] = {}
+    for key, row in raw.items():
+        by_object.setdefault(id(row), []).append(str(key))
+    return sorted(sorted(keys) for keys in by_object.values() if len(keys) > 1)
+
+
 def patch_triage(
     path: str | Path, citekey: str, updates: dict[str, str | int | bool | None]
 ) -> None:
@@ -575,17 +593,28 @@ def patch_triage(
     avoid. So the write is refused, naming the rows, and the human is told to
     edit by hand.
 
+    It covers, too, **two citekeys whose rows are one anchored mapping**
+    (``a2020: &shared`` / ``b2021: *shared``). ``yaml.safe_load`` hands both
+    names the same object, so setting a field on either sets it on both, and
+    ``safe_dump`` re-emits the alias — leaving a file that still looks
+    hand-authored while carrying, say, an extraction record for a paper nothing
+    ever extracted. Inventing an audit-trail entry is worse than losing one, so
+    this is refused as well, naming the rows that share an object.
+    :func:`_aliased_rows` tests object *identity*, which cannot false-positive:
+    two rows written out separately are distinct objects however alike they read.
+
     .. warning::
-       One class of loss is **not** guarded: ``yaml.safe_load`` resolves anchors
-       and aliases, so a sidecar using ``&anchor`` / ``*alias`` is written back
-       fully expanded. The data survives; the sharing does not. A file using
-       anchors should be hand-edited rather than patched.
+       One class of loss remains **unguarded** (defendable-science#143): an
+       anchored *scalar or nested value inside* a row (``rationale: *reason``)
+       is written back fully expanded. The data survives; the sharing does not.
+       A file using anchors that way should be hand-edited rather than patched.
 
     :param path: The sidecar path (created if absent).
     :param citekey: The row to patch (created if absent).
     :param updates: Scalar keys to set; a ``None`` value deletes the key.
     :raises RegistryError: If the file carries comments, holds a row that is not
-        a mapping, is unreadable, or any update value is not a scalar.
+        a mapping, holds two rows that are the same anchored mapping, is
+        unreadable, or any update value is not a scalar.
     """
     for key, value in updates.items():
         if value is not None and not isinstance(value, (str, int, bool)):
@@ -611,6 +640,15 @@ def patch_triage(
                 "'citekey: value' or a citekey with nothing under it yet. This "
                 "writer cannot rewrite the file without dropping them, so it is "
                 f"refusing — set {sorted(updates)} on {citekey!r} by hand"
+            )
+        shared = _aliased_rows(raw)
+        if shared:
+            raise RegistryError(
+                f"{target}: rows {shared} are the same mapping — citekeys joined "
+                "by a YAML anchor. Setting a field on any one of them would set "
+                "it on all of them, recording work that was never done on the "
+                "others. So it is refusing — give each row its own keys, or set "
+                f"{sorted(updates)} on {citekey!r} by hand"
             )
         data: dict[str, Any] = {str(key): row for key, row in raw.items()}
     else:
