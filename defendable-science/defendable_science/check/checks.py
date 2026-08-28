@@ -1287,9 +1287,13 @@ def run_checks(layout: Layout, probe: Probe) -> Report:
     together, and any unreadable files are reported consistently across all
     families.
 
+    Deduplicates findings that share the same severity, file, and message
+    (which may occur when multiple families read the same unreadable file).
+    Preserves the first occurrence to reflect the family that owns the read.
+
     :param layout: The resolved layout.
     :param probe: The filesystem seam.
-    :returns: The composed report with findings from all six families.
+    :returns: The composed report with deduplicated findings from all six families.
     """
     findings: list[Finding] = []
 
@@ -1301,4 +1305,14 @@ def run_checks(layout: Layout, probe: Probe) -> Report:
     findings.extend(check_config(layout, probe))
     findings.extend(check_cross_artifact(layout, probe))
 
-    return Report(findings=findings)
+    # Deduplicate findings that share severity, file, and message.
+    # Keep the first occurrence to preserve the family that owns the read.
+    seen: set[tuple[str, str, str]] = set()
+    deduplicated: list[Finding] = []
+    for finding in findings:
+        key = (finding.severity, finding.file, finding.message)
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(finding)
+
+    return Report(findings=deduplicated)

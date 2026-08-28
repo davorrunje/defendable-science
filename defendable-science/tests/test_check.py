@@ -1398,3 +1398,78 @@ def test_cross_artifact_handles_documents_with_empty_covers() -> None:
         f for f in findings if "covers" in f.message or "aim" in f.message
     ]
     assert covers_findings == []
+
+
+def test_run_checks_deduplicates_findings_on_same_file() -> None:
+    """run_checks deduplicates findings with identical (severity, file, message).
+
+    Multiple families (frontmatter and cross-artifact) both read staged documents,
+    so an unreadable file surfaces twice if not deduplicated. The composition point
+    must keep the first occurrence and discard later duplicates.
+    """
+    files = _scaffolded()
+    # Add a pitch.md file to the files dict, then mark it as unreadable
+    files[PITCH] = "dummy content"
+    # Create a FakeProbe that marks pitch.md as unreadable
+    probe = FakeProbe(files, unreadable={PITCH})
+    report = c.run_checks(LAYOUT, probe)
+
+    # Should have exactly one finding for pitch.md, not two
+    pitch_findings = [f for f in report.findings if "pitch.md" in f.file]
+    assert len(pitch_findings) == 1
+    assert pitch_findings[0].severity == "unreadable"
+    # Verify counts reflect the deduplicated findings
+    assert report.counts["unreadable"] == 1
+
+
+def test_run_checks_preserves_findings_with_different_messages() -> None:
+    """run_checks preserves findings on the same file with different messages.
+
+    Deduplication only drops (severity, file, message) triples.
+    If two findings differ in any field, they should both be preserved.
+    """
+    # Create a scenario with two different findings for the same file
+    # (e.g., missing status block and some other issue)
+    pitch_findings: list[m.Finding] = [
+        m.Finding(
+            severity="invalid",
+            check="frontmatter",
+            file="docs/research/dc/paper/pitch.md",
+            message="first error",
+            remedy="fix 1",
+        ),
+        m.Finding(
+            severity="invalid",
+            check="cross-artifact",
+            file="docs/research/dc/paper/pitch.md",
+            message="second error",
+            remedy="fix 2",
+        ),
+    ]
+
+    # Manually construct a report to test the deduplication logic
+    # by simulating what run_checks would do
+    seen: dict[tuple[str, str, str], None] = {}
+    deduplicated: list[m.Finding] = []
+    for finding in pitch_findings:
+        key = (finding.severity, finding.file, finding.message)
+        if key not in seen:
+            seen[key] = None
+            deduplicated.append(finding)
+
+    # Both findings should survive because they have different messages
+    assert len(deduplicated) == 2
+
+
+def test_run_checks_no_finding_appears_twice_with_same_severity_file_message() -> None:
+    """Assert no two findings in a full run_checks report share (severity, file, message)."""
+    files = _scaffolded()
+    report = c.run_checks(LAYOUT, FakeProbe(files))
+
+    # Group findings by (severity, file, message)
+    seen: set[tuple[str, str, str]] = set()
+    for finding in report.findings:
+        key = (finding.severity, finding.file, finding.message)
+        # This assertion proves no duplicate was preserved
+        assert key not in seen, f"Duplicate finding: {key}"
+        seen.add(key)

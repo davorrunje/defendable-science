@@ -161,3 +161,67 @@ def test_check_exits_one_on_an_invalid_layout_block(
     assert result.exit_code == 1
     assert "unknown layout key" in result.output
     assert "Traceback" not in result.output
+
+
+def test_unreadable_staged_document_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable staged document must not be double-reported by multiple families.
+
+    Both check_frontmatter and check_cross_artifact read staged documents,
+    so an unreadable file would be reported twice if not deduplicated.
+    The deduplication in run_checks must keep the first occurrence (frontmatter).
+    """
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    # Create a paper and write non-UTF-8 bytes to its pitch
+    pitch = tmp_path / "docs" / "research" / "dc" / "paper"
+    pitch.mkdir(parents=True)
+    (pitch / "pitch.md").write_bytes(b"\xff\xfe\x00\x01")
+
+    result = runner.invoke(app, ["check"])
+
+    payload = json.loads(result.stdout)
+    assert result.exit_code == 1
+    assert payload["counts"]["unreadable"] == 1, payload["counts"]
+    # Exactly one finding mentioning pitch.md
+    findings_for_pitch = [f for f in payload["findings"] if "pitch.md" in f["file"]]
+    assert len(findings_for_pitch) == 1
+    # The finding should be from frontmatter (the family that owns reading staged docs)
+    assert findings_for_pitch[0]["check"] == "frontmatter"
+
+
+def test_different_messages_on_same_file_are_not_deduplicated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two genuinely different findings on the same file must both survive deduplication.
+
+    Deduplication only drops findings with identical (severity, file, message).
+    If two findings differ in any field (e.g., different messages), both should remain.
+    """
+    monkeypatch.chdir(tmp_path)
+    _init(tmp_path)
+    # Create a paper with a pitch that has both frontmatter and table errors
+    # (frontmatter missing status block, and an unbound backend in registry)
+    pitch = tmp_path / "docs" / "research" / "dc" / "paper"
+    pitch.mkdir(parents=True)
+    (pitch / "pitch.md").write_text("# Pitch\n\nno frontmatter\n", encoding="utf-8")
+    # Also write an invalid registry to trigger a backend gap
+    papers = tmp_path / "docs" / "research" / "papers.md"
+    papers.write_text(
+        "# Papers\n\n| paper-id | root | backend |\n|---|---|---|\n| dc | docs/research/dc | |\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["check"])
+
+    payload = json.loads(result.stdout)
+    # The pitch has no frontmatter, and the paper has an empty backend
+    # These are two different defects with different messages, so both should appear
+    findings = payload["findings"]
+    pitch_findings = [f for f in findings if "pitch.md" in f["file"]]
+    backend_findings = [f for f in findings if "backend" in f["message"].lower()]
+    assert len(pitch_findings) >= 1  # Missing status block
+    assert len(backend_findings) >= 1  # Empty backend
+    # They should have different messages
+    assert pitch_findings[0]["message"] != backend_findings[0]["message"]
