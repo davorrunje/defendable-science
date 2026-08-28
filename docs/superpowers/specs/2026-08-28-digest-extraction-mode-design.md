@@ -179,11 +179,19 @@ status:
   extraction:
     cells: 8
     locators: ok
-    in-sample: false                # was THIS paper drawn into the sample?
-    batch-check: pending            # pending | verified | failed — the BATCH's verdict
+    in-sample: false
+    batch-check: pending
   last-updated: 2026-08-28
 ---
 ```
+
+*Amended 2026-08-28, during implementation.* This block originally carried inline `#`
+comments on `in-sample` and `batch-check` explaining each. That made the documented shape
+**unwritable**: an annotated child inside a block mapping is refused by the frontmatter writer,
+which will not silently destroy a comment it cannot round-trip. A reader copying this example
+verbatim would have hit that refusal. The explanations now live in prose below — `in-sample`
+records whether *this* paper was drawn into the sample, and `batch-check` is the verdict on the
+whole extraction run, one of `pending` | `verified` | `failed`.
 
 Two fields rather than one, because they answer different questions and conflating them
 produces nonsense. `in-sample` is a fact about this paper. `batch-check` is the verdict on the
