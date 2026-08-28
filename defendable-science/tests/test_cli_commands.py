@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from defendable_science.cli import app
@@ -723,6 +725,204 @@ def test_init_exits_1_on_an_invalid_layout_block(
     assert "Traceback" not in result.output
     assert result.stdout.strip() == ""
     assert not (repo / "docs").exists()
+
+
+# --- init layout options (#133) ------------------------------------------------------
+
+
+def _unstyled(text: str) -> str:
+    """Strip ANSI styling: CI sets FORCE_COLOR, so Rich styles option names."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def test_init_layout_options_scaffold_and_record_in_one_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of #133: no default-location registries to delete after."""
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--thesis",
+            "--research-root",
+            "writing",
+            "--literature-dir",
+            "bib",
+            "--datasets-manifest",
+            "data/datasets.yml",
+            "--thesis-dir",
+            "phd",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (repo / "writing" / "papers.md").is_file()
+    assert (repo / "bib" / "references.json").is_file()
+    assert (repo / "data" / "datasets.yml").is_file()
+    assert (repo / "phd" / "aims.md").is_file()
+    assert not (repo / "docs").exists()
+    config = yaml.safe_load(
+        (repo / ".defendable-science" / "config.yml").read_text(encoding="utf-8")
+    )
+    assert config["layout"] == {
+        "research_root": "writing",
+        "literature_dir": "bib",
+        "datasets_manifest": "data/datasets.yml",
+        "thesis_dir": "phd",
+    }
+
+
+def test_init_layout_options_are_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run with the same options changes nothing, byte for byte."""
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    options = ["init", "--research-root", "writing"]
+    runner.invoke(app, options)
+    before = {p: p.read_bytes() for p in sorted(repo.rglob("*")) if p.is_file()}
+
+    result = runner.invoke(app, options)
+
+    assert result.exit_code == 0, result.output
+    assert {p: p.read_bytes() for p in sorted(repo.rglob("*")) if p.is_file()} == before
+    assert json.loads(result.stdout)["counts"]["created"] == 0
+
+
+def test_init_records_only_the_divergent_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0039: a key equal to the default is not written into the block."""
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--research-root",
+            "writing",
+            "--literature-dir",
+            "writing/literature",
+            "--datasets-manifest",
+            "datasets.yml",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = yaml.safe_load(
+        (repo / ".defendable-science" / "config.yml").read_text(encoding="utf-8")
+    )
+    assert config["layout"] == {"research_root": "writing"}
+
+
+def test_init_refuses_a_layout_option_that_escapes_the_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--literature-dir", "../bib"])
+
+    assert result.exit_code == 1
+    assert "layout.literature_dir" in result.output
+    assert "stay inside the repository" in result.output
+    assert "Traceback" not in result.output
+    assert result.stdout.strip() == ""
+    assert not (repo / "docs").exists()
+
+
+def test_init_refuses_an_absolute_layout_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _fresh_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--research-root", str(tmp_path / "writing")])
+
+    assert result.exit_code == 1
+    assert "is absolute" in result.output
+    assert "Traceback" not in result.output
+    assert result.stdout.strip() == ""
+    assert not (repo / "docs").exists()
+    assert not (tmp_path / "writing").exists()
+
+
+def test_init_accepts_layout_options_that_agree_with_the_recorded_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Agreement is not a conflict: the scaffold lands at the recorded paths."""
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    (repo / ".defendable-science" / "config.yml").write_text(
+        "layout:\n  research_root: writing/\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--research-root", "writing"])
+
+    assert result.exit_code == 0, result.output
+    assert (repo / "writing" / "papers.md").is_file()
+
+
+def test_init_refuses_a_layout_option_that_contradicts_the_recorded_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never silently ignored: `init` cannot rewrite an existing config.yml."""
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    config = repo / ".defendable-science" / "config.yml"
+    config.write_text("layout:\n  research_root: writing/\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--research-root", "papers"])
+
+    assert result.exit_code == 1
+    output = _unstyled(result.output)
+    assert "--research-root" in output
+    assert "writing" in output  # what config.yml records
+    assert "papers" in output  # what the option asked for
+    assert "config.yml" in output  # how to resolve it
+    assert "Traceback" not in output
+    assert result.stdout.strip() == ""
+    assert not (repo / "papers").exists()
+    assert not (repo / "writing").exists()
+    assert config.read_text(encoding="utf-8") == "layout:\n  research_root: writing/\n"
+
+
+def test_init_refuses_a_layout_option_when_the_config_records_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing config with no `layout:` block still records the default."""
+    repo = _fresh_repo(tmp_path)
+    (repo / ".defendable-science").mkdir()
+    (repo / ".defendable-science" / "config.yml").write_text(
+        "cache_dir: .defendable-science/cache/\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["init", "--research-root", "writing"])
+
+    assert result.exit_code == 1
+    assert "--research-root" in _unstyled(result.output)
+    assert not (repo / "writing").exists()
+
+
+def test_init_help_lists_every_layout_option() -> None:
+    result = runner.invoke(app, ["init", "--help"])
+
+    assert result.exit_code == 0
+    helptext = _unstyled(result.stdout)
+    for option in (
+        "--research-root",
+        "--literature-dir",
+        "--datasets-manifest",
+        "--thesis-dir",
+    ):
+        assert option in helptext
 
 
 def test_init_reports_a_write_failure_without_a_traceback(

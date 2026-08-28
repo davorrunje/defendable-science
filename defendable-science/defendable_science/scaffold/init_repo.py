@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from defendable_science.scaffold import render as r
 from defendable_science.scaffold import status
+from defendable_science.scaffold.layout import recorded_layout
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -131,7 +132,15 @@ def init_repo(
     _write(
         layout.datasets_manifest, r.render_datasets_manifest(), actions, dry_run=dry_run
     )
-    _write(layout.config_file, r.render_config(cache_dir), actions, dry_run=dry_run)
+    # The config records the layout it was scaffolded into, so a divergent tree
+    # is written *and* recorded by one run — never a tree the next command
+    # cannot find (defendable-science#133).
+    _write(
+        layout.config_file,
+        r.render_config(cache_dir, recorded_layout(layout)),
+        actions,
+        dry_run=dry_run,
+    )
     _write(
         layout.config_dir / "rclone.conf.example",
         r.render_rclone_example(),

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
 #: The four keys ``config.yml``'s ``layout:`` block accepts.
 LAYOUT_KEYS: tuple[str, ...] = (
@@ -273,3 +273,92 @@ def resolve_layout(config: Mapping[str, Any], repo_root: Path) -> Layout:
             "thesis_dir", raw.get("thesis_dir"), research / "thesis", repo_root
         ),
     )
+
+
+@dataclass(frozen=True)
+class LayoutConflict:
+    """One key whose requested value contradicts the recorded one.
+
+    :param key: The layout key, as it is written in ``config.yml``.
+    :param recorded: The absolute path ``config.yml`` records for it.
+    :param requested: The absolute path the caller asked for.
+    """
+
+    key: str
+    recorded: Path
+    requested: Path
+
+
+def layout_from_overrides(
+    overrides: Mapping[str, str | None], repo_root: Path
+) -> Layout:
+    """Resolve a layout from caller-supplied overrides (``init``'s options).
+
+    A thin front door onto :func:`resolve_layout`, so an option gets **exactly**
+    the validation a ``layout:`` block gets — relative, inside the repository, no
+    ``..`` escape — rather than a second copy of the rule that could drift from
+    it.
+
+    :param overrides: Layout key → value; a ``None`` value means "not given" and
+        falls back to the default, matching an omitted block key.
+    :param repo_root: The repository root.
+    :returns: The resolved layout.
+    :raises LayoutError: On an unknown key or an invalid value, identically to a
+        ``layout:`` block carrying the same value.
+    """
+    block = {key: value for key, value in overrides.items() if value is not None}
+    return resolve_layout({"layout": block}, repo_root)
+
+
+def recorded_layout(layout: Layout) -> dict[str, str]:
+    """Return the ``layout:`` block that records `layout`, defaults omitted.
+
+    ADR-0039's defaults-omitted rule, applied in the writing direction: a repo
+    matching the default records nothing, and a key whose value is what the
+    resolver would have derived anyway is left out. Derived defaults follow the
+    **resolved** ``research_root``, so recording ``research_root: writing`` does
+    not also write the ``writing/literature`` and ``writing/thesis`` it carries.
+
+    :param layout: A resolved layout.
+    :returns: Repo-relative POSIX paths, keyed in :data:`LAYOUT_KEYS` order —
+        the inverse of :func:`resolve_layout`, so the block it returns resolves
+        back to `layout`.
+    """
+    default = Layout.default(layout.repo_root)
+    derived = {
+        "research_root": default.research_root,
+        "literature_dir": layout.research_root / "literature",
+        "datasets_manifest": default.datasets_manifest,
+        "thesis_dir": layout.research_root / "thesis",
+    }
+    return {
+        key: layout.rel(getattr(layout, key)).as_posix()
+        for key in LAYOUT_KEYS
+        if getattr(layout, key) != derived[key]
+    }
+
+
+def layout_conflicts(
+    recorded: Layout, requested: Layout, keys: Iterable[str]
+) -> list[LayoutConflict]:
+    """Report the `keys` on which `requested` contradicts `recorded`.
+
+    Only the keys the caller actually asked for are compared: an option nobody
+    passed cannot contradict anything.
+
+    :param recorded: The layout ``config.yml`` resolves to.
+    :param requested: The layout the caller's options resolve to.
+    :param keys: The layout keys the caller supplied.
+    :returns: One conflict per disagreeing key, in :data:`LAYOUT_KEYS` order;
+        empty when every supplied key agrees.
+    """
+    asked = set(keys)
+    return [
+        LayoutConflict(
+            key=key,
+            recorded=getattr(recorded, key),
+            requested=getattr(requested, key),
+        )
+        for key in LAYOUT_KEYS
+        if key in asked and getattr(recorded, key) != getattr(requested, key)
+    ]

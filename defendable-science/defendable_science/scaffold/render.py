@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import yaml
+
 from defendable_science.exploration.backlog import (
     HYPOTHESIS_PREAMBLE,
     Backlog,
@@ -22,7 +24,7 @@ from defendable_science.exploration.backlog import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 #: Mirrors ``core.config``'s cache default (ADR-0031); written explicitly so the
 #: scaffolded ``.gitignore`` and the runtime cache path cannot drift.
@@ -48,6 +50,25 @@ _MILESTONE_ENTRY = """\
 """
 
 _GITIGNORE_MARKER = "# defendable-science"
+
+#: What a default repo's ``config.yml`` says about ``layout:`` — a comment, not
+#: a key, because a repo matching the default records nothing.
+_LAYOUT_STUB = """\
+# layout:
+#   Only needed if this repo diverges from the default tree. Keys:
+#   research_root, literature_dir, datasets_manifest, thesis_dir.
+#   Omitted keys fall back to the default; an unknown key is an error.
+"""
+
+#: Precedes a recorded block, so the author reading the file knows why it is
+#: there and what an omitted key means. Carries the stub's key list too: the
+#: author whose repo already diverges is the one most likely to add a second
+#: key, and this is the only place in the file that says which keys exist.
+_RECORDED_LAYOUT_PREAMBLE = """\
+# This repo diverges from the default tree, so the divergent roots are recorded
+# here. Keys: research_root, literature_dir, datasets_manifest, thesis_dir.
+# Omitted keys fall back to the default; an unknown key is an error.
+"""
 
 
 def render_papers_registry() -> str:
@@ -101,16 +122,30 @@ def render_datasets_manifest() -> str:
     )
 
 
-def render_config(cache_dir: str = DEFAULT_CACHE_DIR) -> str:
+def render_config(
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    layout_block: Mapping[str, str] | None = None,
+) -> str:
     """Render ``.defendable-science/config.yml`` with the five consumer bindings.
 
     Every binding is ``null`` until the author sets it. ``layout:`` is written as
-    a comment, not a key: a repo matching the default tree records nothing, so
-    there is nothing to keep in step.
+    a comment, not a key, when the repo matches the default tree: it records
+    nothing, so there is nothing to keep in step. A repo that diverges gets a
+    real block instead, written here at scaffold time — ``init`` never rewrites
+    an existing ``config.yml`` (ADR-0039, defendable-science#133).
 
     :param cache_dir: The cache root to record (ADR-0031).
+    :param layout_block: The divergent layout keys to record, defaults already
+        omitted (:func:`defendable_science.scaffold.layout.recorded_layout`).
+        Empty or ``None`` renders the commented stub.
     :returns: The config file text.
     """
+    layout = (
+        _LAYOUT_STUB
+        if not layout_block
+        else _RECORDED_LAYOUT_PREAMBLE
+        + yaml.safe_dump({"layout": dict(layout_block)}, sort_keys=False)
+    )
     return f"""\
 # defendable-science project configuration.
 #
@@ -143,11 +178,7 @@ literature:
     remote: null
     base_path: null
 
-# layout:
-#   Only needed if this repo diverges from the default tree. Keys:
-#   research_root, literature_dir, datasets_manifest, thesis_dir.
-#   Omitted keys fall back to the default; an unknown key is an error.
-"""
+{layout}"""
 
 
 def render_rclone_example() -> str:

@@ -128,14 +128,17 @@ actionable message, matching the config-error convention ADR-0031 established
   resolved from the layout (an explicit value still wins), and the literature
   registry/triage defaults now come from the layout rather than from module-level
   path literals.
-- **`datasets_manifest` is recordable but not yet routed.** The `dataset`
-  commands still take the manifest as an argument defaulting to the literal
-  `datasets.yml`, so a repo that records `datasets_manifest: data/datasets.yml`
-  is validated and resolved correctly and then ignored by the only commands that
-  read a manifest. Recording a key the tooling does not honour is precisely the
-  failure this ADR exists to end, so it is tracked as
-  [#124](https://github.com/davorrunje/defendable-science/issues/124) rather than
-  left implied by the key's existence.
+- **`datasets_manifest` is routed into the `dataset` commands.** When this ADR
+  was written it was recordable but ignored: the commands took the manifest as
+  an argument defaulting to the literal `datasets.yml`, so a repo recording
+  `datasets_manifest: data/datasets.yml` had it validated, resolved, and then
+  ignored by the only commands that read a manifest — precisely the failure this
+  ADR exists to end. That gap was tracked as
+  [#124](https://github.com/davorrunje/defendable-science/issues/124) and closed
+  by [#126](https://github.com/davorrunje/defendable-science/pull/126):
+  `cli.py`'s `_manifest_path()` now falls back to `layout.datasets_manifest`, so
+  an omitted `--manifest` resolves to the recorded path from any directory,
+  while an explicit value still wins and is honoured exactly as typed.
 - **The asymmetry with `cache_dir` has since been resolved, not left standing.**
   When this ADR was written, `layout:` keys were confined to the repository while
   `cache_dir` was only *anchored* to it, so `cache_dir: ../../elsewhere` still
@@ -144,6 +147,21 @@ actionable message, matching the config-error convention ADR-0031 established
   deliberately allows an off-repo cache (a scratch volume, a CI mount) and that is
   how such a cache is expressed. See ADR-0031 § Consequences and
   [#123](https://github.com/davorrunje/defendable-science/issues/123).
+- **`init` records the layout it scaffolds into
+  ([#133](https://github.com/davorrunje/defendable-science/issues/133)).** The
+  four keys are also `init` options — `--research-root`, `--literature-dir`,
+  `--datasets-manifest`, `--thesis-dir` — which override the resolved layout for
+  that run *and* are written into the `layout:` block of the `config.yml` it
+  renders. `adopt` therefore records a divergence in one run instead of four
+  steps (init, hand-add the block, re-init, delete the registries the first run
+  left at the defaults). The options reuse `resolve_layout()` rather than a
+  second validation path, so an option is validated exactly like a block key,
+  and the defaults-omitted rule holds in the writing direction too: a value
+  equal to the default is not written. Because `init` still never rewrites an
+  existing `config.yml`, an option passed at a repo that already has one must
+  *agree* with what it records; a contradiction exits 1 naming the key and both
+  values, since silently ignoring it would leave the author believing they had
+  recorded a layout they had not.
 - **The recordable surface is a commitment.** Four keys is now the contract
   `adopt` and `check` are written against; widening it later is cheap, narrowing
   it is a breaking change for any repo that recorded a key.
@@ -170,6 +188,15 @@ actionable message, matching the config-error convention ADR-0031 established
   semantics, and because it would make thesis-ness a claim in config that can
   disagree with the tree on disk — exactly the kind of unverifiable assertion
   `check` exists to eliminate.
+- **Merging the `layout:` block into an existing `config.yml`** (#133's option
+  B) instead of taking it as `init` options. It would spare the author the
+  option names, but the scaffolded `config.yml` is 21 comment lines out of 35 —
+  the comments *are* the documentation of each binding — and `pyyaml` cannot
+  round-trip comments. `literature/registry.py::patch_triage` already refuses to
+  rewrite a commented YAML file for exactly this reason. Merging would either
+  destroy those comments or require a comment-preserving YAML library, and this
+  package adds no runtime dependency for a convenience. `init`'s
+  never-overwrite guarantee also stops being a single rule the reader can hold.
 - **Leaving the layout as prose and hard-coding the defaults** — the status quo.
   It is the smallest diff, but it leaves nothing for `check` to check against,
   no way for `adopt` to record a divergence, and nine copies to keep in step by

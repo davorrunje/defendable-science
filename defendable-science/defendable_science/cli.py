@@ -39,7 +39,13 @@ from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
 from defendable_science.literature import registry as registry_mod
 from defendable_science.scaffold.init_repo import init_repo
-from defendable_science.scaffold.layout import Layout, LayoutError, resolve_layout
+from defendable_science.scaffold.layout import (
+    Layout,
+    LayoutError,
+    layout_conflicts,
+    layout_from_overrides,
+    resolve_layout,
+)
 
 if TYPE_CHECKING:
     import re
@@ -287,6 +293,57 @@ def _cache_root(config: dict[str, Any] | None = None, root: Path | None = None) 
 # --- init (defendable-science#123) ----------------------------------------------------
 
 
+def _layout_with_options_or_exit(
+    recorded: Layout, options: dict[str, str | None]
+) -> Layout:
+    """Fold ``init``'s layout options into the layout ``config.yml`` resolved to.
+
+    ``init`` never rewrites an existing ``config.yml``, so an option passed at a
+    repo that already has one can only agree with it or be a lie. Agreement
+    proceeds; disagreement exits, because silently ignoring the option would
+    leave the author believing they had recorded a layout they had not
+    (defendable-science#133).
+
+    :param recorded: The layout ``config.yml`` resolves to (the default when
+        there is no config).
+    :param options: Layout key → the value passed on the command line, or
+        ``None`` when the option was not given.
+    :returns: The layout to scaffold into: `recorded` when no option was given
+        or when every option agrees with it, otherwise the requested one.
+    :raises typer.Exit: Code 1 on an invalid option value, or when an option
+        contradicts an existing ``config.yml``.
+    """
+    given = {key: value for key, value in options.items() if value is not None}
+    if not given:
+        return recorded
+    try:
+        requested = layout_from_overrides(given, recorded.repo_root)
+    except LayoutError as exc:
+        typer.echo(f"invalid layout option: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not recorded.config_file.is_file():
+        return requested
+    conflicts = layout_conflicts(recorded, requested, given)
+    if conflicts:
+        detail = "\n".join(
+            f"  --{c.key.replace('_', '-')} asks for "
+            f"{recorded.rel(c.requested).as_posix()!r}, but config.yml records "
+            f"{recorded.rel(c.recorded).as_posix()!r} for layout.{c.key}"
+            for c in conflicts
+        )
+        typer.echo(
+            "init never rewrites an existing .defendable-science/config.yml, so "
+            "this option cannot take effect:\n"
+            f"{detail}\n"
+            "Add or edit the layout: block in .defendable-science/config.yml to "
+            "record the new path (a config with no block records the default), "
+            "or drop the option, then re-run.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return recorded
+
+
 @app.command()
 def init(
     root: Annotated[
@@ -306,6 +363,37 @@ def init(
         bool,
         typer.Option("--dry-run", help="Report what would be written; write nothing."),
     ] = False,
+    research_root: Annotated[
+        str | None,
+        typer.Option(
+            "--research-root",
+            help=(
+                "Record a divergent research root (repo-relative). "
+                "Carries the literature and thesis directories with it."
+            ),
+        ),
+    ] = None,
+    literature_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--literature-dir",
+            help="Record a divergent literature directory (repo-relative).",
+        ),
+    ] = None,
+    datasets_manifest: Annotated[
+        str | None,
+        typer.Option(
+            "--datasets-manifest",
+            help="Record a divergent dataset registry path (repo-relative).",
+        ),
+    ] = None,
+    thesis_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--thesis-dir",
+            help="Record a divergent thesis directory (repo-relative).",
+        ),
+    ] = None,
 ) -> None:
     """Scaffold the consumer layout, and report every path considered as JSON.
 
@@ -331,13 +419,32 @@ def init(
     :param thesis: Also scaffold the optional thesis tree (aims, milestones,
         the kappa directory).
     :param dry_run: Report exactly what a real run would do, touching nothing.
+    :param research_root: Scaffold into, and record, a divergent research root —
+        so ``adopt`` lands the tree where the repo already keeps it in one run,
+        with nothing to delete at the default locations afterwards. Each layout
+        option must be repo-relative and stay inside the repository, and a value
+        equal to the default is *not* recorded (ADR-0039).
+    :param literature_dir: As `research_root`, for the literature directory.
+    :param datasets_manifest: As `research_root`, for the dataset registry.
+    :param thesis_dir: As `research_root`, for the thesis directory.
     :raises typer.Exit: Code 1 if ``--root`` names something that is not an
-        existing directory, on an invalid ``.defendable-science/config.yml``, or
-        if a path cannot be written (an unwritable tree, a parent that is a
-        file). A failed run prints no report: a partial scaffold must never read
-        as a completed one.
+        existing directory, on an invalid ``.defendable-science/config.yml`` or
+        an invalid layout option, if a layout option contradicts a layout an
+        existing ``config.yml`` already records (this command does not rewrite
+        it, so the option could not take effect), or if a path cannot be written
+        (an unwritable tree, a parent that is a file). A failed run prints no
+        report: a partial scaffold must never read as a completed one.
     """
     config, layout = _layout_or_exit(_explicit_root_or_exit(root))
+    layout = _layout_with_options_or_exit(
+        layout,
+        {
+            "research_root": research_root,
+            "literature_dir": literature_dir,
+            "datasets_manifest": datasets_manifest,
+            "thesis_dir": thesis_dir,
+        },
+    )
     # Repo-relative and directory-shaped, matching `render.DEFAULT_CACHE_DIR`:
     # this string is written into both config.yml and .gitignore, and an
     # absolute path in either would be wrong (.gitignore) or unportable (config).
