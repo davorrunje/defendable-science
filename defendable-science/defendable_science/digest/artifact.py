@@ -286,6 +286,25 @@ def _cell_from_item(item: Any, citekey: str, path: Path) -> Cell:
 # --- the frontmatter block ------------------------------------------------------
 
 
+def _status_extraction(fm_lines: list[str], path: Path) -> dict[str, Any] | None:
+    """Return the artifact's ``status.extraction`` mapping, or ``None``.
+
+    ``None`` means *this paper was never extracted* — a fact. Frontmatter that
+    will not parse is a different thing entirely and raises, because an
+    unreadable artifact reported as an unextracted one is exactly the silent
+    substitution the failure-honesty rule forbids.
+
+    :raises ExtractionError: If the frontmatter will not parse.
+    """
+    try:
+        data = yaml.safe_load("\n".join(fm_lines))
+    except yaml.YAMLError as exc:
+        raise ExtractionError(f"{path}: frontmatter is not valid YAML: {exc}") from exc
+    status = data.get("status") if isinstance(data, dict) else None
+    block = status.get(EXTRACTION_KEY) if isinstance(status, dict) else None
+    return block if isinstance(block, dict) else None
+
+
 def _extraction_mapping(fm_lines: list[str], path: Path) -> dict[str, Any]:
     """Return the artifact's existing ``status.extraction`` mapping.
 
@@ -294,19 +313,38 @@ def _extraction_mapping(fm_lines: list[str], path: Path) -> dict[str, Any]:
         want of a PDF gets no block at all (spec §6.4), and inventing one here
         would manufacture a record of an extraction that did not happen.
     """
-    try:
-        data = yaml.safe_load("\n".join(fm_lines))
-    except yaml.YAMLError as exc:
-        raise ExtractionError(f"{path}: frontmatter is not valid YAML: {exc}") from exc
-    status = data.get("status") if isinstance(data, dict) else None
-    block = status.get(EXTRACTION_KEY) if isinstance(status, dict) else None
-    if not isinstance(block, dict):
+    block = _status_extraction(fm_lines, path)
+    if block is None:
         raise ExtractionError(
             f"{path}: no 'status.{EXTRACTION_KEY}' block — this paper has not "
             "been extracted, so there is no extraction to record a verdict "
             "against"
         )
     return block
+
+
+def has_extraction(artifact: str | Path) -> bool:
+    """Whether `artifact` carries a ``status.extraction`` block.
+
+    The membership test for an extraction batch: a digest with no such block was
+    never extracted (it may be a depth-mode reading record, which owns
+    ``status.understanding`` instead), so it is not a paper this batch's sampled
+    check has anything to say about.
+
+    :param artifact: The per-paper digest artifact.
+    :returns: ``True`` if the artifact records an extraction.
+    :raises ExtractionError: If the artifact is missing, or its frontmatter is
+        absent or unparsable — a file that cannot be read is not evidence that
+        the paper was never extracted, and must not be quietly excluded.
+    """
+    path = Path(artifact)
+    if not path.is_file():
+        raise ExtractionError(f"{path}: digest artifact not found")
+    try:
+        fm_lines, _body = split_frontmatter(path.read_text(encoding="utf-8"))
+    except FrontmatterError as exc:
+        raise ExtractionError(f"{path}: {exc}") from exc
+    return _status_extraction(fm_lines, path) is not None
 
 
 def _dump_block(block: dict[str, Any], path: Path) -> str:
@@ -486,3 +524,51 @@ def set_batch_check(
     except FrontmatterError as exc:
         raise ExtractionError(f"{path}: {exc}") from exc
     path.write_text(rebuild(fm_lines, body), encoding="utf-8")
+
+
+def append_check_log(
+    artifact: str | Path,
+    citekey: str,
+    cells: list[Cell],
+    *,
+    verdict: str,
+    batch: Iterable[str],
+    log_dir: str | Path,
+    date: str,
+) -> Path:
+    """Record one sampled paper's check in the shared accountability log.
+
+    The same trail :func:`write_extraction` and ``defend record`` write to
+    (spec §8), so the evidence is independently reviewable later without
+    re-running the session. Every cell the human was shown goes in, alongside
+    the batch it was drawn from — the verdict is a statement about that
+    population, and an entry that named only the paper would read as one about
+    the paper.
+
+    :param artifact: The sampled paper's digest artifact.
+    :param citekey: The paper the cells belong to.
+    :param cells: The cells the human checked.
+    :param verdict: The batch verdict recorded, from `BATCH_CHECK_VERDICTS`.
+    :param batch: Every citekey in the batch, sampled or not.
+    :param log_dir: The accountability-log directory.
+    :param date: ISO date for the entry and its filename.
+    :returns: The log entry written.
+    :raises ExtractionError: If `verdict` is not a known verdict.
+    """
+    _check_verdict(verdict)
+    path = Path(artifact)
+    entry = {
+        "date": date,
+        "artifact": str(path),
+        "kind": "extraction-check",
+        "citekey": citekey,
+        "verdict": verdict,
+        "batch": sorted(batch),
+        "cells": [_cell_mapping(c) for c in cells],
+    }
+    return append_log_entry(
+        Path(log_dir),
+        date,
+        citekey,
+        yaml.safe_dump([entry], sort_keys=False, allow_unicode=True),
+    )

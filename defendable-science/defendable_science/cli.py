@@ -32,6 +32,7 @@ from defendable_science.dataset import retrieval as retrieval_mod
 from defendable_science.defend import record as record_mod
 from defendable_science.digest import artifact as artifact_mod
 from defendable_science.digest import extraction as extraction_mod
+from defendable_science.digest import sampling as sampling_mod
 from defendable_science.exploration import backlog as backlog_mod
 from defendable_science.literature import acquire as acquire_mod
 from defendable_science.literature import graph as graph_mod
@@ -2441,6 +2442,276 @@ def extract_record(
         )
     )
     raise typer.Exit(code=1 if rejections or errors or triage_not_updated else 0)
+
+
+#: The verdicts a human may record on a sampled check. Deliberately not
+#: ``pending``: that is the state an extraction *starts* in, and letting this
+#: command write it would give the batch a way to quietly un-fail itself.
+_SAMPLE_VERDICTS = ("verified", "failed")
+
+
+def _extraction_batch(layout: Layout) -> tuple[list[str], list[dict[str, str]]]:
+    """Collect every digest artifact that records an extraction (ruling AL).
+
+    A digest with no ``status.extraction`` block was never extracted — a
+    depth-mode reading record is the common case — so it is not part of an
+    extraction batch and gets no verdict. An artifact that cannot be *read* is
+    reported instead of skipped: excluding it silently would let a corrupt file
+    shrink the population the sample is drawn from.
+
+    :param layout: The resolved layout, which owns the digests directory.
+    :returns: The batch's citekeys, and one error entry per unreadable artifact.
+    """
+    members: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path in sorted(layout.digests_dir.glob("*.md")):
+        try:
+            if artifact_mod.has_extraction(path):
+                members.append(path.stem)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            typer.echo(f"digest extract sample failed for {path.stem}: {exc}", err=True)
+            errors.append(
+                {"citekey": path.stem, "artifact": str(path), "reason": str(exc)}
+            )
+    return members, errors
+
+
+def _note_error(
+    errors: list[dict[str, str]], citekey: str, artifact: Path, reason: str
+) -> None:
+    """Append an error entry unless this exact fact is already reported.
+
+    A missing artifact fails both the cell read and the verdict write with the
+    same message; reporting it twice would suggest two problems.
+    """
+    entry = {"citekey": citekey, "artifact": str(artifact), "reason": reason}
+    if entry not in errors:
+        typer.echo(f"digest extract sample failed for {citekey}: {reason}", err=True)
+        errors.append(entry)
+
+
+def _read_sampled_cells(
+    layout: Layout, sample: list[str], errors: list[dict[str, str]]
+) -> tuple[dict[str, list[extraction_mod.Cell]], list[dict[str, Any]]]:
+    """Read each drawn paper's cells — what the human is asked to check.
+
+    The report carries the axis, the value and the locator for every cell,
+    because the question the human answers is *does the source at that locator
+    actually say this?* (spec §8). A paper whose cells cannot be read is an
+    error, never an empty cell list: "nothing to check here" is the one answer
+    an unreadable artifact must not produce.
+
+    :param layout: The resolved layout, which owns the artifact paths.
+    :param sample: The drawn citekeys.
+    :param errors: The run's error list, appended to in place.
+    :returns: The cells per drawn paper, and the report's ``sampled`` entries.
+    """
+    drawn_cells: dict[str, list[extraction_mod.Cell]] = {}
+    sampled: list[dict[str, Any]] = []
+    for key in sample:
+        target = layout.digest(key)
+        try:
+            drawn_cells[key] = artifact_mod.read_cells(target)
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            _note_error(errors, key, target, str(exc))
+            continue
+        sampled.append(
+            {
+                "citekey": key,
+                "artifact": str(target),
+                "cells": [dataclasses.asdict(c) for c in drawn_cells[key]],
+            }
+        )
+    return drawn_cells, sampled
+
+
+def _apply_verdict(
+    layout: Layout,
+    members: list[str],
+    *,
+    verdict: str,
+    drawn_cells: dict[str, list[extraction_mod.Cell]],
+    log_root: Path,
+    errors: list[dict[str, str]],
+) -> tuple[list[str], list[str]]:
+    """Write the human's verdict onto **every** member of the batch (spec §8).
+
+    Unsampled members included: the verdict is a finding about the population
+    the sample was drawn from. Only the drawn papers get a check log entry —
+    they are the only ones a human actually looked at, and logging a check that
+    did not happen would forge the evidence trail.
+
+    A failure on one member is reported and the sweep continues; aborting would
+    leave the batch half-marked with no report of which half.
+
+    :param layout: The resolved layout.
+    :param members: Every citekey in the batch.
+    :param verdict: The verdict to write.
+    :param drawn_cells: The cells read for each sampled paper.
+    :param log_root: The accountability-log directory.
+    :param errors: The run's error list, appended to in place.
+    :returns: The citekeys updated, and the log entries written.
+    """
+    date = date_cls.today().isoformat()
+    updated: list[str] = []
+    log_entries: list[str] = []
+    for key in members:
+        target = layout.digest(key)
+        try:
+            artifact_mod.set_batch_check(target, verdict, date=date)
+            updated.append(key)
+            if key in drawn_cells:
+                log_entries.append(
+                    str(
+                        artifact_mod.append_check_log(
+                            target,
+                            key,
+                            drawn_cells[key],
+                            verdict=verdict,
+                            batch=members,
+                            log_dir=log_root,
+                            date=date,
+                        )
+                    )
+                )
+        except (extraction_mod.ExtractionError, OSError) as exc:
+            _note_error(errors, key, target, str(exc))
+    return updated, log_entries
+
+
+@extract.command(name="sample")
+def extract_sample(
+    citekey: Annotated[
+        list[str] | None,
+        typer.Option("--citekey", help="A batch member; repeatable."),
+    ] = None,
+    all_papers: Annotated[
+        bool,
+        typer.Option("--all", help="Every digest carrying a status.extraction block."),
+    ] = False,
+    size: Annotated[
+        int | None,
+        typer.Option("--size", help="How many papers to draw; max(3, 10%) by default."),
+    ] = None,
+    verdict: Annotated[
+        str | None,
+        typer.Option(
+            "--verdict",
+            help="Record the human's verdict on the batch: verified | failed.",
+        ),
+    ] = None,
+    log_dir: Annotated[
+        str | None,
+        typer.Option(
+            "--log-dir", help="Accountability log; from the layout if omitted."
+        ),
+    ] = None,
+) -> None:
+    """Draw the batch's deterministic sample, and record the human's verdict.
+
+    Two invocations, on purpose. The first draws — the same papers for the same
+    batch, in this process and every future one, so nobody can re-roll until an
+    easy sample comes up (spec §3.5) — and reports each drawn paper's cells with
+    their locators, which is exactly what the human is asked to check them
+    against. Nothing is written. The second passes ``--verdict`` over the same
+    batch and records the answer. The questioning itself is the skill's job: a
+    CLI prompt would put the agent between the human and the sources.
+
+    A ``failed`` verdict lands on **every** member, sampled or not, and touches
+    no cell. A process that produced one confidently-wrong cell in a sample of
+    three probably produced more in the other thirty-seven, so the finding is
+    about the batch; silently repairing the caught cell would convert that
+    signal into a tidy-looking local fix (spec §8).
+
+    Never writes ``status.understanding``. Extraction certifies located cells
+    checked by sample, which is a weaker claim than verified comprehension.
+
+    :param citekey: A batch member, repeatable. Mutually exclusive with
+        ``--all``, and exactly one of the two is required.
+    :param all_papers: Take the batch to be every digest artifact carrying a
+        ``status.extraction`` block.
+    :param size: How many papers to draw; ``max(3, 10%)`` of the batch by
+        default — a convention, not a statistical guarantee (spec §14).
+    :param verdict: ``verified`` or ``failed``; omitted, the command only draws.
+    :param log_dir: Directory for the accountability log; the layout's
+        ``defend-log`` when omitted — anchored to the layout, never the cwd, so
+        the run's evidence lands where a reviewer looks for it.
+    :raises typer.Exit: Code 0 when the sample was drawn (and, with
+        ``--verdict``, recorded on every member); code 1 when the batch is
+        empty or any member could not be read or updated; code 2 on a usage
+        error.
+    """
+    if bool(citekey) == all_papers:
+        raise typer.BadParameter(
+            "give exactly one of --citekey (repeatable) or --all: the batch is "
+            "what the sample is drawn from and what a verdict applies to, so it "
+            "cannot be guessed"
+        )
+    if verdict is not None and verdict not in _SAMPLE_VERDICTS:
+        raise typer.BadParameter(
+            f"--verdict must be one of {list(_SAMPLE_VERDICTS)}, got {verdict!r}"
+        )
+    if size is not None and size < 1:
+        raise typer.BadParameter("--size must be at least 1")
+
+    _config, layout = _layout_or_exit()
+    if all_papers:
+        members, errors = _extraction_batch(layout)
+    else:
+        members, errors = sorted(set(citekey or [])), []
+    log_root = (
+        Path(log_dir)
+        if log_dir is not None
+        else layout.research_root / artifact_mod.DEFAULT_LOG_DIR.name
+    )
+
+    sample: list[str] = []
+    if members:
+        sample = sampling_mod.select_sample(
+            members,
+            size if size is not None else sampling_mod.default_size(len(members)),
+        )
+    else:
+        # Not a passed sample of size zero: no paper was checked, and saying so
+        # is the whole point of the command.
+        typer.echo(
+            f"digest extract sample failed: no extracted papers under "
+            f"{layout.digests_dir} — nothing was sampled and nothing was "
+            "checked; run `digest extract record` first",
+            err=True,
+        )
+    drawn_cells, sampled = _read_sampled_cells(layout, sample, errors)
+
+    updated: list[str] = []
+    log_entries: list[str] = []
+    if verdict is not None:
+        updated, log_entries = _apply_verdict(
+            layout,
+            members,
+            verdict=verdict,
+            drawn_cells=drawn_cells,
+            log_root=log_root,
+            errors=errors,
+        )
+
+    ok = bool(members) and not errors
+    typer.echo(
+        json.dumps(
+            {
+                "ok": ok,
+                "batch": members,
+                "size": len(sample),
+                "sample": sample,
+                "verdict": verdict,
+                "sampled": sampled,
+                "updated": updated,
+                "log_entries": log_entries,
+                "errors": errors,
+            },
+            indent=2,
+        )
+    )
+    raise typer.Exit(code=0 if ok else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

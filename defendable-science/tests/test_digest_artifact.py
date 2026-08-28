@@ -784,3 +784,61 @@ def test_a_top_level_key_after_the_status_block_still_ends_the_search(
     fm, _ = split_frontmatter(target.read_text(encoding="utf-8"))
     assert "  extraction: not-a-status-child" in fm
     assert _status(target)["extraction"]["cells"] == 2
+
+
+# --- has_extraction: the batch-membership test (spec §8, ruling AL) ------------
+
+
+def test_has_extraction_is_true_for_an_extracted_artifact(tmp_path: Path) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    _write(target, tmp_path / "log")
+
+    assert art.has_extraction(target) is True
+
+
+def test_has_extraction_is_false_for_a_depth_only_digest(tmp_path: Path) -> None:
+    """A depth-mode reading record was never extracted, so it is not a member."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text(
+        "---\nstatus:\n  understanding: {status: complete}\n---\n", encoding="utf-8"
+    )
+
+    assert art.has_extraction(target) is False
+
+
+def test_has_extraction_refuses_a_missing_artifact(tmp_path: Path) -> None:
+    """Absent is not 'never extracted' — the caller must hear about it."""
+    with pytest.raises(ex.ExtractionError, match="not found"):
+        art.has_extraction(tmp_path / "nowhere.md")
+
+
+def test_has_extraction_refuses_an_artifact_without_frontmatter(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("just prose\n", encoding="utf-8")
+
+    with pytest.raises(ex.ExtractionError):
+        art.has_extraction(target)
+
+
+def test_has_extraction_refuses_unparseable_frontmatter(tmp_path: Path) -> None:
+    """Unreadable YAML is a failure, never a quiet 'not in the batch'."""
+    target = tmp_path / f"{CITEKEY}.md"
+    target.write_text("---\nstatus: [unclosed\n---\n", encoding="utf-8")
+
+    with pytest.raises(ex.ExtractionError, match="not valid YAML"):
+        art.has_extraction(target)
+
+
+def test_append_check_log_refuses_an_unknown_verdict(tmp_path: Path) -> None:
+    with pytest.raises(ex.ExtractionError, match="batch-check must be one of"):
+        art.append_check_log(
+            tmp_path / f"{CITEKEY}.md",
+            CITEKEY,
+            _cells(),
+            verdict="probably fine",
+            batch=[CITEKEY],
+            log_dir=tmp_path / "log",
+            date=DATE,
+        )
