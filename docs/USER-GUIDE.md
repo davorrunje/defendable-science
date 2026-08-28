@@ -438,5 +438,5 @@ plaintext-at-rest caveat.
 **The shortest possible path:** `research-init` → `hypothesis-exploration
 promote` → `hypothesis-testing` (strategy, examined → delegate design/plan →
 sign findings) → `paper-exploration promote` → `paper-synthesis` (positioning →
-sign decision → sections) → `progress dashboard`. You drive every arrow; Defendable Science
+sign decision → sections) → `progress` skill (read status, regenerate dashboard). You drive every arrow; Defendable Science
 keeps the accounts and makes sure you can defend each signature.

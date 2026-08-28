@@ -131,8 +131,8 @@ the author authors.
 ## 5. `progress` (cross-cutting, read-only)
 
 Per meta-spec §3.6: status lives in each artifact's **frontmatter**
-(verdict/readiness/coverage + `last-updated`); `progress status <level> [id]`
-reads and rolls up; `progress dashboard` regenerates `dashboard.md` as a **pure
+(verdict/readiness/coverage + `last-updated`); the `progress` skill reads and rolls up status
+with `status <level> [id]`, and regenerates `dashboard.md` with the `dashboard` verb as a **pure
 projection** (never hand-edited).
 
 - **Definition of done:** hypothesis = *resolved* (has a signed verdict); paper =
@@ -169,15 +169,17 @@ advocate) are author-selectable, task/stage-suggested, feedback-calibrated —
 
 ## 7. Content layout (consumer `docs/research/`)
 
-Per meta-spec §5: `papers.md` registry; per-paper roots with
-`hypotheses/<YYYY-MM-DD-slug>/{hypothesis,strategy,design,plan,findings}.md`,
-`backlog.md`, `paper/{pitch,positioning,outline,ledger,decision,sections/}`;
-`portfolio-backlog.md`; optional `thesis/{kappa,aims.md,milestones.yml}`;
-`literature/{references.json,triage.yml,digests/<citekey>.md}` (CSL-JSON is the
-source of truth per ADR-0020; `.bib` is an on-demand export); generated
-`dashboard.md`. Status frontmatter on every hypothesis/paper/thesis artifact
-feeds `progress`; examination transcripts + logged overrides form the
-accountability trail.
+Per meta-spec §5: the layout is defined once in
+`defendable-science/defendable_science/scaffold/layout.py`, recorded per repo
+in `.defendable-science/config.yml`'s optional `layout:` block, and scaffolded
+by `defendable-science init` and validated by `defendable-science check`
+([ADR-0039](../../decisions/0039-recorded-consumer-layout.md)).
+
+Papers registry; per-paper hypotheses and staged documents; portfolio backlog;
+optional thesis tree; literature references and digests (CSL-JSON is the source
+of truth per ADR-0020; `.bib` is an on-demand export); generated dashboard.
+Status frontmatter on every hypothesis/paper/thesis artifact feeds `progress`;
+examination transcripts + logged overrides form the accountability trail.
 
 ## 8. Agency & Understanding interlock (the material-decision checkpoints)
 
