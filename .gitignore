@@ -1,7 +1,12 @@
 # defendable-science plugin — consumers create these in THEIR repos, never here
-.defendable-science/cache/          # http + dataset caches (cli.py writes here)
-.defendable-science/keys.json       # CLI-owned API-key store (0600; ADR-0029)
-.defendable-science/rclone.conf
+# NOTE: gitignore has no trailing comments — a mid-line '#' is part of the
+# pattern. Keep every comment on its own line. A leading '**/' is required so
+# these also match when the CLI runs from the defendable-science/ subdirectory.
+# http + dataset caches (cli.py writes here)
+**/.defendable-science/cache/
+# CLI-owned API-key store (0600; ADR-0029)
+**/.defendable-science/keys.json
+**/.defendable-science/rclone.conf
 *.rclone.conf
 
 # OS / editor
