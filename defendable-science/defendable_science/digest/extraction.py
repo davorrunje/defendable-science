@@ -135,7 +135,10 @@ class Cell:
     :param axis: The concept-matrix axis it fills, verbatim from the header.
     :param value: The extracted value, or `NOT_ADDRESSED`.
     :param locator: Where in the paper the value comes from — required unless
-        `value` is `NOT_ADDRESSED`.
+        `value` is `NOT_ADDRESSED`. A `NOT_ADDRESSED` cell *may* still carry
+        one, naming where the paper declares the scope that excludes this axis:
+        that is evidence **for** the absence, not a pointer at where a claim
+        is not, so it is recorded as scope evidence rather than a value source.
     :param justification: Why the axis is out of the paper's scope — required
         when `value` is `NOT_ADDRESSED`.
     """
@@ -193,6 +196,12 @@ def cell_from_mapping(item: Mapping[str, Any]) -> Cell:
 #: Locator forms accepted out of the box. Extended or replaced via
 #: ``literature.extraction.locator_patterns`` — a set built around §/Eq./Thm.
 #: encodes one citation culture, and this plugin forbids domain assumptions.
+#:
+#: A configured pattern must not rely on its own group numbering: the set is
+#: concatenated into one alternation, so a numbered backreference like
+#: ``(a)\1`` compiles fine alone and then silently renumbers against a
+#: different group. No validation can catch that (a name collision, by
+#: contrast, is caught below) — prefer non-capturing ``(?:…)`` groups.
 DEFAULT_LOCATOR_PATTERNS: tuple[str, ...] = (
     r"§\s*\d+(\.\d+)*",
     r"(Section|Sec\.)\s*\d+(\.\d+)*",
@@ -216,19 +225,32 @@ def compile_locator_patterns(extra: list[str] | None = None) -> list[re.Pattern[
 
     :param extra: Additional raw patterns from configuration.
     :returns: One compiled pattern matching any comma-joined combination.
-    :raises ExtractionError: If a configured pattern is not valid regex.
+    :raises ExtractionError: If a configured pattern is not valid regex, or if
+        the configured set cannot be combined (e.g. two patterns reusing one
+        group name).
     """
-    for pattern in extra or []:
+    configured = extra or []
+    for pattern in configured:
         try:
             re.compile(pattern)
         except re.error as exc:
             raise ExtractionError(
                 f"invalid locator pattern {pattern!r} in config: {exc}"
             ) from exc
-    raw = [*DEFAULT_LOCATOR_PATTERNS, *(extra or [])]
+    raw = [*DEFAULT_LOCATOR_PATTERNS, *configured]
     one = "|".join(f"(?:{p})" for p in raw)
     joined = rf"\A\s*(?:{one})(?:\s*,\s*(?:{one}))*\s*\Z"
-    return [re.compile(joined, re.IGNORECASE)]
+    try:
+        return [re.compile(joined, re.IGNORECASE)]
+    except re.error as exc:
+        # Patterns that each compile alone can still clash once combined — two
+        # reusing a group name is the common case. Reporting the raw failure
+        # would quote an offset into a joined pattern the user never wrote.
+        raise ExtractionError(
+            f"locator patterns {configured} cannot be combined into one "
+            f"matcher: {exc.msg} — make each pattern self-contained, using "
+            "non-capturing `(?:…)` groups rather than named or numbered ones"
+        ) from exc
 
 
 def is_valid_locator(locator: str, patterns: list[re.Pattern[str]]) -> bool:

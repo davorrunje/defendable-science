@@ -250,6 +250,20 @@ def test_an_invalid_configured_pattern_refuses_by_name() -> None:
         ex.compile_locator_patterns(["cl\\. (\\d+"])
 
 
+def test_patterns_that_clash_only_once_combined_refuse_readably() -> None:
+    """Each compiles alone; joining them does not. That must not be a traceback.
+
+    The patterns come from the user's `literature.extraction.locator_patterns`,
+    so a raw ``re.error`` would quote a character offset into a combined
+    pattern they never wrote.
+    """
+    with pytest.raises(ex.ExtractionError, match="cannot be combined") as caught:
+        ex.compile_locator_patterns([r"(?P<n>\d+)", r"(?P<n>x\d+)"])
+    message = str(caught.value)
+    assert "(?P<n>x" in message  # the offending set is named, not just the clash
+    assert "position" not in message  # no offset into a pattern nobody wrote
+
+
 def test_a_complete_paper_is_accepted() -> None:
     accepted, rejections = ex.validate(_full(), AXES, PATTERNS)
     assert rejections == []
