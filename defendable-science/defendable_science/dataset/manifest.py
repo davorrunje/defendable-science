@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 from pydantic import Field
@@ -548,6 +548,11 @@ class CroissantDocument(ExternalModel):
     name: str | None = None
     alternate_name: str | None = Field(default=None, alias="alternateName")
     distribution: list[Any] = Field(default_factory=list)
+    version: Any = None
+    license: Any = None
+    description: Any = None
+    identifier: Any = None
+    cite_as: Any = Field(default=None, alias="citeAs")
 
 
 def entry_from_croissant(json_ld: object) -> DatasetEntry:
@@ -573,11 +578,6 @@ def entry_from_croissant(json_ld: object) -> DatasetEntry:
     # Croissant files won't, so fall back to `name` for the id.
     entry_id = str(doc.alternate_name or doc.name)
     title = str(doc.name) if str(doc.name) != entry_id else None
-    # `doc` only models the fields entry_from_croissant needs firm validation
-    # on (name, alternateName, distribution); parse_obj already established
-    # json_ld is object-shaped, so the remaining optional fields are read
-    # straight off it, as before.
-    raw = cast("dict[str, Any]", json_ld)
 
     files: list[FileRef] = []
     for i, obj in enumerate(doc.distribution):
@@ -600,18 +600,18 @@ def entry_from_croissant(json_ld: object) -> DatasetEntry:
 
     return DatasetEntry(
         id=entry_id,
-        version=_opt_str(raw.get("version")),
-        license=_opt_str(raw.get("license")),
+        version=_opt_str(doc.version),
+        license=_opt_str(doc.license),
         title=title,
-        description=_opt_str(raw.get("description")),
-        pid=_opt_str(raw.get("identifier")),
+        description=_opt_str(doc.description),
+        pid=_opt_str(doc.identifier),
         files=files,
         citation=(
             Citation(
                 title=title or str(doc.name),
-                identifier=_opt_str(raw.get("identifier")),
+                identifier=_opt_str(doc.identifier),
             )
-            if raw.get("citeAs")
+            if doc.cite_as
             else None
         ),
     )
