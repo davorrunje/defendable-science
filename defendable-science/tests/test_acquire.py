@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -2397,7 +2398,9 @@ def test_confirm_rejects_a_sidecar_missing_a_required_field(tmp_path: Path) -> N
     sidecar = parked.parent / f"{PDF_SHA}.json"
     sidecar.write_text(json.dumps({"rung": "oa", "url": None}), encoding="utf-8")
 
-    with pytest.raises(RetrievalError, match=r"candidate: "):
+    with pytest.raises(
+        RetrievalError, match=rf"{re.escape(str(sidecar))}.*candidate: "
+    ):
         a.confirm_quarantined(entry, ctx, PDF_SHA)
 
 
@@ -2408,12 +2411,13 @@ def test_confirm_rejects_a_sidecar_whose_rung_is_the_wrong_type(
     _path, entry = _registry(tmp_path)
     ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
     parked = _quarantine(tmp_path, entry, ctx)
-    (parked.parent / f"{PDF_SHA}.json").write_text(
+    sidecar = parked.parent / f"{PDF_SHA}.json"
+    sidecar.write_text(
         json.dumps({"candidate": {}, "match": {}, "rung": 7, "url": None}),
         encoding="utf-8",
     )
 
-    with pytest.raises(RetrievalError, match=r"rung: "):
+    with pytest.raises(RetrievalError, match=rf"{re.escape(str(sidecar))}.*rung: "):
         a.confirm_quarantined(entry, ctx, PDF_SHA)
 
 
@@ -2422,14 +2426,15 @@ def test_confirm_rejects_a_sidecar_with_an_unexpected_key(tmp_path: Path) -> Non
     _path, entry = _registry(tmp_path)
     ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
     parked = _quarantine(tmp_path, entry, ctx)
-    (parked.parent / f"{PDF_SHA}.json").write_text(
+    sidecar = parked.parent / f"{PDF_SHA}.json"
+    sidecar.write_text(
         json.dumps(
             {"candidate": {}, "match": {}, "rung": "oa", "url": None, "extra": 1}
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(RetrievalError, match=r"extra: "):
+    with pytest.raises(RetrievalError, match=rf"{re.escape(str(sidecar))}.*extra: "):
         a.confirm_quarantined(entry, ctx, PDF_SHA)
 
 
@@ -2437,9 +2442,12 @@ def test_confirm_rejects_a_sidecar_that_is_not_json(tmp_path: Path) -> None:
     _path, entry = _registry(tmp_path)
     ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
     parked = _quarantine(tmp_path, entry, ctx)
-    (parked.parent / f"{PDF_SHA}.json").write_text("{oops", encoding="utf-8")
+    sidecar = parked.parent / f"{PDF_SHA}.json"
+    sidecar.write_text("{oops", encoding="utf-8")
 
-    with pytest.raises(RetrievalError, match=r"invalid JSON"):
+    with pytest.raises(
+        RetrievalError, match=rf"{re.escape(str(sidecar))}.*invalid JSON"
+    ):
         a.confirm_quarantined(entry, ctx, PDF_SHA)
 
 
