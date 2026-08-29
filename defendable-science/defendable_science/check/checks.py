@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from defendable_science.check.model import Finding, Report
 from defendable_science.core.config import load_config_text
 from defendable_science.core.gitignore import literal_covers
+from defendable_science.core.paths import require_path_segment
 from defendable_science.dataset import manifest as mf
 from defendable_science.digest import artifact as artifact_mod
 from defendable_science.digest import extraction as extraction_mod
@@ -583,8 +584,9 @@ def _check_registered_paper(layout: Layout, probe: Probe, row: Row) -> list[Find
     :param row: One ``papers.md`` row.
     :returns: The findings for this row. An unbound backend is a ``gap`` —
         incomplete science in a valid file — while a root that is missing or
-        outside the repository, and a backlog the registry implies but the repo
-        does not have, are ``invalid``.
+        outside the repository, a paper-id that is a path rather than a slug,
+        and a backlog the registry implies but the repo does not have, are
+        ``invalid``.
     """
     registry = str(layout.rel(layout.papers_registry))
     paper_id = row.get("paper-id", "").strip()
@@ -600,6 +602,24 @@ def _check_registered_paper(layout: Layout, probe: Probe, row: Row) -> list[Find
                     "keys the paper across its backlog, the dashboard and `progress`"
                 ),
                 remedy="give the row a stable paper-id, or delete the row",
+            )
+        ]
+    try:
+        require_path_segment(paper_id, what="paper-id", error=ValueError)
+    except ValueError:
+        # `layout.paper_dir(paper_id)` below would raise `LayoutError` on
+        # exactly this input, uncaught — the integrity tool must report the
+        # integrity problem, not crash on it (defendable-science#182).
+        return [
+            Finding(
+                severity="invalid",
+                check=TABLES_CHECK,
+                file=registry,
+                message=f"registered paper-id {paper_id!r} is a path, not a slug",
+                remedy=(
+                    "paper-id must be a single directory name, not a path — "
+                    "e.g. `depth-collapse`, not `docs/depth-collapse`"
+                ),
             )
         ]
     if not root:

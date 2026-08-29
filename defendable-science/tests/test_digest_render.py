@@ -620,6 +620,29 @@ def test_render_reports_an_unreadable_artifact_and_still_lands_the_rest(
     assert "bad2021" not in text  # no row invented for a paper we could not read
 
 
+def test_render_reports_a_traversal_citekey_and_still_lands_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same shape and fix as the unreadable-artifact test above.
+
+    (defendable-science#182, review round 3) `layout.digest(citekey)` used
+    to sit outside `_cells_to_render`'s per-citekey `try`, so a citekey that
+    is not a single path segment escaped uncaught instead of landing in
+    `errors`.
+    """
+    root = _repo(tmp_path)
+    _extract(root, "good2020", {"guarantee type": "one", "partial monotonicity": "no"})
+    bad_key = "../../../../tmp/PWNED"
+    result = _run(root, monkeypatch, "--citekey", "good2020", "--citekey", bad_key)
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    payload = json.loads(result.stdout)
+    assert payload["rendered"] == ["good2020"]
+    assert [e["citekey"] for e in payload["errors"]] == [bad_key]
+    text = _positioning(root).read_text(encoding="utf-8")
+    assert "| good2020 |" in text
+
+
 def test_render_refuses_a_placeholder_matrix_without_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

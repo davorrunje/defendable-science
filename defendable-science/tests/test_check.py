@@ -797,6 +797,21 @@ def test_tables_check_flags_a_registry_that_holds_no_table() -> None:
     assert "paper-id" in findings[0].remedy
 
 
+def test_tables_check_flags_a_paper_id_that_is_a_path_instead_of_a_slug() -> None:
+    """A path typed into the paper-id column is exactly what this check exists to catch.
+
+    (defendable-science#182, review round 3) It must report an `invalid`
+    Finding, not raise `LayoutError` out of the check itself.
+    """
+    files = _scaffolded()
+    files[LAYOUT.papers_registry] = _registry("| docs/dc | | bench |\n")
+
+    findings = c.check_tables(LAYOUT, FakeProbe(files))
+
+    assert [f.severity for f in findings] == ["invalid"]
+    assert "docs/dc" in findings[0].message
+
+
 def test_tables_check_surfaces_the_parsers_own_error_for_a_malformed_table() -> None:
     files = _scaffolded()
     files[LAYOUT.papers_registry] = (

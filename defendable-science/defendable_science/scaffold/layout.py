@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from defendable_science.core.paths import require_path_segment
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
@@ -142,7 +144,13 @@ class Layout:
         return self.literature_dir / "digests"
 
     def digest(self, citekey: str) -> Path:
-        """Return the digest artifact of `citekey`."""
+        """Return the digest artifact of `citekey`.
+
+        :raises LayoutError: If `citekey` is not a single path segment — see
+            :func:`~defendable_science.core.paths.require_path_segment`
+            (defendable-science#182).
+        """
+        citekey = require_path_segment(citekey, what="citekey", error=LayoutError)
         return self.digests_dir / f"{citekey}.md"
 
     # --- config ---
@@ -177,7 +185,14 @@ class Layout:
     # --- per-paper (derived, never configurable) ---
 
     def paper_dir(self, paper_id: str) -> Path:
-        """Return the root directory of `paper_id`."""
+        """Return the root directory of `paper_id`.
+
+        :raises LayoutError: If `paper_id` is not a single path segment — see
+            :func:`~defendable_science.core.paths.require_path_segment`
+            (defendable-science#182). Every other per-paper path derives from
+            this one, so guarding it here covers them all.
+        """
+        paper_id = require_path_segment(paper_id, what="paper_id", error=LayoutError)
         return self.research_root / paper_id
 
     def backlog(self, paper_id: str) -> Path:
@@ -197,7 +212,12 @@ class Layout:
         return self.paper_docs_dir(paper_id) / "positioning.md"
 
     def hypothesis_dir(self, paper_id: str, slug: str) -> Path:
-        """Return one hypothesis folder of `paper_id`."""
+        """Return one hypothesis folder of `paper_id`.
+
+        :raises LayoutError: If `paper_id` or `slug` is not a single path
+            segment (defendable-science#182).
+        """
+        slug = require_path_segment(slug, what="slug", error=LayoutError)
         return self.hypotheses_dir(paper_id) / slug
 
     def rel(self, path: Path) -> Path:

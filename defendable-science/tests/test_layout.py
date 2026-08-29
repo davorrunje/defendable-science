@@ -66,6 +66,58 @@ def test_positioning_is_a_staged_paper_document() -> None:
     assert out.positioning("p1").parent == out.paper_docs_dir("p1")
 
 
+# --- gap 5: identifier-taking paths reject a traversal attempt (#182) -------
+
+_TRAVERSAL = "../../../../../../tmp/dsaudit/PWNED"
+
+
+def test_digest_rejects_a_traversal_citekey() -> None:
+    """A citekey is a single path segment, not a sub-path.
+
+    Reproduces #182: `Layout.digest(_TRAVERSAL).resolve()` used to land at
+    `/tmp/dsaudit/PWNED.md`, outside `repo_root` entirely.
+    """
+    out = lay.Layout.default(Path("/repo"))
+    with pytest.raises(lay.LayoutError, match="citekey"):
+        out.digest(_TRAVERSAL)
+
+
+def test_paper_dir_rejects_a_traversal_paper_id() -> None:
+    """`paper_dir` is the shared root of the four derived per-paper methods.
+
+    Guarding it here covers backlog/hypotheses_dir/paper_docs_dir/positioning
+    too, since they all call through it.
+    """
+    out = lay.Layout.default(Path("/repo"))
+    with pytest.raises(lay.LayoutError, match="paper_id"):
+        out.paper_dir(_TRAVERSAL)
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["backlog", "hypotheses_dir", "paper_docs_dir", "positioning"],
+)
+def test_paper_dir_derived_methods_reject_a_traversal_paper_id(method: str) -> None:
+    out = lay.Layout.default(Path("/repo"))
+    with pytest.raises(lay.LayoutError, match="paper_id"):
+        getattr(out, method)(_TRAVERSAL)
+
+
+def test_hypothesis_dir_rejects_a_traversal_paper_id_or_slug() -> None:
+    out = lay.Layout.default(Path("/repo"))
+    with pytest.raises(lay.LayoutError, match="paper_id"):
+        out.hypothesis_dir(_TRAVERSAL, "a-real-slug")
+    with pytest.raises(lay.LayoutError, match="slug"):
+        out.hypothesis_dir("depth-collapse", _TRAVERSAL)
+
+
+def test_paper_id_containing_a_plain_slash_is_rejected_too() -> None:
+    """Not just `..` — any embedded separator would address a sub-path."""
+    out = lay.Layout.default(Path("/repo"))
+    with pytest.raises(lay.LayoutError, match="paper_id"):
+        out.paper_dir("depth-collapse/../../etc")
+
+
 def test_rel_renders_a_path_for_display_and_tolerates_an_outside_path() -> None:
     out = lay.Layout.default(Path("/repo"))
 
