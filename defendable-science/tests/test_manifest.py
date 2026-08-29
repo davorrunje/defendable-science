@@ -315,6 +315,63 @@ def test_decode_citation_not_mapping(tmp_path: Path) -> None:
         m.load(_write(tmp_path, text))
 
 
+# --- #173: a wrong-typed present key must never silently stringify ----------
+
+
+def test_decode_file_path_list_raises_naming_entry_and_field(tmp_path: Path) -> None:
+    """The old symptom (a list silently becoming the string "['a', 'b']") is gone.
+
+    An error is raised instead, naming the entry, the field, and the type.
+    """
+    text = f"datasets:\n  - id: x\n    files:\n      - path: [a, b]\n        sha256: {_HEX}\n"
+    with pytest.raises(
+        m.ManifestError,
+        match=r"entry 'x': files\[0\]: 'path' must be a string, got list",
+    ):
+        m.load(_write(tmp_path, text))
+
+
+def test_decode_file_sha256_mapping_raises_naming_entry_and_field(
+    tmp_path: Path,
+) -> None:
+    text = "datasets:\n  - id: x\n    files:\n      - path: p\n        sha256: {a: 1}\n"
+    with pytest.raises(m.ManifestError, match=r"'sha256' must be a string, got dict"):
+        m.load(_write(tmp_path, text))
+
+
+def test_decode_retrieval_kind_list_raises_naming_entry_and_field(
+    tmp_path: Path,
+) -> None:
+    text = "datasets:\n  - id: x\n    retrieval:\n      kind: [http]\n"
+    with pytest.raises(
+        m.ManifestError,
+        match=r"entry 'x': 'retrieval\.kind' must be a string, got list",
+    ):
+        m.load(_write(tmp_path, text))
+
+
+def test_decode_entry_id_list_raises_naming_the_field(tmp_path: Path) -> None:
+    text = "datasets:\n  - id: [a, b]\n"
+    with pytest.raises(
+        m.ManifestError, match=r"datasets\[0\]: 'id' must be a string, got list"
+    ):
+        m.load(_write(tmp_path, text))
+
+
+def test_decode_entry_id_mapping_raises_naming_the_field(tmp_path: Path) -> None:
+    text = "datasets:\n  - id: {a: 1}\n"
+    with pytest.raises(
+        m.ManifestError, match=r"datasets\[0\]: 'id' must be a string, got dict"
+    ):
+        m.load(_write(tmp_path, text))
+
+
+def test_decode_entry_id_accepts_a_bare_integer(tmp_path: Path) -> None:
+    text = f"datasets:\n  - id: 2024\n    files:\n      - path: p\n        sha256: {_HEX}\n"
+    manifest = m.load(_write(tmp_path, text))
+    assert manifest.datasets[0].id == "2024"
+
+
 def test_validate_conditional_and_shape_errors() -> None:
     entry = m.DatasetEntry(
         id="e",

@@ -221,15 +221,44 @@ def _int_or_error(value: Any, where: str, fieldname: str) -> int | None:
         ) from exc
 
 
+def _str_or_error(value: Any, where: str, fieldname: str) -> str:
+    """Coerce a required field to ``str``, raising :class:`ManifestError` on shape.
+
+    Accepts a real ``str`` unchanged, and coerces a bare ``int``/``float`` (a
+    human writing ``id: 2024`` in YAML is realistic and unambiguous). A
+    ``list`` or ``dict`` is never silently stringified — the old
+    ``str(value)`` behavior turned a mistyped ``path: [a, b]`` into the
+    plausible-looking but wrong string ``"['a', 'b']"``, which then failed
+    far downstream instead of here. ``bool`` is rejected too: it is a
+    subclass of ``int`` but ``str(True)`` is not a value anyone meant to
+    write in this field.
+
+    :param value: The raw value to coerce.
+    :param where: Location prefix for the error message.
+    :param fieldname: The field name to name in the error message.
+    :returns: The coerced string.
+    :raises ManifestError: If `value` is not a string or scalar number.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    raise ManifestError(
+        f"{where}: '{fieldname}' must be a string, got {type(value).__name__}: {value!r}"
+    )
+
+
 def _decode_file_ref(raw: Any, where: str) -> FileRef:
     """Decode one ``files[]`` element, raising :class:`ManifestError` on shape."""
     if not isinstance(raw, dict):
         raise ManifestError(f"{where}: each file must be a mapping")
     try:
-        path = str(raw["path"])
-        sha256 = str(raw["sha256"])
+        path_raw = raw["path"]
+        sha256_raw = raw["sha256"]
     except KeyError as exc:
         raise ManifestError(f"{where}: file missing required key {exc}") from exc
+    path = _str_or_error(path_raw, where, "path")
+    sha256 = _str_or_error(sha256_raw, where, "sha256")
     return FileRef(
         path=path, sha256=sha256, size=_int_or_error(raw.get("size"), where, "size")
     )
@@ -240,7 +269,7 @@ def _decode_retrieval(raw: Any, where: str) -> Retrieval:
     if not isinstance(raw, dict):
         raise ManifestError(f"{where}: 'retrieval' must be a mapping")
     return Retrieval(
-        kind=str(raw.get("kind", "")),
+        kind=_str_or_error(raw.get("kind", ""), where, "retrieval.kind"),
         url=_opt_str(raw.get("url")),
     )
 
@@ -268,7 +297,7 @@ def _decode_entry(raw: Any, index: int) -> DatasetEntry:
         raise ManifestError(f"{where}: entry must be a mapping")
     if "id" not in raw:
         raise ManifestError(f"{where}: entry missing required key 'id'")
-    entry_id = str(raw["id"])
+    entry_id = _str_or_error(raw["id"], where, "id")
     where = f"entry '{entry_id}'"
 
     retrieval = None

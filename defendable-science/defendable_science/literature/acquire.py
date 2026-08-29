@@ -141,6 +141,15 @@ QUARANTINE_YEAR_WINDOW = 5
 _PUNCT = re.compile(r"[^\w\s]", flags=re.UNICODE)
 _SPACE = re.compile(r"\s+")
 
+#: OpenAlex's ``filter`` grammar reserves ``,`` (AND) and ``|`` (OR) between
+#: terms. A human-authored title containing either would silently splice a
+#: second filter clause into the query instead of erroring, so both are
+#: replaced with a space before interpolation. ``title.search`` is full-text,
+#: so dropping these characters narrows nothing that matters, and the
+#: three-way match gate re-checks the title against the real record
+#: afterwards (ADR-0037) — a query-time approximation is safe here.
+_FILTER_RESERVED = re.compile(r"[,|]")
+
 
 @dataclass
 class Candidate:
@@ -726,9 +735,10 @@ def sibling_candidates(
     if entry.title is None:
         return []
     anchor = _short_id(work.get("id"))
+    search = _FILTER_RESERVED.sub(" ", entry.title)
     page = client.get_json(
         f"{OPENALEX}/works",
-        {"filter": f"title.search:{entry.title}", "per-page": str(SEARCH_LIMIT)},
+        {"filter": f"title.search:{search}", "per-page": str(SEARCH_LIMIT)},
     )
     if not isinstance(page, dict):
         return []

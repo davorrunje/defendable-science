@@ -701,6 +701,40 @@ def test_rung_4_proposes_a_subtitle_extended_sibling_and_the_gate_decides() -> N
         assert record.verdict == a.QUARANTINE  # author+year decide, not the filter
 
 
+# --- #173: a title with a filter-reserved character must not split the query -
+
+
+def test_rung_4_comma_in_title_does_not_split_the_filter_query() -> None:
+    """OpenAlex's ``filter`` grammar reserves ',' for AND between terms.
+
+    An unescaped comma in the title would silently turn one
+    ``title.search:`` clause into two ANDed clauses instead of raising, so
+    the request actually sent must carry exactly one ``title.search:`` term.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="Deep Learning, Revisited")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    search_terms = params["filter"].split(",")
+    title_search_terms = [t for t in search_terms if t.startswith("title.search:")]
+    assert len(title_search_terms) == 1
+    assert "," not in params["filter"].split("title.search:", 1)[1]
+
+
+def test_rung_4_pipe_in_title_does_not_split_the_filter_query() -> None:
+    """OpenAlex's ``filter`` grammar reserves '|' for OR within a term."""
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="A|B testing")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"].count("title.search:") == 1
+    assert "|" not in params["filter"]
+
+
 def test_rung_5_builds_candidates_from_the_arxiv_atom_feed() -> None:
     feed = (
         '<?xml version="1.0"?>'
