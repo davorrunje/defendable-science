@@ -1299,3 +1299,158 @@ def test_resolve_s2_crossref_malformed_body_is_transport_error_not_a_miss() -> N
     rec = graph.resolve("CorpusId:7", client=client)
     assert rec["resolved"] is False
     assert rec["transport_error"] is True
+
+
+# --- final-review fix wave: dropped null guards (default_factory covers a
+# missing key, never an explicit JSON `null`, under `strict=True`) ----------
+
+
+def test_resolve_s2_crossref_null_external_ids_is_a_clean_miss() -> None:
+    """A well-formed S2 record with no DOI/arXiv is not a transport fault.
+
+    `default_factory=_ExternalIdBundle` only covered a *missing*
+    ``externalIds`` key; S2 sends an explicit `null` for a paper with none,
+    and `strict=True` used to reject that as if the body were malformed —
+    reporting exit 3 (transport_error) for a legitimate exit-1 miss.
+    """
+    client = _client(
+        {f"{_S2}/paper/CorpusId:7": {"paperId": "abc", "externalIds": None}}
+    )
+    rec = graph.resolve("CorpusId:7", client=client)
+    assert rec["resolved"] is False
+    assert "transport_error" not in rec
+    assert "could not cross-reference" in rec["reason"]
+
+
+def test_s2_context_null_external_ids_is_not_meta_skipped() -> None:
+    """Item 1's mirror: an explicit `externalIds: null` is not a lost signal.
+
+    Before the fix this raised inside the best-effort guard and set
+    `meta_skipped`, over-reporting `degraded` on a paper that genuinely has
+    no cross-reference ids.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"paperId": "abc", "externalIds": None},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": ["bg"], "isInfluential": True}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] is None
+    assert "degraded" not in rec
+
+
+def test_s2_context_falsy_but_present_meta_body_is_marked_skipped() -> None:
+    """A malformed-but-falsy `/paper` body must not be mistaken for a miss.
+
+    `if meta:` could not distinguish "S2 could not be reached" from "S2 sent
+    `None`/`[]`/`0`/`""` on a 200" — every falsy body silently passed as a
+    legitimate no-id result with no marker. Checking by identity against a
+    transport-miss sentinel closes the gap for all four cases at once.
+
+    ``None`` and ``[]`` are wrapped in an explicit :class:`FakeResponse`
+    because :class:`FakeSession`'s own routing protocol repurposes a bare
+    ``None`` route value as "no route configured" (a real 404) and a bare
+    ``list`` as a queue of successive responses — both would collide with
+    the very falsy *bodies* this test needs to send on a 200.
+    """
+    for meta in (FakeResponse(200, None), FakeResponse(200, []), 0, ""):
+        client = _client(
+            {
+                "https://api.openalex.org/works/W1": _WORK,
+                f"{_S2}/paper/DOI:10.1234/abc": meta,
+                f"{_S2}/paper/DOI:10.1234/abc/citations": {"data": []},
+            },
+            s2_key="k",
+        )
+        rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+        assert rec["degraded"] == ["s2"], f"meta={meta!r}"
+
+
+def test_cites_null_meta_ends_pagination_without_discarding_the_page() -> None:
+    """`"meta": null` must not abort the whole citation frontier.
+
+    `meta: _PageMeta = Field(default_factory=_PageMeta)` covered a *missing*
+    key but not a `null` one; `strict=True` rejected the `null`, raising
+    `HttpError` and discarding every page already collected — for a body
+    OpenAlex sends to mean exactly "no further cursor".
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "results": [{"id": "https://openalex.org/W2"}],
+                "meta": None,
+            }
+        }
+    )
+    rows = graph.cites("W1", client=client)
+    assert [r["id"]["openalex"] for r in rows] == ["W2"]
+
+
+def test_s2_context_all_valid_edges_omit_edges_skipped_entirely() -> None:
+    """`edges_skipped` must be absent, not merely falsy, when nothing was lost.
+
+    The docstring promises the bookkeeping keys are "absent entirely when
+    nothing was lost"; the count used to be assigned unconditionally,
+    including a `0`, contradicting it for any reader using `"key" in bundle`.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 9}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": ["bg"], "isInfluential": True}]
+            },
+        },
+        s2_key="k",
+    )
+    bundle = graph._s2_context(client, "DOI:10.1234/abc")
+    assert "edges_skipped" not in bundle
+
+
+def test_enrich_partial_edge_loss_does_not_degrade_recovered_fields() -> None:
+    """One skipped edge among many survivors must not distrust real values.
+
+    `degraded` used to be set for all three context fields whenever
+    `edges_skipped` was truthy, even when a surviving edge supplied a real
+    `context_snippet`/`intent`/`is_influential` — telling a consumer three
+    correct, populated fields were unreliable.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 10}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [
+                    {"contexts": "Hello", "intents": []},
+                    {"contexts": ["c"], "intents": ["bg"], "isInfluential": True},
+                ]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["context_snippet"] == "c"
+    assert rec["intent"] == "bg"
+    assert rec["is_influential"] is True
+    assert "degraded" not in rec
+
+
+def test_enrich_total_edge_loss_still_degrades_all_three_fields() -> None:
+    """The mirror of the previous test: nothing recovered means genuinely degraded."""
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 11}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": "Hello", "intents": "bad"}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["degraded"] == ["context", "intent", "is_influential"]

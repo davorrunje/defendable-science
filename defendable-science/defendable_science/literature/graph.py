@@ -33,6 +33,16 @@ if TYPE_CHECKING:
 OPENALEX = "https://api.openalex.org"
 S2 = "https://api.semanticscholar.org/graph/v1"
 
+_S2_META_MISS = object()
+"""Sentinel distinguishing a transport miss from a malformed-but-falsy 200 body.
+
+`HttpClient.get_json` can return any JSON value on success, including a falsy
+one (``None``, ``[]``, ``0``, ``""``), so `_s2_context` cannot use truthiness
+to tell "S2 could not be reached" from "S2 sent nonsense" — both would read
+as false. Comparing by identity to this object keeps the two paths distinct:
+only a caught `HttpError` produces it.
+"""
+
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _OPENALEX_RE = re.compile(r"^[Ww]\d+$")
 _ARXIV_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
@@ -79,10 +89,19 @@ class _PageMeta(ExternalModel):
 
 
 class WorksPage(ExternalModel):
-    """One cursor-paginated page of the OpenAlex ``/works`` endpoint."""
+    """One cursor-paginated page of the OpenAlex ``/works`` endpoint.
+
+    ``meta`` tolerates an explicit ``null`` as well as a missing key —
+    unlike ``results``, a `default_factory` alone is not enough:
+    ``strict=True`` still rejects a present-but-``null`` value, and OpenAlex
+    sending ``"meta": null`` unambiguously means "no further cursor", not a
+    malformed page. Hard-failing there would discard every page already
+    collected for no benefit (see :func:`cites`'s truncated-frontier
+    argument, which rests on ``results`` staying strict, not on ``meta``).
+    """
 
     results: list[OpenAlexWork] = Field(default_factory=list)
-    meta: _PageMeta = Field(default_factory=_PageMeta)
+    meta: _PageMeta | None = None
 
 
 class _ExternalIdBundle(ExternalModel):
@@ -92,11 +111,16 @@ class _ExternalIdBundle(ExternalModel):
 
 
 class S2ExternalIds(ExternalModel):
-    """A Semantic Scholar paper's ``externalIds`` response."""
+    """A Semantic Scholar paper's ``externalIds`` response.
 
-    external_ids: _ExternalIdBundle = Field(
-        default_factory=_ExternalIdBundle, alias="externalIds"
-    )
+    ``external_ids`` is ``| None``, not merely defaulted: S2 sends an explicit
+    JSON ``null`` for a paper with no external-id record at all, and a
+    ``default_factory`` only covers a *missing* key — a present ``null`` still
+    reaches validation and ``strict=True`` would reject it as a false failure
+    (a legitimate "no ids" reported as a transport error).
+    """
+
+    external_ids: _ExternalIdBundle | None = Field(default=None, alias="externalIds")
 
 
 class S2CitationEdge(ExternalModel):
@@ -262,6 +286,9 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
     :returns: ``("doi", …)`` / ``("arxiv", …)``, or ``None`` if S2 misses or the
         paper carries no DOI/arXiv cross-reference.
     :raises RateLimitError: If S2 rate-limits — a throttle is not a "no such paper".
+    :raises HttpError: If the 200 body is not a well-formed ``externalIds``
+        response — a transport miss returns ``None`` above, but a malformed
+        *body* is a different condition and must not be reported as one.
     """
     from defendable_science.core.http import HttpError, RateLimitError
 
@@ -273,9 +300,12 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
         raise
     except HttpError:
         return None
-    ids = parse_obj(
-        S2ExternalIds, paper, source=f"{S2}/paper/{s2_id}", error=HttpError
-    ).external_ids
+    ids = (
+        parse_obj(
+            S2ExternalIds, paper, source=f"{S2}/paper/{s2_id}", error=HttpError
+        ).external_ids
+        or _ExternalIdBundle()
+    )
     if ids.doi:
         return "doi", ids.doi
     if ids.arxiv:
@@ -394,7 +424,7 @@ def cites(
             results.append(record)
             if max_results is not None and len(results) >= max_results:
                 return results
-        cursor = page.meta.next_cursor
+        cursor = page.meta.next_cursor if page.meta else None
     return results
 
 
@@ -456,22 +486,31 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         "is_influential": None,
     }
     try:
-        meta = client.get_json(
+        meta: object = client.get_json(
             f"{S2}/paper/{s2_paper_id}", {"fields": "externalIds"}, s2=True
         )
     except RateLimitError:
         raise
     except HttpError:
-        meta = {}
+        meta = _S2_META_MISS
     corpus = None
-    if meta:
+    if meta is not _S2_META_MISS:
+        # `meta` can legitimately be any JSON value on a 200 (including a
+        # falsy one — `None`, `[]`, `0`), so it is checked by identity against
+        # the transport-miss sentinel above, never by truthiness: a falsy but
+        # present body is a malformed response, not a miss, and must still be
+        # validated rather than silently treated as "S2 has nothing".
         try:
-            corpus = parse_obj(
+            bundle = parse_obj(
                 S2ExternalIds,
                 meta,
                 source=f"{S2}/paper/{s2_paper_id}",
                 error=HttpError,
-            ).external_ids.corpus_id
+            ).external_ids
+            # `external_ids` is itself `| None` — an explicit `"externalIds":
+            # null` is S2's legitimate spelling of "no ids for this paper",
+            # not a lost signal, so it must not set `meta_skipped`.
+            corpus = (bundle or _ExternalIdBundle()).corpus_id
         except HttpError:
             # A malformed metadata body must not hard-fail the whole call —
             # S2 is an optional, best-effort enrichment (spec §3.4) — but the
@@ -505,7 +544,9 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         # legitimate empty result with no marker.
         out["citations_skipped"] = True
         return out
-    out["edges_skipped"] = _aggregate_s2_edges(page.data, out)
+    skipped = _aggregate_s2_edges(page.data, out)
+    if skipped:
+        out["edges_skipped"] = skipped
     return out
 
 
@@ -578,7 +619,18 @@ def enrich(
                 if bundle.get("meta_skipped"):
                     degraded.append("s2")
                 if bundle.get("edges_skipped") or bundle.get("citations_skipped"):
-                    degraded.extend(["context", "intent", "is_influential"])
+                    # A skipped edge or page degrades only the fields that
+                    # actually came back `None` — a surviving edge among 100
+                    # can still supply a real `context_snippet`/`intent`, and
+                    # marking a populated field "degraded" would tell a
+                    # consumer to distrust a value that is correct.
+                    for field, name in (
+                        ("context_snippet", "context"),
+                        ("intent", "intent"),
+                        ("is_influential", "is_influential"),
+                    ):
+                        if bundle.get(field) is None:
+                            degraded.append(name)
                 if degraded:
                     record["degraded"] = degraded
         records.append(record)
