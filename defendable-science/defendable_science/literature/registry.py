@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import RootModel
+
+from defendable_science.core.models import parse_json
 
 #: The ``custom`` sub-key that holds our spine.
 NAMESPACE = "defendable-science"
@@ -287,6 +290,20 @@ def _decode_asset(item: dict[str, Any]) -> Asset | None:
     )
 
 
+class _CslItems(RootModel[list[Any]]):
+    """A CSL-JSON bibliography: an array of item objects."""
+
+    # Not `ExternalModel`: a `RootModel[...]` cannot also inherit a
+    # `BaseModel` subclass that supplies `model_config` — same MRO collision
+    # as `_KeyStore` in core/keys.py — so this carries no `model_config` at
+    # all: no `strict=True`, no `extra=...`. Currently harmless: verified
+    # that `list[Any]` still rejects a non-list (e.g. a bare dict) body in
+    # lax mode, so the missing `strict=True` isn't load-bearing *yet* — but
+    # it becomes so the moment this is narrowed to something like
+    # `list[str]`, where lax mode would silently coerce a non-string item
+    # instead of rejecting it.
+
+
 def _parse_items(text: str, target: Path) -> list[Any]:
     """Parse CSL-JSON items from text.
 
@@ -295,16 +312,7 @@ def _parse_items(text: str, target: Path) -> list[Any]:
     :returns: The parsed array of items.
     :raises RegistryError: If the text is not valid JSON or is not a JSON array.
     """
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RegistryError(f"{target}: invalid JSON: {exc}") from exc
-    if not isinstance(data, list):
-        raise RegistryError(
-            f"{target}: expected a JSON array of CSL-JSON items, got "
-            f"{type(data).__name__}"
-        )
-    return data
+    return parse_json(_CslItems, text, source=str(target), error=RegistryError).root
 
 
 def _read_items(path: Path) -> list[Any]:

@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import Field
+
+from defendable_science.core.models import ExternalModel, parse_obj
 
 #: A file checksum value: 64 lowercase hex chars, optionally ``sha256:``-prefixed.
 SHA256_RE = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
@@ -531,30 +534,79 @@ def croissant_for(entry: DatasetEntry) -> dict[str, Any]:
     return doc
 
 
-def entry_from_croissant(json_ld: dict[str, Any]) -> DatasetEntry:
+class CroissantDocument(ExternalModel):
+    """The parts of a published Croissant / schema.org ``Dataset`` we read.
+
+    ``extra="ignore"``: a real Croissant file carries a great deal of JSON-LD
+    this package has no use for, and an unmodelled field is not an error. What
+    *is* an error is a document that is not an object at all, or whose
+    ``distribution`` is not a list — both of which used to reach
+    :func:`entry_from_croissant` and raise an ``AttributeError`` that escaped
+    the CLI's ``except`` tuple as a traceback.
+
+    Covers every field ``entry_from_croissant`` reads: ``name``/``alternateName``
+    to derive an id and title, ``distribution`` for the file list, and the five
+    scalars ``version``, ``license``, ``description``, ``identifier`` and
+    ``citeAs`` (as ``cite_as``) that flow straight into the draft
+    :class:`DatasetEntry`.
+
+    The two field groups are typed deliberately differently, and that asymmetry
+    is not a bug to "fix" into uniformity. The five scalars are ``Any`` because
+    they flow through :func:`_opt_str`, which is documented to coerce any
+    scalar to ``str`` while preserving ``None`` — it is the sole coercion
+    point, so tightening these to ``str`` under ``strict=True`` would reject
+    documents that work today (``version: 2`` currently becomes ``"2"``) for
+    no gain. ``name`` and ``alternate_name`` are held to ``str | None``
+    instead: the entry **id** is derived from them, and silently coercing a
+    non-string ``name`` into a plausible-looking id is exactly the
+    silently-wrong-value failure ADR-0043 point 4 forbids — a document with a
+    non-string ``name`` must be rejected, not laundered into an id.
+    """
+
+    name: str | None = None
+    alternate_name: str | None = Field(default=None, alias="alternateName")
+    #: `| None`, not merely defaulted: a publisher writing `"distribution":
+    #: null` is indistinguishable in the Croissant/schema.org spec from one
+    #: who omits the key, and `default_factory` alone only covers the latter
+    #: — `strict=True` would reject the explicit `null` that a document
+    #: working today may legitimately send.
+    distribution: list[Any] | None = None
+    version: Any = None
+    license: Any = None
+    description: Any = None
+    identifier: Any = None
+    cite_as: Any = Field(default=None, alias="citeAs")
+
+
+def entry_from_croissant(json_ld: object) -> DatasetEntry:
     """Ingest a published Croissant document into a *draft* registry entry.
 
     Fills what the Croissant carries and leaves human-owned fields (``tier``,
     ``retrieval``, ``datasheet``, ``sensitivity``) unset — the caller flags them
     as TODO on register. Never guesses a tier or a license grant.
 
-    :param json_ld: A parsed Croissant / schema.org ``Dataset`` document.
+    :param json_ld: A parsed Croissant / schema.org ``Dataset`` document, of any
+        shape — it is validated here rather than assumed.
     :returns: A partial :class:`DatasetEntry` draft.
-    :raises ManifestError: If the document has no usable ``name``, or a
-        ``distribution`` entry is a malformed ``FileObject`` (not a mapping, or
-        missing ``contentUrl`` / ``sha256``). A malformed file is surfaced, never
-        silently dropped — "no distribution" is distinct from "a bad file".
+    :raises ManifestError: If the document is not a JSON object, ``name`` or
+        ``alternateName`` is present but not a string, the document has no
+        usable ``name``, ``distribution`` is present but not a list (``null``
+        is accepted — a publisher writing it explicitly means the same as
+        omitting the key), or a ``distribution`` entry is a malformed
+        ``FileObject`` (not a mapping, or missing ``contentUrl`` /
+        ``sha256``). A malformed file is surfaced, never silently dropped —
+        "no distribution" is distinct from "a bad file".
     """
-    name = json_ld.get("name")
-    if not name:
+    doc = parse_obj(CroissantDocument, json_ld, source="croissant", error=ManifestError)
+    if not doc.name:
         raise ManifestError("croissant: document has no 'name' to derive an id from")
     # A round-tripped export carries the stable slug in `alternateName`; external
     # Croissant files won't, so fall back to `name` for the id.
-    entry_id = str(json_ld.get("alternateName") or name)
-    title = str(name) if str(name) != entry_id else None
+    entry_id = str(doc.alternate_name or doc.name)
+    title = str(doc.name) if str(doc.name) != entry_id else None
 
     files: list[FileRef] = []
-    for i, obj in enumerate(json_ld.get("distribution") or []):
+    for i, obj in enumerate(doc.distribution or []):
         loc = f"croissant: distribution[{i}]"
         if not isinstance(obj, dict):
             raise ManifestError(f"{loc}: FileObject must be a mapping")
@@ -574,18 +626,18 @@ def entry_from_croissant(json_ld: dict[str, Any]) -> DatasetEntry:
 
     return DatasetEntry(
         id=entry_id,
-        version=_opt_str(json_ld.get("version")),
-        license=_opt_str(json_ld.get("license")),
+        version=_opt_str(doc.version),
+        license=_opt_str(doc.license),
         title=title,
-        description=_opt_str(json_ld.get("description")),
-        pid=_opt_str(json_ld.get("identifier")),
+        description=_opt_str(doc.description),
+        pid=_opt_str(doc.identifier),
         files=files,
         citation=(
             Citation(
-                title=title or str(name),
-                identifier=_opt_str(json_ld.get("identifier")),
+                title=title or str(doc.name),
+                identifier=_opt_str(doc.identifier),
             )
-            if json_ld.get("citeAs")
+            if doc.cite_as
             else None
         ),
     )

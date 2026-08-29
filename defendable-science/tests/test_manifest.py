@@ -186,6 +186,37 @@ def test_entry_from_croissant_without_name_raises() -> None:
         m.entry_from_croissant({"description": "no name here"})
 
 
+def test_entry_from_croissant_non_string_name_raises() -> None:
+    """Deliberate tightening (#169), not an accidental regression.
+
+    Pre-fix, ``{"name": 2024}`` silently minted the id ``"2024"`` via
+    ``str()`` coercion. ``name``/``alternateName`` are held to ``str`` (unlike
+    the five ``Any``-typed scalars) because the entry id is derived from them,
+    and coercing a non-string into a plausible-looking id is the
+    silently-wrong-value failure this model exists to reject.
+    """
+    with pytest.raises(m.ManifestError, match=r"croissant: name: .*valid string"):
+        m.entry_from_croissant({"name": 2024})
+
+
+def test_ingest_a_top_level_array_exits_1_not_a_traceback(tmp_path: Path) -> None:
+    """Defect 6: AttributeError escaped cli.py's except tuple as a traceback."""
+    croissant = tmp_path / "x.json"
+    croissant.write_text("[1, 2]", encoding="utf-8")
+
+    result = runner.invoke(app, ["dataset", "ingest", str(croissant)])
+
+    assert result.exit_code == 1
+    assert "ingest failed" in result.output
+    assert "croissant" in result.output
+    assert not isinstance(result.exception, AttributeError)
+
+
+def test_entry_from_croissant_rejects_a_non_mapping_document() -> None:
+    with pytest.raises(m.ManifestError, match=r"croissant: <root>: .*valid dictionary"):
+        m.entry_from_croissant([1, 2])
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -323,6 +354,17 @@ def test_croissant_optional_fields_and_no_size() -> None:
 
 def test_entry_from_croissant_no_distribution() -> None:
     draft = m.entry_from_croissant({"name": "x"})
+    assert draft.files == []
+
+
+def test_entry_from_croissant_null_distribution_ingests_with_no_files() -> None:
+    """A publisher writing ``"distribution": null`` means the same as omitting it.
+
+    ``distribution: list[Any] = Field(default_factory=list)`` covered the
+    missing key but rejected the explicit ``null`` the format does not
+    distinguish from absence — a regression this branch's final review found.
+    """
+    draft = m.entry_from_croissant({"name": "x", "distribution": None})
     assert draft.files == []
 
 

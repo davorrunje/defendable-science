@@ -232,7 +232,7 @@ def test_resolve_miss_is_not_fatal() -> None:
 
 
 def test_enrich_work_reconstructs_abstract() -> None:
-    rec = graph.enrich_work(_WORK)
+    rec = graph.enrich_work(graph.parse_work(_WORK, source="test"))
     assert rec["abstract"] == "Hello world"
     assert rec["venue"] == "ICML"
     assert rec["authors"] == ["D. Runje"]
@@ -268,9 +268,14 @@ def test_refs_reads_referenced_works() -> None:
 
 
 def test_fetch_work_non_dict_raises() -> None:
-    # A non-dict 200 body must not be coerced to a hollow {} work.
+    # A non-dict 200 body must not be coerced to a hollow {} work. The message
+    # must name both halves (ADR-0043 decision point 4): the failing source
+    # and the reason — either alone would leave a dropped-URL regression
+    # undetected.
     client = _client({"https://api.openalex.org/works/W1": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not an OpenAlex work"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works/W1.*valid dictionary"
+    ):
         graph.refs("W1", client=client)
 
 
@@ -365,7 +370,7 @@ def test_helper_edges() -> None:
     assert graph._short_id(None) is None
     assert graph._strip_doi(None) is None
     assert graph._strip_doi("HTTPS://doi.org/10.1/x") == "10.1/x"
-    assert graph._abstract({}) is None  # no inverted index
+    assert graph._abstract(None) is None  # no inverted index
 
 
 def test_resolve_arxiv_builds_doi_lookup() -> None:
@@ -394,8 +399,13 @@ def test_resolve_empty_body_is_miss() -> None:
 
 
 def test_cites_non_dict_first_page_raises() -> None:
+    # The message must name both the failing source and the reason
+    # (ADR-0043 decision point 4) — either alone would leave a dropped-URL
+    # regression undetected.
     client = _client({"https://api.openalex.org/works": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not a JSON object"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works.*valid dictionary"
+    ):
         graph.cites("W1", client=client)
 
 
@@ -406,7 +416,9 @@ def test_cites_non_dict_page_mid_pagination_raises() -> None:
         "meta": {"next_cursor": "c2"},
     }
     client = _client({"https://api.openalex.org/works": [page1, "not-a-dict"]})
-    with pytest.raises(http.HttpError, match="not a JSON object"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works.*valid dictionary"
+    ):
         graph.cites("W1", client=client)
 
 
@@ -681,11 +693,17 @@ def test_enrich_with_key_via_arxiv_id() -> None:
 
 
 def test_enrich_with_key_no_addressable_id() -> None:
+    """A work with no DOI/arXiv id was never *queried* — not "S2 had nothing".
+
+    Both used to read as `context_snippet: null` with no `degraded` marker,
+    making a work S2 was never asked about indistinguishable from one S2 was
+    asked about and genuinely had nothing to say.
+    """
     work = {"id": "https://openalex.org/W3", "display_name": "T"}  # no doi/arxiv
     client = _client({"https://api.openalex.org/works/W3": work}, s2_key="k")
     rec = graph.enrich(["W3"], client=client, with_context=True)[0]
     assert rec["context_snippet"] is None
-    assert "degraded" not in rec
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
 
 
 def test_enrich_with_key_empty_citations_leaves_influential_none() -> None:
@@ -1128,3 +1146,428 @@ def test_lit_client_rejects_non_dict_literature_block(
     with pytest.raises(typer.Exit) as exc:
         cli._lit_client()
     assert exc.value.exit_code == 1
+
+
+# --- boundary-validation regressions (defendable-science#169) --------------------
+
+
+def test_cites_rejects_a_non_dict_result_row() -> None:
+    """Defect 1: a junk row raised AttributeError mid-pagination."""
+    from defendable_science.core.http import HttpError
+
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "results": [_WORK, "not-a-work"],
+                "meta": {"next_cursor": None},
+            }
+        }
+    )
+    with pytest.raises(HttpError, match=r"results\.1"):
+        graph.cites("W1", client=client)
+
+
+def test_enrich_work_rejects_a_non_mapping_inverted_index() -> None:
+    """Defect 2: `index.items()` raised AttributeError on a string."""
+    from defendable_science.core.http import HttpError
+
+    bad = {**_WORK, "abstract_inverted_index": "Hello world"}
+    with pytest.raises(HttpError, match=r"abstract_inverted_index"):
+        graph.parse_work(bad, source="test")
+
+
+def test_s2_edge_with_a_string_contexts_never_yields_one_character() -> None:
+    """Defect 3: `edge["contexts"][0]` on a bare string yielded its first char."""
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([{"contexts": "Hello", "intents": []}], out)
+    assert out["context_snippet"] != "H"
+    assert out["context_snippet"] is None
+    assert skipped == 1
+
+
+def test_enrich_marks_degraded_when_an_s2_edge_is_skipped() -> None:
+    """Defect 3, at the seam a consumer actually reads."""
+    oa = "https://api.openalex.org"
+    s2 = "https://api.semanticscholar.org/graph/v1"
+    client = _client(
+        {
+            f"{oa}/works/W1": _WORK,
+            f"{s2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 7}},
+            f"{s2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": "Hello", "intents": [], "isInfluential": False}]
+            },
+        },
+        s2_key="k",
+    )
+    (record,) = graph.enrich(["W1"], client=client, with_context=True)
+    assert record["context_snippet"] is None
+    assert record["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_enrich_work_rejects_a_string_publication_year() -> None:
+    """Defect 4: a string year propagated into the record and out through the CLI."""
+    from defendable_science.core.http import HttpError
+
+    bad = {**_WORK, "publication_year": "2023"}
+    with pytest.raises(HttpError, match=r"publication_year"):
+        graph.parse_work(bad, source="test")
+
+
+def test_resolve_malformed_200_body_is_transport_error_not_a_miss() -> None:
+    # A 200 body of the wrong shape is neither a genuine miss nor a clean
+    # fetch — it must carry transport_error, same as any other transport fault
+    # (ADR-0043 decision point 4).
+    client = _client({"https://api.openalex.org/works/W1": "not-a-work"})
+    rec = graph.resolve("W1", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True
+
+
+# --- S2 leg fix wave: converted halfway, whole-branch review (#169) ---------
+
+
+def test_enrich_with_key_malformed_meta_body_degrades_with_marker() -> None:
+    """Item 1: a malformed S2 metadata body used to hard-fail the whole call.
+
+    S2 is an optional, best-effort enrichment (spec §3.4) — a malformed
+    ``/paper`` body must degrade like the transport-error path already does,
+    not raise; and the lost ``s2`` id must show up in ``degraded``, not
+    vanish silently.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": "not-a-dict",
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": [], "isInfluential": False}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] is None
+    assert rec["context_snippet"] == "c"
+    assert rec["degraded"] == ["s2"]
+
+
+def test_enrich_with_key_null_citations_data_degrades_not_crashes() -> None:
+    """Item 2a: ``{"data": null}`` used to raise a raw ``TypeError``.
+
+    ``'NoneType' object is not iterable`` used to escape `_http_guard` as a
+    traceback from ``literature enrich --context``; it must degrade instead.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 3}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {"data": None},
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] == "CorpusId:3"
+    assert rec["context_snippet"] is None
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_enrich_with_key_non_dict_citations_page_degrades_with_marker() -> None:
+    """Item 2b: a non-dict ``/citations`` body used to be reported as clean.
+
+    It used to yield all-``None`` with no ``degraded`` marker — a failure
+    disguised as "S2 had nothing".
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 4}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": "not-a-dict",
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] == "CorpusId:4"
+    assert rec["context_snippet"] is None
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_resolve_s2_crossref_malformed_body_is_transport_error_not_a_miss() -> None:
+    """Item 3: `resolve()`'s S2 leg used to report this defect differently.
+
+    It reported exit 1 (a genuine miss) while the OpenAlex leg of the same
+    function reports exit 3 (transport_error) for the identical defect.
+    """
+    client = _client({f"{_S2}/paper/CorpusId:7": "not-a-dict"})
+    rec = graph.resolve("CorpusId:7", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True
+
+
+# --- final-review fix wave: dropped null guards (default_factory covers a
+# missing key, never an explicit JSON `null`, under `strict=True`) ----------
+
+
+def test_resolve_s2_crossref_null_external_ids_is_a_clean_miss() -> None:
+    """A well-formed S2 record with no DOI/arXiv is not a transport fault.
+
+    `default_factory=_ExternalIdBundle` only covered a *missing*
+    ``externalIds`` key; S2 sends an explicit `null` for a paper with none,
+    and `strict=True` used to reject that as if the body were malformed —
+    reporting exit 3 (transport_error) for a legitimate exit-1 miss.
+    """
+    client = _client(
+        {f"{_S2}/paper/CorpusId:7": {"paperId": "abc", "externalIds": None}}
+    )
+    rec = graph.resolve("CorpusId:7", client=client)
+    assert rec["resolved"] is False
+    assert "transport_error" not in rec
+    assert "could not cross-reference" in rec["reason"]
+
+
+def test_s2_context_null_external_ids_is_not_meta_skipped() -> None:
+    """Item 1's mirror: an explicit `externalIds: null` is not a lost signal.
+
+    Before the fix this raised inside the best-effort guard and set
+    `meta_skipped`, over-reporting `degraded` on a paper that genuinely has
+    no cross-reference ids.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"paperId": "abc", "externalIds": None},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": ["bg"], "isInfluential": True}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] is None
+    assert "degraded" not in rec
+
+
+def test_s2_context_falsy_but_present_meta_body_is_marked_skipped() -> None:
+    """A malformed-but-falsy `/paper` body must not be mistaken for a miss.
+
+    `if meta:` could not distinguish "S2 could not be reached" from "S2 sent
+    `None`/`[]`/`0`/`""` on a 200" — every falsy body silently passed as a
+    legitimate no-id result with no marker. Checking by identity against a
+    transport-miss sentinel closes the gap for all four cases at once.
+
+    ``None`` and ``[]`` are wrapped in an explicit :class:`FakeResponse`
+    because :class:`FakeSession`'s own routing protocol repurposes a bare
+    ``None`` route value as "no route configured" (a real 404) and a bare
+    ``list`` as a queue of successive responses — both would collide with
+    the very falsy *bodies* this test needs to send on a 200.
+    """
+    for meta in (FakeResponse(200, None), FakeResponse(200, []), 0, ""):
+        client = _client(
+            {
+                "https://api.openalex.org/works/W1": _WORK,
+                f"{_S2}/paper/DOI:10.1234/abc": meta,
+                f"{_S2}/paper/DOI:10.1234/abc/citations": {"data": []},
+            },
+            s2_key="k",
+        )
+        rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+        assert rec["degraded"] == ["s2"], f"meta={meta!r}"
+
+
+def test_cites_null_meta_ends_pagination_without_discarding_the_page() -> None:
+    """`"meta": null` must not abort the whole citation frontier.
+
+    `meta: _PageMeta = Field(default_factory=_PageMeta)` covered a *missing*
+    key but not a `null` one; `strict=True` rejected the `null`, raising
+    `HttpError` and discarding every page already collected — for a body
+    OpenAlex sends to mean exactly "no further cursor".
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "results": [{"id": "https://openalex.org/W2"}],
+                "meta": None,
+            }
+        }
+    )
+    rows = graph.cites("W1", client=client)
+    assert [r["id"]["openalex"] for r in rows] == ["W2"]
+
+
+def test_s2_context_all_valid_edges_omit_edges_skipped_entirely() -> None:
+    """`edges_skipped` must be absent, not merely falsy, when nothing was lost.
+
+    The docstring promises the bookkeeping keys are "absent entirely when
+    nothing was lost"; the count used to be assigned unconditionally,
+    including a `0`, contradicting it for any reader using `"key" in bundle`.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 9}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": ["bg"], "isInfluential": True}]
+            },
+        },
+        s2_key="k",
+    )
+    bundle = graph._s2_context(client, "DOI:10.1234/abc")
+    assert "edges_skipped" not in bundle
+
+
+def test_enrich_partial_edge_loss_does_not_degrade_recovered_samples() -> None:
+    """One skipped edge among many survivors must not distrust real *samples*.
+
+    `context_snippet`/`intent` used to be marked degraded whenever
+    `edges_skipped` was truthy, even when a surviving edge supplied a real
+    value — telling a consumer two correct, populated fields were
+    unreliable. `is_influential` is different: it is an aggregate over every
+    edge, so it is still marked degraded even though its value (`True`, here)
+    happens to be correct — see the next test for the case where it is not.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 10}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [
+                    {"contexts": "Hello", "intents": []},
+                    {"contexts": ["c"], "intents": ["bg"], "isInfluential": True},
+                ]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["context_snippet"] == "c"
+    assert rec["intent"] == "bg"
+    assert rec["is_influential"] is True
+    assert rec["degraded"] == ["is_influential"]
+
+
+def test_enrich_total_edge_loss_still_degrades_all_three_fields() -> None:
+    """The mirror of the previous test: nothing recovered means genuinely degraded."""
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 11}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": "Hello", "intents": "bad"}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_s2_edge_with_null_is_influential_keeps_its_context_and_intent() -> None:
+    """An explicit `"isInfluential": null` must not drop the whole edge.
+
+    `is_influential: bool = Field(default=False, ...)` under `strict=True`
+    rejected the null, so `parse_each` dropped the entire edge — not just the
+    flag — losing a real `contexts`/`intents` value in the process.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges(
+        [{"contexts": ["c"], "intents": ["bg"], "isInfluential": None}], out
+    )
+    assert skipped == 0
+    assert out["context_snippet"] == "c"
+    assert out["intent"] == "bg"
+    assert out["is_influential"] is False
+
+
+@pytest.mark.parametrize(
+    ("edge", "wanted"),
+    [
+        pytest.param(
+            {"contexts": None, "intents": ["bg"], "isInfluential": True},
+            (None, "bg", True),
+            id="null-contexts-keeps-intent-and-flag",
+        ),
+        pytest.param(
+            {"contexts": ["c"], "intents": None, "isInfluential": True},
+            ("c", None, True),
+            id="null-intents-keeps-context-and-flag",
+        ),
+    ],
+)
+def test_s2_edge_with_a_null_list_field_keeps_the_rest_of_the_edge(
+    edge: dict[str, object], wanted: tuple[str | None, str | None, bool]
+) -> None:
+    """A null `contexts`/`intents` must not take the rest of the edge with it.
+
+    `Field(default_factory=list)` covered a missing key but not a present
+    `null`, so `strict=True` rejected the edge outright and `parse_each`
+    dropped every *other* field on it too. For an edge, null and absent mean
+    the same thing, so nothing is gained by distinguishing them.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([edge], out)
+    assert skipped == 0
+    assert (out["context_snippet"], out["intent"], out["is_influential"]) == wanted
+
+
+def test_s2_edge_with_a_non_list_contexts_is_still_skipped() -> None:
+    """Tolerating `null` must not also start tolerating a genuinely wrong type.
+
+    This is the defect-3 guarantee: a bare string `contexts` used to yield
+    its *first character* as the citation context. It must still be rejected.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([{"contexts": "Hello", "intents": []}], out)
+    assert skipped == 1
+    assert out["context_snippet"] is None
+
+
+def test_enrich_marks_is_influential_degraded_even_when_samples_survive() -> None:
+    """A dropped influential edge can silently flip `is_influential` to `False`.
+
+    `context_snippet`/`intent` are representative samples — a surviving edge
+    legitimately supplies them, so they must not be marked degraded. But
+    `is_influential` is an aggregate over *every* edge (`any(...)`): dropping
+    the one influential edge and keeping a non-influential survivor computes
+    a confident `False` when the true answer is `True`. It must be marked
+    degraded even though it is not `None`.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 12}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [
+                    {
+                        "contexts": "an influential mention",  # malformed: not a list
+                        "intents": ["bg"],
+                        "isInfluential": True,
+                    },
+                    {"contexts": ["c"], "intents": ["bg"], "isInfluential": False},
+                ]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["context_snippet"] == "c"
+    assert rec["intent"] == "bg"
+    assert rec["is_influential"] is False  # the value is unreliable, not corrected
+    assert rec["degraded"] == ["is_influential"]

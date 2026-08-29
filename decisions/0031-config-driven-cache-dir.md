@@ -2,6 +2,10 @@
 
 - Status: accepted · Date: 2026-07-22 · Deciders: Davor Runje
 
+> **Refined by ADR-0043.** The "ADR rejecting it stands" reference below pointed at a
+> document that was never written. ADR-0043 is that decision, and it *permits* Pydantic
+> at the parsing boundary. The rest of this decision stands.
+
 ## Context
 
 `research-init` scaffolded a project's `.gitignore` with `.datasets-cache/`, but

@@ -23,15 +23,156 @@ import re
 from collections import Counter
 from typing import TYPE_CHECKING, Any
 
+from pydantic import Field
+
+from defendable_science.core.models import ExternalModel, parse_each, parse_obj
+
 if TYPE_CHECKING:
     from defendable_science.core.http import HttpClient
 
 OPENALEX = "https://api.openalex.org"
 S2 = "https://api.semanticscholar.org/graph/v1"
 
+_S2_META_MISS = object()
+"""Sentinel distinguishing a transport miss from a malformed-but-falsy 200 body.
+
+`HttpClient.get_json` can return any JSON value on success, including a falsy
+one (``None``, ``[]``, ``0``, ``""``), so `_s2_context` cannot use truthiness
+to tell "S2 could not be reached" from "S2 sent nonsense" — both would read
+as false. Comparing by identity to this object keeps the two paths distinct:
+only a caught `HttpError` produces it.
+"""
+
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _OPENALEX_RE = re.compile(r"^[Ww]\d+$")
 _ARXIV_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
+
+
+class _Source(ExternalModel):
+    display_name: str | None = None
+
+
+class _PrimaryLocation(ExternalModel):
+    source: _Source | None = None
+
+
+class _Author(ExternalModel):
+    display_name: str | None = None
+
+
+class _Authorship(ExternalModel):
+    author: _Author | None = None
+
+
+class _WorkIds(ExternalModel):
+    arxiv: str | None = None
+
+
+class OpenAlexWork(ExternalModel):
+    """An OpenAlex work object, as far as this package reads it."""
+
+    id: str | None = None
+    doi: str | None = None
+    ids: _WorkIds = Field(default_factory=_WorkIds)
+    display_name: str | None = None
+    title: str | None = None
+    publication_year: int | None = None
+    cited_by_count: int | None = None
+    primary_location: _PrimaryLocation | None = None
+    authorships: list[_Authorship] = Field(default_factory=list)
+    abstract_inverted_index: dict[str, list[int]] | None = None
+    referenced_works: list[str] = Field(default_factory=list)
+
+
+class _PageMeta(ExternalModel):
+    next_cursor: str | None = None
+
+
+class WorksPage(ExternalModel):
+    """One cursor-paginated page of the OpenAlex ``/works`` endpoint.
+
+    ``meta`` tolerates an explicit ``null`` as well as a missing key —
+    unlike ``results``, a `default_factory` alone is not enough:
+    ``strict=True`` still rejects a present-but-``null`` value, and OpenAlex
+    sending ``"meta": null`` unambiguously means "no further cursor", not a
+    malformed page. Hard-failing there would discard every page already
+    collected for no benefit (see :func:`cites`'s truncated-frontier
+    argument, which rests on ``results`` staying strict, not on ``meta``).
+    """
+
+    results: list[OpenAlexWork] = Field(default_factory=list)
+    meta: _PageMeta | None = None
+
+
+class _ExternalIdBundle(ExternalModel):
+    doi: str | None = Field(default=None, alias="DOI")
+    arxiv: str | None = Field(default=None, alias="ArXiv")
+    corpus_id: int | str | None = Field(default=None, alias="CorpusId")
+
+
+class S2ExternalIds(ExternalModel):
+    """A Semantic Scholar paper's ``externalIds`` response.
+
+    ``external_ids`` is ``| None``, not merely defaulted: S2 sends an explicit
+    JSON ``null`` for a paper with no external-id record at all, and a
+    ``default_factory`` only covers a *missing* key — a present ``null`` still
+    reaches validation and ``strict=True`` would reject it as a false failure
+    (a legitimate "no ids" reported as a transport error).
+    """
+
+    external_ids: _ExternalIdBundle | None = Field(default=None, alias="externalIds")
+
+
+class S2CitationEdge(ExternalModel):
+    """One incoming citation edge from S2's ``/citations`` endpoint.
+
+    Every field is ``| None`` rather than merely defaulted, because a
+    ``default``/``default_factory`` only covers a *missing* key: under
+    ``strict=True`` a present ``null`` still reaches validation and is
+    rejected, which drops the **whole edge** via :func:`parse_each` — a null
+    ``contexts`` would take the edge's real ``intents`` and influence flag
+    down with it, and vice versa. For an edge, ``null`` and absent mean the
+    same thing ("S2 has none of this for this citation"), so nothing is
+    gained by distinguishing them and a usable edge is lost by trying.
+
+    ``None`` is falsy at every call site that reads these, matching the
+    original ``edge.get(...)`` behaviour this model replaced.
+    """
+
+    contexts: list[str] | None = None
+    intents: list[str] | None = None
+    is_influential: bool | None = Field(default=None, alias="isInfluential")
+
+
+class S2CitationsPage(ExternalModel):
+    """One page of S2's ``/paper/{id}/citations`` response.
+
+    ``data`` has **no default** on purpose: unlike ``WorksPage.results``
+    (which defaults to ``[]`` because a missing/empty page is not a hard
+    error there either), a missing, ``null``, or non-list ``data`` here is a
+    malformed page, not a page with zero edges — the two must not collapse,
+    or a truncated response would read as "this work simply has no citation
+    edges."
+    """
+
+    data: list[Any]
+
+
+def parse_work(payload: object, *, source: str) -> OpenAlexWork:
+    """Validate an OpenAlex work payload, or fail the call.
+
+    A malformed work is a hard error rather than a skipped row: returning a
+    partial frontier as if it were complete is the failure this package exists
+    to prevent (ADR-0043 decision point 4).
+
+    :param payload: The raw work object.
+    :param source: The URL it came from, for the message.
+    :returns: The validated work.
+    :raises HttpError: If `payload` is not a well-formed OpenAlex work.
+    """
+    from defendable_science.core.http import HttpError
+
+    return parse_obj(OpenAlexWork, payload, source=source, error=HttpError)
 
 
 def _classify(identifier: str) -> tuple[str, str]:
@@ -76,9 +217,8 @@ def _strip_doi(doi: str | None) -> str | None:
     return re.sub(r"^https?://doi\.org/", "", doi, flags=re.IGNORECASE)
 
 
-def _abstract(work: dict[str, Any]) -> str | None:
+def _abstract(index: dict[str, list[int]] | None) -> str | None:
     """Reconstruct an abstract from OpenAlex's inverted index, if present."""
-    index = work.get("abstract_inverted_index")
     if not index:
         return None
     positions: list[tuple[int, str]] = []
@@ -87,48 +227,47 @@ def _abstract(work: dict[str, Any]) -> str | None:
     return " ".join(word for _, word in sorted(positions))
 
 
-def enrich_work(work: dict[str, Any]) -> dict[str, Any]:
-    """Project a raw OpenAlex work into the stable enrichment record shape.
+def enrich_work(work: OpenAlexWork) -> dict[str, Any]:
+    """Project a validated OpenAlex work into the stable enrichment record shape.
 
-    :param work: A raw OpenAlex work object.
+    :param work: A validated OpenAlex work object.
     :returns: ``{id{…}, title, year, venue, cited_by_count, authors, abstract}``.
     """
-    ids = work.get("ids", {})
-    source = (work.get("primary_location") or {}).get("source") or {}
+    source = work.primary_location.source if work.primary_location else None
     authors = [
-        (a.get("author") or {}).get("display_name")
-        for a in work.get("authorships", [])
-        if (a.get("author") or {}).get("display_name")
+        a.author.display_name
+        for a in work.authorships
+        if a.author and a.author.display_name
     ]
     return {
         "id": {
-            "openalex": _short_id(work.get("id")),
-            "doi": _strip_doi(work.get("doi")),
+            "openalex": _short_id(work.id),
+            "doi": _strip_doi(work.doi),
             "s2": None,
-            "arxiv": _short_id(ids.get("arxiv")) if ids.get("arxiv") else None,
+            "arxiv": _short_id(work.ids.arxiv) if work.ids.arxiv else None,
         },
-        "title": work.get("display_name") or work.get("title"),
-        "year": work.get("publication_year"),
-        "venue": source.get("display_name"),
-        "cited_by_count": work.get("cited_by_count"),
+        "title": work.display_name or work.title,
+        "year": work.publication_year,
+        "venue": source.display_name if source else None,
+        "cited_by_count": work.cited_by_count,
         "authors": authors,
-        "abstract": _abstract(work),
+        "abstract": _abstract(work.abstract_inverted_index),
     }
 
 
-def _fetch_work(client: HttpClient, openalex_id: str) -> dict[str, Any]:
+def _fetch_work(client: HttpClient, openalex_id: str) -> OpenAlexWork:
     """Fetch one OpenAlex work by its ``W…`` id.
 
-    :raises HttpError: If the 200 body is not a work object (non-dict or no
-        ``id``); a hollow ``{}`` is never returned in its place.
+    :raises HttpError: If the 200 body is not a well-formed work object (wrong
+        shape, or no ``id``); a hollow ``{}`` is never returned in its place.
     """
     from defendable_science.core.http import HttpError
 
     url = f"{OPENALEX}/works/{openalex_id}"
-    data = client.get_json(url)
-    if not isinstance(data, dict) or not data.get("id"):
+    work = parse_work(client.get_json(url), source=url)
+    if not work.id:
         raise HttpError(f"{url}: response is not an OpenAlex work object")
-    return data
+    return work
 
 
 def _arxiv_doi(arxiv_id: str) -> str:
@@ -160,6 +299,9 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
     :returns: ``("doi", …)`` / ``("arxiv", …)``, or ``None`` if S2 misses or the
         paper carries no DOI/arXiv cross-reference.
     :raises RateLimitError: If S2 rate-limits — a throttle is not a "no such paper".
+    :raises HttpError: If the 200 body is not a well-formed ``externalIds``
+        response — a transport miss returns ``None`` above, but a malformed
+        *body* is a different condition and must not be reported as one.
     """
     from defendable_science.core.http import HttpError, RateLimitError
 
@@ -171,12 +313,46 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
         raise
     except HttpError:
         return None
-    ext = (paper.get("externalIds") or {}) if isinstance(paper, dict) else {}
-    if ext.get("DOI"):
-        return "doi", str(ext["DOI"])
-    if ext.get("ArXiv"):
-        return "arxiv", str(ext["ArXiv"])
+    ids = (
+        parse_obj(
+            S2ExternalIds, paper, source=f"{S2}/paper/{s2_id}", error=HttpError
+        ).external_ids
+        or _ExternalIdBundle()
+    )
+    if ids.doi:
+        return "doi", ids.doi
+    if ids.arxiv:
+        return "arxiv", ids.arxiv
     return None
+
+
+def _resolve_s2_xref(client: HttpClient, norm: str) -> tuple[str, str] | dict[str, Any]:
+    """Cross-reference an S2 id for `resolve`.
+
+    Returns ``(kind, norm)`` on success, or a failure dict for `resolve` to
+    return as-is. Split out of `resolve` to keep its branch count down; the
+    returned failure dict already matches `resolve`'s own
+    ``{resolved: False, ...}`` shape.
+
+    :raises RateLimitError: If S2 rate-limits — a throttle must propagate.
+    """
+    from defendable_science.core.http import HttpError, RateLimitError
+
+    try:
+        xref = _s2_crossref(client, norm)
+    except RateLimitError:
+        raise
+    except HttpError as exc:
+        # A malformed S2 200 body during cross-reference is a transport
+        # anomaly, not "no such paper" — mirrors the OpenAlex work-fetch
+        # path in `resolve` for the same defect (ADR-0043 decision point 4).
+        return {"resolved": False, "reason": str(exc), "transport_error": True}
+    if xref is None:
+        return {
+            "resolved": False,
+            "reason": f"could not cross-reference S2 id {norm!r} to a DOI/arXiv",
+        }
+    return xref
 
 
 def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
@@ -197,35 +373,37 @@ def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
 
     kind, norm = _classify(identifier)
     if kind == "s2":
-        xref = _s2_crossref(client, norm)
-        if xref is None:
-            return {
-                "resolved": False,
-                "reason": f"could not cross-reference S2 id {norm!r} to a DOI/arXiv",
-            }
-        kind, norm = xref
+        outcome = _resolve_s2_xref(client, norm)
+        if isinstance(outcome, dict):
+            return outcome
+        kind, norm = outcome
     lookup = _lookup_url(kind, norm)
     if lookup is None:
         return {"resolved": False, "reason": f"unsupported identifier kind: {kind}"}
     try:
-        work = client.get_json(lookup)
+        payload = client.get_json(lookup)
     except RateLimitError:
         raise
     except HttpError as exc:
         if exc.status_code == 404:
             return {"resolved": False, "reason": str(exc)}
         return {"resolved": False, "reason": str(exc), "transport_error": True}
-    if not isinstance(work, dict) or not work.get("id"):
+    try:
+        work = parse_work(payload, source=lookup)
+    except HttpError as exc:
+        # A 200 body of the wrong shape is not a miss — a consumer must not
+        # record it as "no such paper" (ADR-0043 decision point 4).
+        return {"resolved": False, "reason": str(exc), "transport_error": True}
+    if not work.id:
         return {"resolved": False, "reason": "no work found"}
-    ids = work.get("ids", {})
     return {
         "resolved": True,
-        "openalex": _short_id(work.get("id")),
-        "doi": _strip_doi(work.get("doi")),
+        "openalex": _short_id(work.id),
+        "doi": _strip_doi(work.doi),
         "s2": None,
-        "arxiv": _short_id(ids.get("arxiv")) if ids.get("arxiv") else None,
-        "title": work.get("display_name") or work.get("title"),
-        "year": work.get("publication_year"),
+        "arxiv": _short_id(work.ids.arxiv) if work.ids.arxiv else None,
+        "title": work.display_name or work.title,
+        "year": work.publication_year,
     }
 
 
@@ -238,28 +416,28 @@ def cites(
     :param client: The HTTP client.
     :param max_results: Cap on rows returned (all citations if ``None``).
     :returns: One record per citing work with provenance ``{via: "openalex"}``.
-    :raises HttpError: If a page mid-pagination is not a JSON object. Stopping
-        silently here would return a truncated frontier as if complete, so it is
-        a hard error (mirroring :meth:`HttpClient.get_json`'s non-JSON path).
+    :raises HttpError: If a page mid-pagination is not a well-formed citation
+        page. Stopping silently here would return a truncated frontier as if
+        complete, so it is a hard error (mirroring :meth:`HttpClient.get_json`'s
+        non-JSON path).
     """
     from defendable_science.core.http import HttpError
 
     results: list[dict[str, Any]] = []
     cursor: str | None = "*"
     while cursor:
-        page = client.get_json(
+        raw = client.get_json(
             f"{OPENALEX}/works",
             {"filter": f"cites:{openalex_id}", "per-page": "200", "cursor": cursor},
         )
-        if not isinstance(page, dict):
-            raise HttpError(f"{OPENALEX}/works: citation page is not a JSON object")
-        for work in page.get("results", []):
+        page = parse_obj(WorksPage, raw, source=f"{OPENALEX}/works", error=HttpError)
+        for work in page.results:
             record = enrich_work(work)
             record["provenance"] = {"source_id": openalex_id, "via": "openalex"}
             results.append(record)
             if max_results is not None and len(results) >= max_results:
                 return results
-        cursor = (page.get("meta") or {}).get("next_cursor")
+        cursor = page.meta.next_cursor if page.meta else None
     return results
 
 
@@ -271,7 +449,7 @@ def refs(openalex_id: str, *, client: HttpClient) -> list[str]:
     :returns: The ``referenced_works`` ids (bare ``W…`` form).
     """
     work = _fetch_work(client, openalex_id)
-    return [rid for ref in work.get("referenced_works", []) if (rid := _short_id(ref))]
+    return [rid for ref in work.referenced_works if (rid := _short_id(ref))]
 
 
 def _s2_paper_id(record: dict[str, Any]) -> str | None:
@@ -296,6 +474,20 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
     rate-limit is *not* best-effort: it propagates rather than masquerading as "S2
     had no data".
 
+    The bundle also carries internal bookkeeping keys read by :func:`enrich` to
+    build its ``degraded`` marker — never emitted to a consumer directly, and
+    absent entirely when nothing was lost:
+
+    - ``meta_skipped`` — the ``/paper`` metadata body was malformed, so the
+      ``s2`` id (if any) could not be read (spec §3.4: best effort, never a
+      hard failure over an optional field).
+    - ``edges_skipped`` — how many individual ``/citations`` edges were
+      malformed (see :func:`_aggregate_s2_edges`).
+    - ``citations_skipped`` — the whole ``/citations`` page was malformed, so
+      no edges could be read at all; distinct from a transport miss (a 404,
+      say), which yields all-``None`` with no marker because that is a
+      legitimate "S2 has nothing" rather than a lost signal.
+
     :raises RateLimitError: If S2 rate-limits during either sub-request.
     """
     from defendable_science.core.http import HttpError, RateLimitError
@@ -307,22 +499,41 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         "is_influential": None,
     }
     try:
-        meta = client.get_json(
+        meta: object = client.get_json(
             f"{S2}/paper/{s2_paper_id}", {"fields": "externalIds"}, s2=True
         )
     except RateLimitError:
         raise
     except HttpError:
-        meta = {}
-    corpus = (
-        (meta.get("externalIds") or {}).get("CorpusId")
-        if isinstance(meta, dict)
-        else None
-    )
+        meta = _S2_META_MISS
+    corpus = None
+    if meta is not _S2_META_MISS:
+        # `meta` can legitimately be any JSON value on a 200 (including a
+        # falsy one — `None`, `[]`, `0`), so it is checked by identity against
+        # the transport-miss sentinel above, never by truthiness: a falsy but
+        # present body is a malformed response, not a miss, and must still be
+        # validated rather than silently treated as "S2 has nothing".
+        try:
+            bundle = parse_obj(
+                S2ExternalIds,
+                meta,
+                source=f"{S2}/paper/{s2_paper_id}",
+                error=HttpError,
+            ).external_ids
+            # `external_ids` is itself `| None` — an explicit `"externalIds":
+            # null` is S2's legitimate spelling of "no ids for this paper",
+            # not a lost signal, so it must not set `meta_skipped`.
+            corpus = (bundle or _ExternalIdBundle()).corpus_id
+        except HttpError:
+            # A malformed metadata body must not hard-fail the whole call —
+            # S2 is an optional, best-effort enrichment (spec §3.4) — but the
+            # lost `s2` id must still be visible to the caller, not silently
+            # absent (ADR-0043 decision point 4).
+            out["meta_skipped"] = True
     if corpus is not None:
         out["s2"] = f"CorpusId:{corpus}"
     try:
-        page = client.get_json(
+        raw_page = client.get_json(
             f"{S2}/paper/{s2_paper_id}/citations",
             {"fields": "contexts,intents,isInfluential", "limit": "100"},
             s2=True,
@@ -331,28 +542,88 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         raise
     except HttpError:
         return out
-    edges = page.get("data", []) if isinstance(page, dict) else []
-    _aggregate_s2_edges(edges, out)
+    try:
+        page = parse_obj(
+            S2CitationsPage,
+            raw_page,
+            source=f"{S2}/paper/{s2_paper_id}/citations",
+            error=HttpError,
+        )
+    except HttpError:
+        # A malformed citations page (missing/null/non-list `data`) is the
+        # same "must not hard-fail, must not vanish" situation as a malformed
+        # edge or a malformed metadata body — it must not raise (a `None`
+        # `data` used to blow up as a raw TypeError) and must not report as a
+        # legitimate empty result with no marker.
+        out["citations_skipped"] = True
+        return out
+    skipped = _aggregate_s2_edges(page.data, out)
+    if skipped:
+        out["edges_skipped"] = skipped
     return out
 
 
-def _aggregate_s2_edges(edges: list[Any], out: dict[str, Any]) -> None:
+def _aggregate_s2_edges(edges: list[Any], out: dict[str, Any]) -> int:
     """Fold S2 citation edges into `out` (representative snippet / intent / flag).
 
-    :param edges: The raw ``/citations`` edge list (non-dict entries are ignored).
+    Best effort by design: a malformed edge is skipped rather than failing an
+    optional enrichment, but the count is returned so the caller can mark the
+    loss instead of hiding it (ADR-0043 decision point 4).
+
+    :param edges: The raw ``/citations`` edge list.
     :param out: The context bundle mutated in place.
+    :returns: How many edges were skipped as malformed.
     """
-    for edge in edges:
-        if not isinstance(edge, dict):
-            continue
-        if out["context_snippet"] is None and edge.get("contexts"):
-            out["context_snippet"] = edge["contexts"][0]
-        if out["intent"] is None and edge.get("intents"):
-            out["intent"] = edge["intents"][0]
-        if edge.get("isInfluential"):
+    parsed, skipped = parse_each(S2CitationEdge, edges)
+    for edge in parsed:
+        if out["context_snippet"] is None and edge.contexts:
+            out["context_snippet"] = edge.contexts[0]
+        if out["intent"] is None and edge.intents:
+            out["intent"] = edge.intents[0]
+        if edge.is_influential:
             out["is_influential"] = True
-    if out["is_influential"] is None and edges:
+    if out["is_influential"] is None and parsed:
         out["is_influential"] = False
+    return skipped
+
+
+def _s2_degraded_fields(bundle: dict[str, Any]) -> list[str]:
+    """Decide which of a context bundle's fields to mark ``degraded``.
+
+    Three distinct losses, none reported the same way:
+
+    - ``meta_skipped`` — the ``s2`` id itself was lost (a malformed
+      ``/paper`` body); marks ``"s2"``.
+    - ``not_addressable`` — S2 was never *queried* at all (no DOI/arXiv to
+      address it with), a total loss distinct from "S2 was queried and
+      returned nothing" — marks all three context fields.
+    - ``edges_skipped`` / ``citations_skipped`` — a partial or total loss of
+      citation edges. ``context_snippet``/``intent`` are representative
+      *samples*, so a surviving edge can still supply a real value despite a
+      skip; they degrade only when nothing was actually recovered.
+      ``is_influential`` is an *aggregate* over every edge (``any(...)``),
+      so a single skipped edge can silently flip it from ``True`` to
+      ``False`` — it is always degraded when anything was skipped,
+      regardless of the value it happened to land on.
+
+    :param bundle: The bundle :func:`_s2_context` returned (or its
+        ``s2_id is None`` fallback).
+    :returns: The field names to record under ``degraded`` (empty if none).
+    """
+    degraded: list[str] = []
+    if bundle.get("meta_skipped"):
+        degraded.append("s2")
+    if bundle.get("not_addressable"):
+        degraded.extend(["context", "intent", "is_influential"])
+    elif bundle.get("edges_skipped") or bundle.get("citations_skipped"):
+        for field, name in (
+            ("context_snippet", "context"),
+            ("intent", "intent"),
+        ):
+            if bundle.get(field) is None:
+                degraded.append(name)
+        degraded.append("is_influential")
+    return degraded
 
 
 def enrich(
@@ -364,7 +635,10 @@ def enrich(
     / ``is_influential`` from Semantic Scholar (and its ``s2`` id). When **no S2
     key** is configured those fields degrade to ``null`` with a ``degraded``
     marker — distinct from "S2 was queried and returned nothing", where the fields
-    are ``null`` *without* the marker.
+    are ``null`` *without* the marker. A work with neither a DOI nor an arXiv id
+    is a third case: S2 was never *addressable*, so it was never queried at all;
+    that also carries the ``degraded`` marker, rather than reading as the same
+    legitimate "S2 had nothing to say" as a work S2 actually was asked about.
 
     :param openalex_ids: The works to enrich.
     :param client: The HTTP client.
@@ -389,6 +663,7 @@ def enrich(
                         "context_snippet": None,
                         "intent": None,
                         "is_influential": None,
+                        "not_addressable": True,  # see _s2_degraded_fields
                     }
                 )
                 if bundle.get("s2"):
@@ -396,6 +671,9 @@ def enrich(
                 record["context_snippet"] = bundle["context_snippet"]
                 record["intent"] = bundle["intent"]
                 record["is_influential"] = bundle["is_influential"]
+                degraded = _s2_degraded_fields(bundle)
+                if degraded:
+                    record["degraded"] = degraded
         records.append(record)
     return records
 

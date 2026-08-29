@@ -27,6 +27,7 @@ dependencies = [
     "requests>=2.31",
     "pyyaml>=6.0",
     "pooch>=1.8",
+    "pydantic>=2.13,<3",
 ]
 
 [project.urls]
@@ -78,6 +79,7 @@ include = ["defendable_science"]
 # it stays type-checked even though it's outside the shipped package/coverage
 # gate (see issue #56).
 files = ["defendable_science", "tests", "../tools"]
+plugins = ["pydantic.mypy"]
 strict = true
 strict_bytes = true
 local_partial_types = true
@@ -181,6 +183,17 @@ ignore = [
 
 [tool.ruff.lint.isort]
 case-sensitive = true
+
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic resolves a model's annotations at runtime, so the types a model's
+# fields reference must stay imported at runtime — not moved into a
+# `TYPE_CHECKING` block by TCH00x (ADR-0043).
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic.RootModel",
+    "defendable_science.core.models.ExternalModel",
+    "defendable_science.core.models.OwnedModel",
+]
 
 [tool.ruff.format]
 docstring-code-format = true
