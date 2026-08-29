@@ -76,8 +76,8 @@ reader, the shipped template under `resources/templates/`, and the rule in `chec
 4. One shared `ValidationError` → domain-error seam, so the translation exists in exactly one
    module.
 5. Defects 1–6 fixed, each with a regression test reproducing its exact symptom.
-6. The five already-honest JSON sites consolidated onto the shared seam without losing
-   message quality.
+6. Every already-honest JSON site that can move onto the shared seam *without losing message
+   quality* does so; one that cannot is left alone, with the reason recorded.
 
 **Non-goals.**
 
@@ -300,12 +300,28 @@ round-trip test asserting what `acquire.py:1069-1081` writes validates against t
 `cli.py:1551`'s except tuple, so the tuple becomes truthful with no CLI change. Keep the
 existing per-`distribution` checks or fold them into the model.
 
-**Slice 5 — consolidation.** `core/keys.py:170-184`, `literature/registry.py:290-307`
-(`_parse_items`), `cli.py:1805-1823` (`--points`), `cli.py:2383-2395` (`_parse_json_object`)
-and `cli.py:2774-2800` (`--cells`) route through the helpers. These five already validate
-honestly — they `isinstance`-check, raise a typed domain error naming the file, and distinguish
-malformed from absent. For them Pydantic is a **consolidation**, not a bug fix: one error idiom
-instead of five. They are the pattern being generalised *from*, which is why they go last.
+**Slice 5 — consolidation.** Five sites already validate honestly — they `isinstance`-check,
+raise a typed domain error naming the file, and distinguish malformed from absent. For them
+Pydantic is a **consolidation**, not a bug fix: one error idiom instead of five. They are the
+pattern being generalised *from*, which is why they go last, and the bar for converting one is
+correspondingly higher: the criterion is "no loss of message quality", and a site that cannot
+clear it is better left alone.
+
+> **Amended during implementation.** Applying that criterion honestly admits **two** of the
+> five, not all five. Converted: `core/keys.py:170-184` and `literature/registry.py:290-307`
+> (`_parse_items`). Left alone, with the reasons recorded in the landing commit:
+>
+> - `cli.py:2383-2395` (`_parse_json_object`) returns `None` on malformed input **by design** —
+>   stdin that is not a JSON object is a single value, not an error. It has no domain error to
+>   translate to, so `parse_json` is the wrong shape for it.
+> - `cli.py:1805-1823` (`--points`) and `cli.py:2774-2800` (`--cells`) still delegate per-item
+>   construction to `record_mod.point_record_from_mapping` / `extraction_mod.cell_from_mapping`,
+>   which build internal `dataclasses` and do their own field validation. A container model
+>   would duplicate a schema still written longhand beside it — which §3.3 says has not paid for
+>   itself — and would degrade three of the six messages `tests/test_digest_cli.py:950-966`
+>   asserts, losing the `--cells item N` framing that tells a user which flag and which element
+>   failed.
+
 Their existing tests keep asserting the same messages, or an assertion changes deliberately and
 visibly in the diff.
 
@@ -355,8 +371,9 @@ degradation branches.
 - [ ] Defect 5: no `cast()` calls remain at `acquire.py:1939-1943`; a malformed sidecar raises a
       named error naming the field
 - [ ] Defect 6: `dataset ingest` on a top-level JSON array exits 1 with a message
-- [ ] The five already-honest sites route through the shared helper with no loss of message
-      quality
+- [ ] Each already-honest site either routes through the shared helper with no loss of message
+      quality, or is left alone with its reason recorded in the landing commit (two of five
+      converted — see the amendment in §5.2 slice 5)
 - [ ] `uv run pytest -q` passes with the 100% gate intact; `uv run mypy` passes strict
 - [ ] No Pydantic model over package-internal or emit-only data (§3.2)
 
