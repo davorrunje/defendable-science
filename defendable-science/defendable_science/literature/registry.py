@@ -293,6 +293,16 @@ def _decode_asset(item: dict[str, Any]) -> Asset | None:
 class _CslItems(RootModel[list[Any]]):
     """A CSL-JSON bibliography: an array of item objects."""
 
+    # Not `ExternalModel`: a `RootModel[...]` cannot also inherit a
+    # `BaseModel` subclass that supplies `model_config` — same MRO collision
+    # as `_KeyStore` in core/keys.py — so this carries no `model_config` at
+    # all: no `strict=True`, no `extra=...`. Currently harmless: verified
+    # that `list[Any]` still rejects a non-list (e.g. a bare dict) body in
+    # lax mode, so the missing `strict=True` isn't load-bearing *yet* — but
+    # it becomes so the moment this is narrowed to something like
+    # `list[str]`, where lax mode would silently coerce a non-string item
+    # instead of rejecting it.
+
 
 def _parse_items(text: str, target: Path) -> list[Any]:
     """Parse CSL-JSON items from text.

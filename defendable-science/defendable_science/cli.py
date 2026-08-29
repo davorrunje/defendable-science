@@ -1815,6 +1815,11 @@ def _parse_points(raw: str) -> list[record_mod.PointRecord]:
         raise record_mod.RecordError(f"--points is not valid JSON: {exc}") from exc
     if not isinstance(data, list):
         raise record_mod.RecordError("--points must be a JSON array")
+    # Not consolidated onto a boundary model (ADR-0043 point 3): per-item
+    # construction already delegates to `record_mod.point_record_from_mapping`,
+    # which builds an internal dataclass with its own field validation — a
+    # model here would duplicate a schema still written longhand next to it,
+    # which has not paid for itself.
     points: list[record_mod.PointRecord] = []
     for item in data:
         if not isinstance(item, dict):
@@ -2383,6 +2388,10 @@ def _stdin_is_piped() -> bool:
 def _parse_json_object(raw: str) -> dict[str, object] | None:
     """Parse `raw` as a JSON object, or ``None`` if it is not one.
 
+    Not consolidated onto `parse_json` (ADR-0043 point 3): returning ``None``
+    for malformed/non-object input is the by-design outcome here, not an
+    error, so there is no domain error for a validation failure to become.
+
     :param raw: The raw stdin text.
     :returns: The decoded mapping, or ``None`` when `raw` is not valid JSON or is
         valid JSON but not an object (so it is treated as a single value).
@@ -2790,6 +2799,11 @@ def _parse_cells(raw: str) -> list[extraction_mod.Cell]:
         raise extraction_mod.ExtractionError(
             "--cells is an empty array; there is nothing to record"
         )
+    # Not consolidated onto a boundary model (ADR-0043 point 3): per-item
+    # construction already delegates to `extraction_mod.cell_from_mapping`,
+    # which builds an internal dataclass with its own field validation, and a
+    # container model would degrade the "--cells item N" framing that
+    # tests/test_digest_cli.py asserts on.
     cells: list[extraction_mod.Cell] = []
     for index, item in enumerate(data):
         if not isinstance(item, dict):

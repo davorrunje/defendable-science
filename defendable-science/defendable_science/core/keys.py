@@ -70,6 +70,14 @@ RCLONE_ENV_PREFIX = "RCLONE_CONFIG_"
 class _KeyStore(RootModel[dict[str, str]]):
     """The on-disk key store: a flat JSON object of string values."""
 
+    # Not `OwnedModel`: a `RootModel[...]` cannot also inherit a `BaseModel`
+    # subclass that supplies `model_config` — the generic root and the
+    # config-carrying base collide in the MRO — so `strict=True` is repeated
+    # here by hand instead of coming from `OwnedModel`. Currently harmless:
+    # verified that lax mode would not have coerced e.g. an int value to
+    # `str` here anyway, so `strict=True` isn't load-bearing *yet* — but a
+    # future edit to `OwnedModel` (e.g. tightening `extra=...`) will not
+    # automatically apply to this store.
     model_config = ConfigDict(strict=True)
 
 
