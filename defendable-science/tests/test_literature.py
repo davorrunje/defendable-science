@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -1226,6 +1227,8 @@ def test_resolve_malformed_200_body_is_transport_error_not_a_miss() -> None:
     rec = graph.resolve("W1", client=client)
     assert rec["resolved"] is False
     assert rec["transport_error"] is True
+    pattern = rf"{re.escape('https://api.openalex.org/works/W1')}: <root>: Input should be a valid dictionary"
+    assert re.search(pattern, rec["reason"])
 
 
 # --- S2 leg fix wave: converted halfway, whole-branch review (#169) ---------
@@ -1305,6 +1308,8 @@ def test_resolve_s2_crossref_malformed_body_is_transport_error_not_a_miss() -> N
     rec = graph.resolve("CorpusId:7", client=client)
     assert rec["resolved"] is False
     assert rec["transport_error"] is True
+    pattern = rf"{re.escape(f'{_S2}/paper/CorpusId:7')}: <root>: Input should be a valid dictionary"
+    assert re.search(pattern, rec["reason"])
 
 
 # --- final-review fix wave: dropped null guards (default_factory covers a
