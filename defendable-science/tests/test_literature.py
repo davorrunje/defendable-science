@@ -1593,19 +1593,20 @@ def test_cites_missing_meta_key_raises_instead_of_truncating() -> None:
         }
     )
     with pytest.raises(
-        http.HttpError, match=r"https://api\.openalex\.org/works.*meta.*Field required"
+        http.HttpError,
+        match=r"https://api\.openalex\.org/works.*meta: .*\(got dict\)",
     ):
         graph.cites("W1", client=client)
 
 
 def test_cites_error_envelope_raises_instead_of_reporting_zero_citations() -> None:
-    """An OpenAlex HTTP-200 error envelope must not read as "zero citations".
+    """Any 200 body missing `results` must not read as "zero citations".
 
     `results: list[OpenAlexWork] = Field(default_factory=list)` used to
-    default a *missing* `results` key to `[]`, so `{"error": ...,
-    "message": ...}` — OpenAlex's own error shape, delivered with a 200 —
-    silently became an empty, "legitimate" citation list instead of the
-    malformed page it is.
+    default a *missing* `results` key to `[]`, so a 200 body shaped like
+    `{"error": ..., "message": ...}` — e.g. an error envelope surfaced
+    through a proxy that rewrites the status — silently became an empty,
+    "legitimate" citation list instead of the malformed page it is.
     """
     client = _client(
         {
@@ -1617,7 +1618,7 @@ def test_cites_error_envelope_raises_instead_of_reporting_zero_citations() -> No
     )
     with pytest.raises(
         http.HttpError,
-        match=r"https://api\.openalex\.org/works.*results.*Field required",
+        match=r"https://api\.openalex\.org/works.*results: .*\(got dict\)",
     ):
         graph.cites("W1", client=client)
 

@@ -103,13 +103,15 @@ class WorksPage(ExternalModel):
     response, so a page missing it — including an HTTP-200 error envelope
     like ``{"error": ..., "message": ...}`` — is malformed, not empty.
 
-    ``meta`` likewise has no default, so a missing key is malformed too, but
-    its type stays ``_PageMeta | None``: OpenAlex sends an explicit
-    ``"meta": null`` mid-pagination to mean exactly "no further cursor", and
-    that is a legitimate final page, not a defect. Hard-failing a missing
-    ``meta`` key while still accepting a present ``null`` value is what keeps
-    :func:`cites` from reading a truncated frontier as complete (see its
-    docstring) without discarding a page OpenAlex genuinely ended.
+    ``meta`` likewise has no default, so a missing key is malformed too. Its
+    type stays ``_PageMeta | None``, tolerating an explicit ``"meta": null``
+    as a defensive fallback rather than something the live API is known to
+    send: OpenAlex always returns a ``meta`` object, and the last page is
+    spelled ``meta.next_cursor: null`` (see :class:`_PageMeta`). Hard-failing
+    a missing ``meta`` key is what keeps :func:`cites` from reading a
+    truncated frontier as complete (see its docstring); whether tolerating an
+    explicit top-level ``null`` should itself become a hard failure is
+    tracked separately (defendable-science#191).
     """
 
     results: list[OpenAlexWork]
@@ -159,12 +161,10 @@ class S2CitationEdge(ExternalModel):
 class S2CitationsPage(ExternalModel):
     """One page of S2's ``/paper/{id}/citations`` response.
 
-    ``data`` has **no default** on purpose: unlike ``WorksPage.results``
-    (which defaults to ``[]`` because a missing/empty page is not a hard
-    error there either), a missing, ``null``, or non-list ``data`` here is a
-    malformed page, not a page with zero edges — the two must not collapse,
-    or a truncated response would read as "this work simply has no citation
-    edges."
+    ``data`` has **no default** on purpose, like ``WorksPage.results``: a
+    missing, ``null``, or non-list ``data`` here is a malformed page, not a
+    page with zero edges — the two must not collapse, or a truncated response
+    would read as "this work simply has no citation edges."
     """
 
     data: list[Any]
