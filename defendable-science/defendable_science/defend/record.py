@@ -339,10 +339,13 @@ def append_log_entry(log_dir: Path, date: str, stem: str, body: str) -> Path:
         naming scheme changes.
     :param body: The rendered YAML to write.
     :returns: The path written.
-    :raises RecordError: If `stem` is not a single path segment — see
-        :func:`~defendable_science.core.paths.require_path_segment`
-        (defendable-science#182).
+    :raises RecordError: If `date` or `stem` is not a single path segment —
+        see :func:`~defendable_science.core.paths.require_path_segment`
+        (defendable-science#182). No current caller passes an untrusted
+        `date` (both are machine-generated), but this is public API and the
+        guard covers the whole filename it builds, not half of it.
     """
+    date = require_path_segment(date, what="date", error=RecordError)
     stem = require_path_segment(stem, what="stem", error=RecordError)
     log_dir.mkdir(parents=True, exist_ok=True)
     target = log_dir / f"{date}-{stem}.yml"

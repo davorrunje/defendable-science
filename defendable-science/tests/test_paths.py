@@ -32,6 +32,9 @@ def test_accepts_an_ordinary_identifier(value: str) -> None:
         "a\nb",
         "a\tb",
         "\x1f",
+        "C:PWNED",
+        "C:",
+        "c:PWNED",
     ],
 )
 def test_rejects_anything_that_is_not_a_single_path_segment(value: str) -> None:

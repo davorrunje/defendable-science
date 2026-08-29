@@ -8,10 +8,18 @@ was meant to stay inside (defendable-science#182). This is deliberately
 stricter than :func:`~defendable_science.scaffold.layout._relative`, which
 resolves and checks containment for a *configured path* that may legitimately
 have subdirectories — an identifier never should.
+
+The backslash check makes Windows nominally in scope, so a Windows *drive*
+(``"C:PWNED"``, drive-relative — no separator at all, so escapes the other
+checks) is rejected too, via :mod:`ntpath` rather than :mod:`os.path`: the
+latter is a no-op for drive detection on the POSIX hosts this test suite
+actually runs on, which would make the check silently do nothing everywhere
+it is exercised.
 """
 
 from __future__ import annotations
 
+import ntpath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,11 +40,18 @@ def require_path_segment(
         module boundary.
     :returns: `value` unchanged.
     :raises Exception: `error`, naming `what` and the offending value, if `value`
-        is empty, ``.``/``..``, contains a path separator, or contains a control
-        character (e.g. an embedded NUL) - anything that would either address
-        more than one path segment or reach the OS call as a raw, uncaught
-        error instead of this function's own signal.
+        is empty, ``.``/``..``, contains a path separator, contains a control
+        character (e.g. an embedded NUL), or is a Windows drive-relative value
+        (``"C:PWNED"``) — anything that would either address more than one
+        path segment or reach the OS call as a raw, uncaught error instead of
+        this function's own signal.
     """
-    if value in _UNSAFE or "/" in value or "\\" in value or any(c < " " for c in value):
+    if (
+        value in _UNSAFE
+        or "/" in value
+        or "\\" in value
+        or any(c < " " for c in value)
+        or ntpath.splitdrive(value)[0]
+    ):
         raise error(f"{what} is not a valid path segment: {value!r}")
     return value
