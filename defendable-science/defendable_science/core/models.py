@@ -15,7 +15,6 @@ from legitimately-absent data.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -57,9 +56,16 @@ def _explain(exc: ValidationError) -> str:
         ``<root>`` so the message never reads as if a field were unnamed. Each
         reason names the received value's *type* — never the value itself,
         which can be an entire API response and too large to put in a message.
+        A ``json_invalid`` error (raised by :meth:`~pydantic.BaseModel.model_validate_json`
+        for text that is not JSON at all) has no field path and an uninteresting
+        ``str`` input, so it renders as ``invalid JSON: <reason>`` instead —
+        preserving the substring every caller's decode-failure test matches on.
     """
     parts = []
     for err in exc.errors():
+        if err["type"] == "json_invalid":
+            parts.append(f"invalid JSON: {err['ctx']['error']}")
+            continue
         location = ".".join(str(part) for part in err["loc"]) or "<root>"
         received = type(err["input"]).__name__
         parts.append(f"{location}: {err['msg']} (got {received})")
@@ -74,6 +80,15 @@ def parse_obj(
     error: Callable[[str], Exception],
 ) -> T:
     """Validate an already-parsed JSON value, or raise the caller's domain error.
+
+    Validates in Pydantic's *Python* mode, because `payload` is already a
+    decoded Python value (typically from :meth:`HttpClient.get_json`, whose
+    cache stores decoded JSON) — there is no surviving JSON text to hand
+    Pydantic instead. A model with a ``date``/``datetime``/``UUID``/``Decimal``
+    field is therefore **stricter** here than through :func:`parse_json`: in
+    Python mode those types must already be the real Python object, not the
+    string JSON spells them as. Prefer :func:`parse_json` when raw text is
+    still available.
 
     :param model: The boundary model to validate against.
     :param payload: The decoded JSON value.
@@ -103,6 +118,16 @@ def parse_json(
     A caller reading a file gets one error idiom for "this is not JSON" and for
     "this is JSON of the wrong shape", so neither can reach the user raw.
 
+    Validates in Pydantic's *JSON* mode (:meth:`~pydantic.BaseModel.model_validate_json`,
+    not decode-then-``model_validate``), because JSON itself has no native
+    ``date``/``datetime``/``tuple``/``set``/``UUID``/``Decimal`` — those are
+    strings and arrays on the wire, and JSON mode is where Pydantic accepts
+    those spellings even under ``strict=True``. Decoding first and validating
+    the resulting ``dict`` would run in Python mode instead, where the same
+    ``strict=True`` demands the real Python type and rejects perfectly
+    well-formed JSON. See :func:`parse_obj` for the (stricter) Python-mode
+    counterpart, used when only an already-decoded value is available.
+
     :param model: The boundary model to validate against.
     :param text: The raw JSON text.
     :param source: What is being parsed — a path or a URL — for the message.
@@ -112,10 +137,9 @@ def parse_json(
         or the field path and reason.
     """
     try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise error(f"{source}: invalid JSON: {exc}") from exc
-    return parse_obj(model, payload, source=source, error=error)
+        return model.model_validate_json(text)
+    except ValidationError as exc:
+        raise error(f"{source}: {_explain(exc)}") from exc
 
 
 def parse_each(model: type[T], items: Iterable[object]) -> tuple[list[T], int]:

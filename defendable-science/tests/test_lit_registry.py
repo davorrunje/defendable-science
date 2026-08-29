@@ -135,7 +135,7 @@ def test_invalid_json_is_an_actionable_error(tmp_path: Path) -> None:
 def test_non_array_top_level_is_an_actionable_error(tmp_path: Path) -> None:
     path = tmp_path / "r.json"
     path.write_text('{"items": []}', encoding="utf-8")
-    pattern = rf"{re.escape(str(path))}: <root>: Input should be a valid list"
+    pattern = rf"{re.escape(str(path))}: <root>: Input should be a valid array"
     with pytest.raises(reg.RegistryError, match=pattern):
         reg.load_registry(path)
 

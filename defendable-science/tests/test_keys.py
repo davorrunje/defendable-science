@@ -116,7 +116,7 @@ def test_load_store_rejects_bad_json(tmp_path: Path) -> None:
 def test_load_store_rejects_non_object(tmp_path: Path) -> None:
     store = tmp_path / "keys.json"
     store.write_text("[1, 2, 3]", encoding="utf-8")
-    pattern = rf"{re.escape(str(store))}: <root>: Input should be a valid dictionary"
+    pattern = rf"{re.escape(str(store))}: <root>: Input should be an object"
     with pytest.raises(ValueError, match=pattern):
         keys_mod.load_store(store)
 

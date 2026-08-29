@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import pytest
 
 from defendable_science.core import models
@@ -108,6 +110,23 @@ def test_parse_json_folds_a_decode_error_into_the_domain_error() -> None:
 def test_parse_json_folds_a_validation_error_into_the_domain_error() -> None:
     with pytest.raises(_BoomError, match=r"f\.json: name: "):
         models.parse_json(_Widget, "{}", source="f.json", error=_BoomError)
+
+
+def test_parse_json_accepts_json_native_spellings_of_rich_types() -> None:
+    """`strict=True` must not reject a date that JSON can only spell as a string.
+
+    Regression for validating in Python mode (decode-then-`model_validate`)
+    rather than JSON mode: a `date` field would reject the only spelling JSON
+    can give it, turning perfectly well-formed input into a hard error.
+    """
+
+    class _Dated(models.ExternalModel):
+        when: datetime.date
+
+    got = models.parse_json(
+        _Dated, '{"when": "2024-01-01"}', source="x", error=_BoomError
+    )
+    assert got.when == datetime.date(2024, 1, 1)
 
 
 def test_parse_each_keeps_the_valid_and_counts_the_skipped() -> None:
