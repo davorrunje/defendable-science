@@ -710,6 +710,13 @@ def test_rung_4_comma_in_title_does_not_split_the_filter_query() -> None:
     An unescaped comma in the title would silently turn one
     ``title.search:`` clause into two ANDed clauses instead of raising, so
     the request actually sent must carry exactly one ``title.search:`` term.
+
+    The load-bearing check is the absence of ',' anywhere in the filter
+    value: counting terms with the ``title.search:`` prefix (as the first
+    assertion below does) is *not* discriminating on its own — with the sub
+    reverted, ``"title.search:Deep Learning, Revisited".split(",")`` still
+    yields exactly one element that starts with that prefix, so that
+    assertion alone would pass even with the bug present.
     """
     client = FakeClient({"/works": {"results": []}})
     entry = _entry(title="Deep Learning, Revisited")
@@ -720,7 +727,7 @@ def test_rung_4_comma_in_title_does_not_split_the_filter_query() -> None:
     search_terms = params["filter"].split(",")
     title_search_terms = [t for t in search_terms if t.startswith("title.search:")]
     assert len(title_search_terms) == 1
-    assert "," not in params["filter"].split("title.search:", 1)[1]
+    assert "," not in params["filter"]
 
 
 def test_rung_4_pipe_in_title_does_not_split_the_filter_query() -> None:
@@ -733,6 +740,37 @@ def test_rung_4_pipe_in_title_does_not_split_the_filter_query() -> None:
     assert params is not None
     assert params["filter"].count("title.search:") == 1
     assert "|" not in params["filter"]
+
+
+def test_rung_4_leading_bang_in_title_does_not_invert_the_search() -> None:
+    """OpenAlex reserves a leading '!' on a filter value for negation.
+
+    An unescaped leading '!' would silently turn "does this title" into
+    "does NOT contain this title", returning an empty rung instead of
+    erroring or matching. The request actually sent must not carry that '!'.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!Kung-Fu Panda")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"] == "title.search:Kung-Fu Panda"
+
+
+def test_rung_4_all_reserved_character_title_short_circuits_without_a_request() -> None:
+    """A title made only of reserved characters must not send an unbounded query.
+
+    Stripping ',', '|', and a leading '!' from a title like "!,|" leaves
+    nothing to search on; sending `title.search:` with no value would be an
+    unbounded query rather than a targeted one, so the rung must return no
+    candidates without calling the client at all.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!,|")
+    result = a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert result == []
+    assert client.calls == []
 
 
 def test_rung_5_builds_candidates_from_the_arxiv_atom_feed() -> None:

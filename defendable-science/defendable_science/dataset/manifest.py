@@ -268,8 +268,17 @@ def _decode_retrieval(raw: Any, where: str) -> Retrieval:
     """Decode a ``retrieval`` block."""
     if not isinstance(raw, dict):
         raise ManifestError(f"{where}: 'retrieval' must be a mapping")
+    kind_raw = raw.get("kind")
     return Retrieval(
-        kind=_str_or_error(raw.get("kind", ""), where, "retrieval.kind"),
+        # An explicit `kind: null` must resolve the same as an absent key —
+        # both mean "unset", and _decode_entry already treats a null
+        # `retrieval:` block itself as absent. Routing null through
+        # `_str_or_error` directly would abort the whole load() for a field
+        # that has a defined default, instead of the one clean validate()
+        # error the missing-key case produces.
+        kind=_str_or_error(
+            "" if kind_raw is None else kind_raw, where, "retrieval.kind"
+        ),
         url=_opt_str(raw.get("url")),
     )
 
