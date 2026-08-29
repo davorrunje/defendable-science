@@ -63,6 +63,7 @@ def test_positioning_is_a_staged_paper_document() -> None:
     out = lay.Layout.default(Path("/repo"))
 
     assert lay.STAGED_DOCUMENTS[out.positioning("p1").name] == "paper"
+    assert out.positioning("p1").parent == out.paper_docs_dir("p1")
 
 
 # --- gap 5: identifier-taking paths reject a traversal attempt (#182) -------
@@ -115,7 +116,6 @@ def test_paper_id_containing_a_plain_slash_is_rejected_too() -> None:
     out = lay.Layout.default(Path("/repo"))
     with pytest.raises(lay.LayoutError, match="paper_id"):
         out.paper_dir("depth-collapse/../../etc")
-    assert out.positioning("p1").parent == out.paper_docs_dir("p1")
 
 
 def test_rel_renders_a_path_for_display_and_tolerates_an_outside_path() -> None:
