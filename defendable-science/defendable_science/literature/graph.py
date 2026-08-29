@@ -126,17 +126,21 @@ class S2ExternalIds(ExternalModel):
 class S2CitationEdge(ExternalModel):
     """One incoming citation edge from S2's ``/citations`` endpoint.
 
-    ``is_influential`` is ``| None``, not merely defaulted: S2 sends an
-    explicit ``null`` when it has no opinion on an edge, and a
-    ``default_factory``/``default`` alone only covers the *missing* key —
-    ``strict=True`` would reject a present ``null``, dropping the *whole*
-    edge (its ``contexts``/``intents`` too) rather than just the flag.
-    ``None`` is falsy at the one call site that reads it, matching the old
-    ``edge.get("isInfluential")`` behaviour.
+    Every field is ``| None`` rather than merely defaulted, because a
+    ``default``/``default_factory`` only covers a *missing* key: under
+    ``strict=True`` a present ``null`` still reaches validation and is
+    rejected, which drops the **whole edge** via :func:`parse_each` — a null
+    ``contexts`` would take the edge's real ``intents`` and influence flag
+    down with it, and vice versa. For an edge, ``null`` and absent mean the
+    same thing ("S2 has none of this for this citation"), so nothing is
+    gained by distinguishing them and a usable edge is lost by trying.
+
+    ``None`` is falsy at every call site that reads these, matching the
+    original ``edge.get(...)`` behaviour this model replaced.
     """
 
-    contexts: list[str] = Field(default_factory=list)
-    intents: list[str] = Field(default_factory=list)
+    contexts: list[str] | None = None
+    intents: list[str] | None = None
     is_influential: bool | None = Field(default=None, alias="isInfluential")
 
 

@@ -1486,6 +1486,59 @@ def test_s2_edge_with_null_is_influential_keeps_its_context_and_intent() -> None
     assert out["is_influential"] is False
 
 
+@pytest.mark.parametrize(
+    ("edge", "wanted"),
+    [
+        pytest.param(
+            {"contexts": None, "intents": ["bg"], "isInfluential": True},
+            (None, "bg", True),
+            id="null-contexts-keeps-intent-and-flag",
+        ),
+        pytest.param(
+            {"contexts": ["c"], "intents": None, "isInfluential": True},
+            ("c", None, True),
+            id="null-intents-keeps-context-and-flag",
+        ),
+    ],
+)
+def test_s2_edge_with_a_null_list_field_keeps_the_rest_of_the_edge(
+    edge: dict[str, object], wanted: tuple[str | None, str | None, bool]
+) -> None:
+    """A null `contexts`/`intents` must not take the rest of the edge with it.
+
+    `Field(default_factory=list)` covered a missing key but not a present
+    `null`, so `strict=True` rejected the edge outright and `parse_each`
+    dropped every *other* field on it too. For an edge, null and absent mean
+    the same thing, so nothing is gained by distinguishing them.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([edge], out)
+    assert skipped == 0
+    assert (out["context_snippet"], out["intent"], out["is_influential"]) == wanted
+
+
+def test_s2_edge_with_a_non_list_contexts_is_still_skipped() -> None:
+    """Tolerating `null` must not also start tolerating a genuinely wrong type.
+
+    This is the defect-3 guarantee: a bare string `contexts` used to yield
+    its *first character* as the citation context. It must still be rejected.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges([{"contexts": "Hello", "intents": []}], out)
+    assert skipped == 1
+    assert out["context_snippet"] is None
+
+
 def test_enrich_marks_is_influential_degraded_even_when_samples_survive() -> None:
     """A dropped influential edge can silently flip `is_influential` to `False`.
 
