@@ -195,11 +195,12 @@ def test_ingest_a_top_level_array_exits_1_not_a_traceback(tmp_path: Path) -> Non
 
     assert result.exit_code == 1
     assert "ingest failed" in result.output
+    assert "croissant" in result.output
     assert not isinstance(result.exception, AttributeError)
 
 
 def test_entry_from_croissant_rejects_a_non_mapping_document() -> None:
-    with pytest.raises(m.ManifestError, match=r"croissant: <root>: "):
+    with pytest.raises(m.ManifestError, match=r"croissant: <root>: .*valid dictionary"):
         m.entry_from_croissant([1, 2])
 
 

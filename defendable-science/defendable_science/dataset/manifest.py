@@ -543,6 +543,17 @@ class CroissantDocument(ExternalModel):
     ``distribution`` is not a list — both of which used to reach
     :func:`entry_from_croissant` and raise an ``AttributeError`` that escaped
     the CLI's ``except`` tuple as a traceback.
+
+    Covers every field ``entry_from_croissant`` reads: ``name``/``alternateName``
+    to derive an id and title, ``distribution`` for the file list, and the five
+    scalars ``version``, ``license``, ``description``, ``identifier`` and
+    ``citeAs`` (as ``cite_as``) that flow straight into the draft
+    :class:`DatasetEntry`. Those five are typed ``Any`` rather than ``str |
+    None`` on purpose: :func:`_opt_str` is the sole coercion point and is
+    documented to accept any scalar, coercing it to ``str`` while preserving
+    ``None`` — a Croissant carrying ``version: 2`` becomes ``"2"`` today.
+    Typing them ``str`` under ``strict=True`` would start rejecting documents
+    that currently work, which is a behaviour change this model must not make.
     """
 
     name: str | None = None
