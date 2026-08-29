@@ -42,10 +42,12 @@ extension to conflict inside.
 - `pooch` pulls `packaging`, `platformdirs`
 - `requests` pulls `certifi`, `charset-normalizer`, `idna`, `urllib3`
 
-Adding `pydantic` adds three more: `pydantic-core`, `annotated-types` and
-`typing-extensions` — a real download-size increase, since `pydantic-core`
-ships a compiled per-platform wheel, but a difference of *degree*, not of
-*kind*, against a tree that already carries a Rust-adjacent dependency
+Adding `pydantic` adds four more: `pydantic-core`, `annotated-types`,
+`typing-extensions` and `typing-inspection`. Only `pydantic-core` is
+compiled — it ships a per-platform wheel, so this is a real download-size
+increase — while the other three are pure Python. A difference of
+*degree*, then, not of *kind*, against a tree that already carries a
+Rust-adjacent dependency
 footprint (`urllib3`, `rich`'s C-accelerated paths) and eight indirect
 packages before Pydantic is even considered.
 
