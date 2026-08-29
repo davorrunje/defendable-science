@@ -268,9 +268,14 @@ def test_refs_reads_referenced_works() -> None:
 
 
 def test_fetch_work_non_dict_raises() -> None:
-    # A non-dict 200 body must not be coerced to a hollow {} work.
+    # A non-dict 200 body must not be coerced to a hollow {} work. The message
+    # must name both halves (ADR-0043 decision point 4): the failing source
+    # and the reason — either alone would leave a dropped-URL regression
+    # undetected.
     client = _client({"https://api.openalex.org/works/W1": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="valid dictionary"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works/W1.*valid dictionary"
+    ):
         graph.refs("W1", client=client)
 
 
@@ -394,8 +399,13 @@ def test_resolve_empty_body_is_miss() -> None:
 
 
 def test_cites_non_dict_first_page_raises() -> None:
+    # The message must name both the failing source and the reason
+    # (ADR-0043 decision point 4) — either alone would leave a dropped-URL
+    # regression undetected.
     client = _client({"https://api.openalex.org/works": ["not-a-dict"]})
-    with pytest.raises(http.HttpError, match="valid dictionary"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works.*valid dictionary"
+    ):
         graph.cites("W1", client=client)
 
 
@@ -406,7 +416,9 @@ def test_cites_non_dict_page_mid_pagination_raises() -> None:
         "meta": {"next_cursor": "c2"},
     }
     client = _client({"https://api.openalex.org/works": [page1, "not-a-dict"]})
-    with pytest.raises(http.HttpError, match="valid dictionary"):
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works.*valid dictionary"
+    ):
         graph.cites("W1", client=client)
 
 
