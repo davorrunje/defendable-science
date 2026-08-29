@@ -16,9 +16,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
+from pydantic import Field
+
+from defendable_science.core.models import ExternalModel, parse_obj
 
 #: A file checksum value: 64 lowercase hex chars, optionally ``sha256:``-prefixed.
 SHA256_RE = re.compile(r"^(sha256:)?[0-9a-f]{64}$")
@@ -531,30 +534,53 @@ def croissant_for(entry: DatasetEntry) -> dict[str, Any]:
     return doc
 
 
-def entry_from_croissant(json_ld: dict[str, Any]) -> DatasetEntry:
+class CroissantDocument(ExternalModel):
+    """The parts of a published Croissant / schema.org ``Dataset`` we read.
+
+    ``extra="ignore"``: a real Croissant file carries a great deal of JSON-LD
+    this package has no use for, and an unmodelled field is not an error. What
+    *is* an error is a document that is not an object at all, or whose
+    ``distribution`` is not a list — both of which used to reach
+    :func:`entry_from_croissant` and raise an ``AttributeError`` that escaped
+    the CLI's ``except`` tuple as a traceback.
+    """
+
+    name: str | None = None
+    alternate_name: str | None = Field(default=None, alias="alternateName")
+    distribution: list[Any] = Field(default_factory=list)
+
+
+def entry_from_croissant(json_ld: object) -> DatasetEntry:
     """Ingest a published Croissant document into a *draft* registry entry.
 
     Fills what the Croissant carries and leaves human-owned fields (``tier``,
     ``retrieval``, ``datasheet``, ``sensitivity``) unset — the caller flags them
     as TODO on register. Never guesses a tier or a license grant.
 
-    :param json_ld: A parsed Croissant / schema.org ``Dataset`` document.
+    :param json_ld: A parsed Croissant / schema.org ``Dataset`` document, of any
+        shape — it is validated here rather than assumed.
     :returns: A partial :class:`DatasetEntry` draft.
-    :raises ManifestError: If the document has no usable ``name``, or a
-        ``distribution`` entry is a malformed ``FileObject`` (not a mapping, or
-        missing ``contentUrl`` / ``sha256``). A malformed file is surfaced, never
-        silently dropped — "no distribution" is distinct from "a bad file".
+    :raises ManifestError: If the document is not a JSON object, has no usable
+        ``name``, or a ``distribution`` entry is a malformed ``FileObject`` (not
+        a mapping, or missing ``contentUrl`` / ``sha256``). A malformed file is
+        surfaced, never silently dropped — "no distribution" is distinct from
+        "a bad file".
     """
-    name = json_ld.get("name")
-    if not name:
+    doc = parse_obj(CroissantDocument, json_ld, source="croissant", error=ManifestError)
+    if not doc.name:
         raise ManifestError("croissant: document has no 'name' to derive an id from")
     # A round-tripped export carries the stable slug in `alternateName`; external
     # Croissant files won't, so fall back to `name` for the id.
-    entry_id = str(json_ld.get("alternateName") or name)
-    title = str(name) if str(name) != entry_id else None
+    entry_id = str(doc.alternate_name or doc.name)
+    title = str(doc.name) if str(doc.name) != entry_id else None
+    # `doc` only models the fields entry_from_croissant needs firm validation
+    # on (name, alternateName, distribution); parse_obj already established
+    # json_ld is object-shaped, so the remaining optional fields are read
+    # straight off it, as before.
+    raw = cast("dict[str, Any]", json_ld)
 
     files: list[FileRef] = []
-    for i, obj in enumerate(json_ld.get("distribution") or []):
+    for i, obj in enumerate(doc.distribution):
         loc = f"croissant: distribution[{i}]"
         if not isinstance(obj, dict):
             raise ManifestError(f"{loc}: FileObject must be a mapping")
@@ -574,18 +600,18 @@ def entry_from_croissant(json_ld: dict[str, Any]) -> DatasetEntry:
 
     return DatasetEntry(
         id=entry_id,
-        version=_opt_str(json_ld.get("version")),
-        license=_opt_str(json_ld.get("license")),
+        version=_opt_str(raw.get("version")),
+        license=_opt_str(raw.get("license")),
         title=title,
-        description=_opt_str(json_ld.get("description")),
-        pid=_opt_str(json_ld.get("identifier")),
+        description=_opt_str(raw.get("description")),
+        pid=_opt_str(raw.get("identifier")),
         files=files,
         citation=(
             Citation(
-                title=title or str(name),
-                identifier=_opt_str(json_ld.get("identifier")),
+                title=title or str(doc.name),
+                identifier=_opt_str(raw.get("identifier")),
             )
-            if json_ld.get("citeAs")
+            if raw.get("citeAs")
             else None
         ),
     )

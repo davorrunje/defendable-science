@@ -186,6 +186,23 @@ def test_entry_from_croissant_without_name_raises() -> None:
         m.entry_from_croissant({"description": "no name here"})
 
 
+def test_ingest_a_top_level_array_exits_1_not_a_traceback(tmp_path: Path) -> None:
+    """Defect 6: AttributeError escaped cli.py's except tuple as a traceback."""
+    croissant = tmp_path / "x.json"
+    croissant.write_text("[1, 2]", encoding="utf-8")
+
+    result = runner.invoke(app, ["dataset", "ingest", str(croissant)])
+
+    assert result.exit_code == 1
+    assert "ingest failed" in result.output
+    assert not isinstance(result.exception, AttributeError)
+
+
+def test_entry_from_croissant_rejects_a_non_mapping_document() -> None:
+    with pytest.raises(m.ManifestError, match=r"croissant: <root>: "):
+        m.entry_from_croissant([1, 2])
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
