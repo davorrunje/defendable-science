@@ -107,6 +107,20 @@ class S2CitationEdge(ExternalModel):
     is_influential: bool = Field(default=False, alias="isInfluential")
 
 
+class S2CitationsPage(ExternalModel):
+    """One page of S2's ``/paper/{id}/citations`` response.
+
+    ``data`` has **no default** on purpose: unlike ``WorksPage.results``
+    (which defaults to ``[]`` because a missing/empty page is not a hard
+    error there either), a missing, ``null``, or non-list ``data`` here is a
+    malformed page, not a page with zero edges — the two must not collapse,
+    or a truncated response would read as "this work simply has no citation
+    edges."
+    """
+
+    data: list[Any]
+
+
 def parse_work(payload: object, *, source: str) -> OpenAlexWork:
     """Validate an OpenAlex work payload, or fail the call.
 
@@ -269,6 +283,35 @@ def _s2_crossref(client: HttpClient, s2_id: str) -> tuple[str, str] | None:
     return None
 
 
+def _resolve_s2_xref(client: HttpClient, norm: str) -> tuple[str, str] | dict[str, Any]:
+    """Cross-reference an S2 id for `resolve`.
+
+    Returns ``(kind, norm)`` on success, or a failure dict for `resolve` to
+    return as-is. Split out of `resolve` to keep its branch count down; the
+    returned failure dict already matches `resolve`'s own
+    ``{resolved: False, ...}`` shape.
+
+    :raises RateLimitError: If S2 rate-limits — a throttle must propagate.
+    """
+    from defendable_science.core.http import HttpError, RateLimitError
+
+    try:
+        xref = _s2_crossref(client, norm)
+    except RateLimitError:
+        raise
+    except HttpError as exc:
+        # A malformed S2 200 body during cross-reference is a transport
+        # anomaly, not "no such paper" — mirrors the OpenAlex work-fetch
+        # path in `resolve` for the same defect (ADR-0043 decision point 4).
+        return {"resolved": False, "reason": str(exc), "transport_error": True}
+    if xref is None:
+        return {
+            "resolved": False,
+            "reason": f"could not cross-reference S2 id {norm!r} to a DOI/arXiv",
+        }
+    return xref
+
+
 def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
     """Resolve any identifier to a canonical work record.
 
@@ -287,13 +330,10 @@ def resolve(identifier: str, *, client: HttpClient) -> dict[str, Any]:
 
     kind, norm = _classify(identifier)
     if kind == "s2":
-        xref = _s2_crossref(client, norm)
-        if xref is None:
-            return {
-                "resolved": False,
-                "reason": f"could not cross-reference S2 id {norm!r} to a DOI/arXiv",
-            }
-        kind, norm = xref
+        outcome = _resolve_s2_xref(client, norm)
+        if isinstance(outcome, dict):
+            return outcome
+        kind, norm = outcome
     lookup = _lookup_url(kind, norm)
     if lookup is None:
         return {"resolved": False, "reason": f"unsupported identifier kind: {kind}"}
@@ -391,6 +431,20 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
     rate-limit is *not* best-effort: it propagates rather than masquerading as "S2
     had no data".
 
+    The bundle also carries internal bookkeeping keys read by :func:`enrich` to
+    build its ``degraded`` marker — never emitted to a consumer directly, and
+    absent entirely when nothing was lost:
+
+    - ``meta_skipped`` — the ``/paper`` metadata body was malformed, so the
+      ``s2`` id (if any) could not be read (spec §3.4: best effort, never a
+      hard failure over an optional field).
+    - ``edges_skipped`` — how many individual ``/citations`` edges were
+      malformed (see :func:`_aggregate_s2_edges`).
+    - ``citations_skipped`` — the whole ``/citations`` page was malformed, so
+      no edges could be read at all; distinct from a transport miss (a 404,
+      say), which yields all-``None`` with no marker because that is a
+      legitimate "S2 has nothing" rather than a lost signal.
+
     :raises RateLimitError: If S2 rate-limits during either sub-request.
     """
     from defendable_science.core.http import HttpError, RateLimitError
@@ -411,13 +465,23 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         meta = {}
     corpus = None
     if meta:
-        corpus = parse_obj(
-            S2ExternalIds, meta, source=f"{S2}/paper/{s2_paper_id}", error=HttpError
-        ).external_ids.corpus_id
+        try:
+            corpus = parse_obj(
+                S2ExternalIds,
+                meta,
+                source=f"{S2}/paper/{s2_paper_id}",
+                error=HttpError,
+            ).external_ids.corpus_id
+        except HttpError:
+            # A malformed metadata body must not hard-fail the whole call —
+            # S2 is an optional, best-effort enrichment (spec §3.4) — but the
+            # lost `s2` id must still be visible to the caller, not silently
+            # absent (ADR-0043 decision point 4).
+            out["meta_skipped"] = True
     if corpus is not None:
         out["s2"] = f"CorpusId:{corpus}"
     try:
-        page = client.get_json(
+        raw_page = client.get_json(
             f"{S2}/paper/{s2_paper_id}/citations",
             {"fields": "contexts,intents,isInfluential", "limit": "100"},
             s2=True,
@@ -426,8 +490,22 @@ def _s2_context(client: HttpClient, s2_paper_id: str) -> dict[str, Any]:
         raise
     except HttpError:
         return out
-    edges = page.get("data", []) if isinstance(page, dict) else []
-    out["edges_skipped"] = _aggregate_s2_edges(edges, out)
+    try:
+        page = parse_obj(
+            S2CitationsPage,
+            raw_page,
+            source=f"{S2}/paper/{s2_paper_id}/citations",
+            error=HttpError,
+        )
+    except HttpError:
+        # A malformed citations page (missing/null/non-list `data`) is the
+        # same "must not hard-fail, must not vanish" situation as a malformed
+        # edge or a malformed metadata body — it must not raise (a `None`
+        # `data` used to blow up as a raw TypeError) and must not report as a
+        # legitimate empty result with no marker.
+        out["citations_skipped"] = True
+        return out
+    out["edges_skipped"] = _aggregate_s2_edges(page.data, out)
     return out
 
 
@@ -496,8 +574,13 @@ def enrich(
                 record["context_snippet"] = bundle["context_snippet"]
                 record["intent"] = bundle["intent"]
                 record["is_influential"] = bundle["is_influential"]
-                if bundle.get("edges_skipped"):
-                    record["degraded"] = ["context", "intent", "is_influential"]
+                degraded: list[str] = []
+                if bundle.get("meta_skipped"):
+                    degraded.append("s2")
+                if bundle.get("edges_skipped") or bundle.get("citations_skipped"):
+                    degraded.extend(["context", "intent", "is_influential"])
+                if degraded:
+                    record["degraded"] = degraded
         records.append(record)
     return records
 

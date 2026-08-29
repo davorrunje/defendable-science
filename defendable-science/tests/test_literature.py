@@ -1220,3 +1220,82 @@ def test_resolve_malformed_200_body_is_transport_error_not_a_miss() -> None:
     rec = graph.resolve("W1", client=client)
     assert rec["resolved"] is False
     assert rec["transport_error"] is True
+
+
+# --- S2 leg fix wave: converted halfway, whole-branch review (#169) ---------
+
+
+def test_enrich_with_key_malformed_meta_body_degrades_with_marker() -> None:
+    """Item 1: a malformed S2 metadata body used to hard-fail the whole call.
+
+    S2 is an optional, best-effort enrichment (spec §3.4) — a malformed
+    ``/paper`` body must degrade like the transport-error path already does,
+    not raise; and the lost ``s2`` id must show up in ``degraded``, not
+    vanish silently.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": "not-a-dict",
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [{"contexts": ["c"], "intents": [], "isInfluential": False}]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] is None
+    assert rec["context_snippet"] == "c"
+    assert rec["degraded"] == ["s2"]
+
+
+def test_enrich_with_key_null_citations_data_degrades_not_crashes() -> None:
+    """Item 2a: ``{"data": null}`` used to raise a raw ``TypeError``.
+
+    ``'NoneType' object is not iterable`` used to escape `_http_guard` as a
+    traceback from ``literature enrich --context``; it must degrade instead.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 3}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {"data": None},
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] == "CorpusId:3"
+    assert rec["context_snippet"] is None
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_enrich_with_key_non_dict_citations_page_degrades_with_marker() -> None:
+    """Item 2b: a non-dict ``/citations`` body used to be reported as clean.
+
+    It used to yield all-``None`` with no ``degraded`` marker — a failure
+    disguised as "S2 had nothing".
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 4}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": "not-a-dict",
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["id"]["s2"] == "CorpusId:4"
+    assert rec["context_snippet"] is None
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_resolve_s2_crossref_malformed_body_is_transport_error_not_a_miss() -> None:
+    """Item 3: `resolve()`'s S2 leg used to report this defect differently.
+
+    It reported exit 1 (a genuine miss) while the OpenAlex leg of the same
+    function reports exit 3 (transport_error) for the identical defect.
+    """
+    client = _client({f"{_S2}/paper/CorpusId:7": "not-a-dict"})
+    rec = graph.resolve("CorpusId:7", client=client)
+    assert rec["resolved"] is False
+    assert rec["transport_error"] is True
