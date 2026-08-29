@@ -693,11 +693,17 @@ def test_enrich_with_key_via_arxiv_id() -> None:
 
 
 def test_enrich_with_key_no_addressable_id() -> None:
+    """A work with no DOI/arXiv id was never *queried* — not "S2 had nothing".
+
+    Both used to read as `context_snippet: null` with no `degraded` marker,
+    making a work S2 was never asked about indistinguishable from one S2 was
+    asked about and genuinely had nothing to say.
+    """
     work = {"id": "https://openalex.org/W3", "display_name": "T"}  # no doi/arxiv
     client = _client({"https://api.openalex.org/works/W3": work}, s2_key="k")
     rec = graph.enrich(["W3"], client=client, with_context=True)[0]
     assert rec["context_snippet"] is None
-    assert "degraded" not in rec
+    assert rec["degraded"] == ["context", "intent", "is_influential"]
 
 
 def test_enrich_with_key_empty_citations_leaves_influential_none() -> None:
@@ -1412,13 +1418,15 @@ def test_s2_context_all_valid_edges_omit_edges_skipped_entirely() -> None:
     assert "edges_skipped" not in bundle
 
 
-def test_enrich_partial_edge_loss_does_not_degrade_recovered_fields() -> None:
-    """One skipped edge among many survivors must not distrust real values.
+def test_enrich_partial_edge_loss_does_not_degrade_recovered_samples() -> None:
+    """One skipped edge among many survivors must not distrust real *samples*.
 
-    `degraded` used to be set for all three context fields whenever
+    `context_snippet`/`intent` used to be marked degraded whenever
     `edges_skipped` was truthy, even when a surviving edge supplied a real
-    `context_snippet`/`intent`/`is_influential` — telling a consumer three
-    correct, populated fields were unreliable.
+    value — telling a consumer two correct, populated fields were
+    unreliable. `is_influential` is different: it is an aggregate over every
+    edge, so it is still marked degraded even though its value (`True`, here)
+    happens to be correct — see the next test for the case where it is not.
     """
     client = _client(
         {
@@ -1437,7 +1445,7 @@ def test_enrich_partial_edge_loss_does_not_degrade_recovered_fields() -> None:
     assert rec["context_snippet"] == "c"
     assert rec["intent"] == "bg"
     assert rec["is_influential"] is True
-    assert "degraded" not in rec
+    assert rec["degraded"] == ["is_influential"]
 
 
 def test_enrich_total_edge_loss_still_degrades_all_three_fields() -> None:
@@ -1454,3 +1462,59 @@ def test_enrich_total_edge_loss_still_degrades_all_three_fields() -> None:
     )
     rec = graph.enrich(["W1"], client=client, with_context=True)[0]
     assert rec["degraded"] == ["context", "intent", "is_influential"]
+
+
+def test_s2_edge_with_null_is_influential_keeps_its_context_and_intent() -> None:
+    """An explicit `"isInfluential": null` must not drop the whole edge.
+
+    `is_influential: bool = Field(default=False, ...)` under `strict=True`
+    rejected the null, so `parse_each` dropped the entire edge — not just the
+    flag — losing a real `contexts`/`intents` value in the process.
+    """
+    out: dict[str, object] = {
+        "s2": None,
+        "context_snippet": None,
+        "intent": None,
+        "is_influential": None,
+    }
+    skipped = graph._aggregate_s2_edges(
+        [{"contexts": ["c"], "intents": ["bg"], "isInfluential": None}], out
+    )
+    assert skipped == 0
+    assert out["context_snippet"] == "c"
+    assert out["intent"] == "bg"
+    assert out["is_influential"] is False
+
+
+def test_enrich_marks_is_influential_degraded_even_when_samples_survive() -> None:
+    """A dropped influential edge can silently flip `is_influential` to `False`.
+
+    `context_snippet`/`intent` are representative samples — a surviving edge
+    legitimately supplies them, so they must not be marked degraded. But
+    `is_influential` is an aggregate over *every* edge (`any(...)`): dropping
+    the one influential edge and keeping a non-influential survivor computes
+    a confident `False` when the true answer is `True`. It must be marked
+    degraded even though it is not `None`.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works/W1": _WORK,
+            f"{_S2}/paper/DOI:10.1234/abc": {"externalIds": {"CorpusId": 12}},
+            f"{_S2}/paper/DOI:10.1234/abc/citations": {
+                "data": [
+                    {
+                        "contexts": "an influential mention",  # malformed: not a list
+                        "intents": ["bg"],
+                        "isInfluential": True,
+                    },
+                    {"contexts": ["c"], "intents": ["bg"], "isInfluential": False},
+                ]
+            },
+        },
+        s2_key="k",
+    )
+    rec = graph.enrich(["W1"], client=client, with_context=True)[0]
+    assert rec["context_snippet"] == "c"
+    assert rec["intent"] == "bg"
+    assert rec["is_influential"] is False  # the value is unreliable, not corrected
+    assert rec["degraded"] == ["is_influential"]

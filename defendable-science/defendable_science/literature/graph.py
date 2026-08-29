@@ -124,11 +124,20 @@ class S2ExternalIds(ExternalModel):
 
 
 class S2CitationEdge(ExternalModel):
-    """One incoming citation edge from S2's ``/citations`` endpoint."""
+    """One incoming citation edge from S2's ``/citations`` endpoint.
+
+    ``is_influential`` is ``| None``, not merely defaulted: S2 sends an
+    explicit ``null`` when it has no opinion on an edge, and a
+    ``default_factory``/``default`` alone only covers the *missing* key —
+    ``strict=True`` would reject a present ``null``, dropping the *whole*
+    edge (its ``contexts``/``intents`` too) rather than just the flag.
+    ``None`` is falsy at the one call site that reads it, matching the old
+    ``edge.get("isInfluential")`` behaviour.
+    """
 
     contexts: list[str] = Field(default_factory=list)
     intents: list[str] = Field(default_factory=list)
-    is_influential: bool = Field(default=False, alias="isInfluential")
+    is_influential: bool | None = Field(default=None, alias="isInfluential")
 
 
 class S2CitationsPage(ExternalModel):
@@ -574,6 +583,45 @@ def _aggregate_s2_edges(edges: list[Any], out: dict[str, Any]) -> int:
     return skipped
 
 
+def _s2_degraded_fields(bundle: dict[str, Any]) -> list[str]:
+    """Decide which of a context bundle's fields to mark ``degraded``.
+
+    Three distinct losses, none reported the same way:
+
+    - ``meta_skipped`` — the ``s2`` id itself was lost (a malformed
+      ``/paper`` body); marks ``"s2"``.
+    - ``not_addressable`` — S2 was never *queried* at all (no DOI/arXiv to
+      address it with), a total loss distinct from "S2 was queried and
+      returned nothing" — marks all three context fields.
+    - ``edges_skipped`` / ``citations_skipped`` — a partial or total loss of
+      citation edges. ``context_snippet``/``intent`` are representative
+      *samples*, so a surviving edge can still supply a real value despite a
+      skip; they degrade only when nothing was actually recovered.
+      ``is_influential`` is an *aggregate* over every edge (``any(...)``),
+      so a single skipped edge can silently flip it from ``True`` to
+      ``False`` — it is always degraded when anything was skipped,
+      regardless of the value it happened to land on.
+
+    :param bundle: The bundle :func:`_s2_context` returned (or its
+        ``s2_id is None`` fallback).
+    :returns: The field names to record under ``degraded`` (empty if none).
+    """
+    degraded: list[str] = []
+    if bundle.get("meta_skipped"):
+        degraded.append("s2")
+    if bundle.get("not_addressable"):
+        degraded.extend(["context", "intent", "is_influential"])
+    elif bundle.get("edges_skipped") or bundle.get("citations_skipped"):
+        for field, name in (
+            ("context_snippet", "context"),
+            ("intent", "intent"),
+        ):
+            if bundle.get(field) is None:
+                degraded.append(name)
+        degraded.append("is_influential")
+    return degraded
+
+
 def enrich(
     openalex_ids: list[str], *, client: HttpClient, with_context: bool = False
 ) -> list[dict[str, Any]]:
@@ -583,7 +631,10 @@ def enrich(
     / ``is_influential`` from Semantic Scholar (and its ``s2`` id). When **no S2
     key** is configured those fields degrade to ``null`` with a ``degraded``
     marker — distinct from "S2 was queried and returned nothing", where the fields
-    are ``null`` *without* the marker.
+    are ``null`` *without* the marker. A work with neither a DOI nor an arXiv id
+    is a third case: S2 was never *addressable*, so it was never queried at all;
+    that also carries the ``degraded`` marker, rather than reading as the same
+    legitimate "S2 had nothing to say" as a work S2 actually was asked about.
 
     :param openalex_ids: The works to enrich.
     :param client: The HTTP client.
@@ -608,6 +659,7 @@ def enrich(
                         "context_snippet": None,
                         "intent": None,
                         "is_influential": None,
+                        "not_addressable": True,  # see _s2_degraded_fields
                     }
                 )
                 if bundle.get("s2"):
@@ -615,22 +667,7 @@ def enrich(
                 record["context_snippet"] = bundle["context_snippet"]
                 record["intent"] = bundle["intent"]
                 record["is_influential"] = bundle["is_influential"]
-                degraded: list[str] = []
-                if bundle.get("meta_skipped"):
-                    degraded.append("s2")
-                if bundle.get("edges_skipped") or bundle.get("citations_skipped"):
-                    # A skipped edge or page degrades only the fields that
-                    # actually came back `None` — a surviving edge among 100
-                    # can still supply a real `context_snippet`/`intent`, and
-                    # marking a populated field "degraded" would tell a
-                    # consumer to distrust a value that is correct.
-                    for field, name in (
-                        ("context_snippet", "context"),
-                        ("intent", "intent"),
-                        ("is_influential", "is_influential"),
-                    ):
-                        if bundle.get(field) is None:
-                            degraded.append(name)
+                degraded = _s2_degraded_fields(bundle)
                 if degraded:
                     record["degraded"] = degraded
         records.append(record)
