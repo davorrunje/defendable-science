@@ -535,6 +535,41 @@ def test_a_sampled_paper_whose_cells_could_not_be_read_is_not_marked_checked(
     assert _block(root, "b2")["extraction"]["in-sample"] is True
 
 
+def test_apply_reports_a_traversal_citekey_and_still_checks_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One citekey that is not a single path segment must not abort the batch.
+
+    `layout.digest(key)` used to sit outside the per-citekey `try` in both
+    `_read_sampled_cells` and `_apply_verdict` (defendable-science#182,
+    review round 3); a two-member batch is drawn whole
+    (`select_sample`'s size floor), so this exercises both in one run.
+    """
+    root = _repo(tmp_path, ["good1"])
+    bad_key = "../../../../tmp/PWNED"
+    result = _run(
+        root,
+        "--citekey",
+        "good1",
+        "--citekey",
+        bad_key,
+        "--verdict",
+        "failed",
+        monkeypatch=monkeypatch,
+    )
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    # The bad key fails identically in both `_read_sampled_cells` and
+    # `_apply_verdict`; `_note_error`'s dedup must collapse the two into one
+    # entry ("reporting it twice would suggest two problems").
+    assert [e["citekey"] for e in payload["errors"]] == [bad_key]
+    # A `failed` verdict lands on the run regardless — that is what "failed"
+    # means (mirrors test_a_sampled_paper_whose_cells_could_not_be_read...).
+    assert _block(root, "good1")["extraction"]["batch-check"] == "failed"
+
+
 def test_an_unknown_verdict_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

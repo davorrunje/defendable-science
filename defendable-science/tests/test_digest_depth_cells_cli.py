@@ -260,6 +260,38 @@ def test_record_refuses_a_missing_depth_digest(
     assert payload["errors"][0]["citekey"] == CITEKEY
 
 
+def test_record_reports_a_traversal_citekey_and_still_records_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same shape and same fix as `test_digest_cli.py`'s sibling for `extract record`.
+
+    (defendable-science#182, review round 3) The sweep posture this file's
+    own module docstring promises must survive a citekey that is not a
+    single path segment.
+    """
+    root = _repo(tmp_path)
+    _seed_depth_digest(root)
+    bad_key = "../../../../tmp/PWNED"
+    cells = [
+        *GOOD_CELLS,
+        {"citekey": bad_key, "axis": "guarantee type", "value": "v", "locator": "§1"},
+        {
+            "citekey": bad_key,
+            "axis": "partial monotonicity",
+            "value": "not-addressed",
+            "justification": "n/a",
+        },
+    ]
+    result = _record(root, cells, monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert [r["citekey"] for r in payload["recorded"]] == [CITEKEY]
+    assert [e["citekey"] for e in payload["errors"]] == [bad_key]
+    assert Layout.default(root.resolve()).digest(CITEKEY).is_file()
+
+
 def test_record_refuses_an_artifact_with_no_understanding_block(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

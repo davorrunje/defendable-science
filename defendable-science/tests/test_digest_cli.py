@@ -165,6 +165,31 @@ def test_axes_outside_a_paper_exits_2_naming_the_option(
     assert "--paper" in result.stderr
 
 
+def test_axes_a_traversal_paper_option_exits_1_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--paper ../x` used to reach `Layout.positioning` uncaught.
+
+    It goes through `_positioning_context`, which every `extract`/
+    `depth cells` command resolves through (defendable-science#182, review
+    round 3).
+
+    `CliRunner`'s default `catch_exceptions=True` swallows *any* exception
+    into `exit_code == 1` with nothing written to stdout/stderr, so checking
+    for the string "Traceback" there proves nothing either way -- the real
+    discriminator is `type(result.exception)`: a deliberate `typer.Exit`
+    always surfaces as `SystemExit`, while an unhandled domain exception
+    surfaces as itself.
+    """
+    root = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    result = runner.invoke(
+        app, ["digest", "extract", "axes", "--paper", "../../../../tmp/PWNED"]
+    )
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
 def test_axes_positioning_option_overrides_the_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -339,6 +364,28 @@ def test_cells_missing_citekey_option_exits_2(
     monkeypatch.chdir(_repo(tmp_path))
     result = runner.invoke(app, ["digest", "extract", "cells"])
     assert result.exit_code == 2
+
+
+def test_cells_a_traversal_citekey_is_reported_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--citekey ../x` used to raise `LayoutError` before the JSON report existed.
+
+    (defendable-science#182, review round 3) The command's whole contract is
+    a JSON report plus exit 1, never a traceback.
+    """
+    monkeypatch.chdir(_repo(tmp_path))
+    result = runner.invoke(
+        app,
+        ["digest", "extract", "cells", "--citekey", "../../../../tmp/PWNED"],
+    )
+    assert result.exit_code == 1
+    assert "Traceback" not in (result.stdout + result.stderr)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["cells"] is None
+    assert payload["artifact"] is None
+    assert payload["error"]
 
 
 # --- record: the happy path ------------------------------------------------------
@@ -692,6 +739,43 @@ def test_record_reports_what_landed_when_one_paper_fails_to_write(
     # The good paper really did land, exactly as the report says.
     assert layout.digest("sill1997monotonic").is_file()
     assert len(list((root / "log").iterdir())) == 1
+
+
+def test_record_reports_a_traversal_citekey_and_still_records_the_rest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One citekey that is not a single path segment must not abort the sweep.
+
+    `layout.digest(citekey)` used to sit outside the per-citekey `try`
+    (defendable-science#182, review round 3), so the `LayoutError` it now
+    raises for a bad citekey escaped uncaught -- aborting mid-batch, which is
+    precisely the outcome the surrounding comment says must never happen.
+    """
+    root = _repo(tmp_path)
+    layout = Layout.default(root.resolve())
+    cells = [
+        *GOOD_CELLS,
+        {
+            "citekey": "../../../../tmp/PWNED",
+            "axis": "guarantee type",
+            "value": "v",
+            "locator": "§1",
+        },
+        {
+            "citekey": "../../../../tmp/PWNED",
+            "axis": "partial monotonicity",
+            "value": "w",
+            "locator": "§2",
+        },
+    ]
+    result = _record(root, cells, monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert [r["citekey"] for r in payload["recorded"]] == ["sill1997monotonic"]
+    assert [e["citekey"] for e in payload["errors"]] == ["../../../../tmp/PWNED"]
+    assert layout.digest("sill1997monotonic").is_file()
 
 
 # --- record: the triage writeback --------------------------------------------------

@@ -2615,14 +2615,19 @@ def _positioning_context(
     :param paper: The paper id, or ``None`` to infer it from the cwd.
     :param positioning: An explicit positioning path, which always wins.
     :returns: The config mapping, the resolved layout, and the document path.
-    :raises typer.Exit: Code 1 on an invalid ``layout:`` block; code 2 when
-        ``--paper`` is omitted and the cwd is outside every paper.
+    :raises typer.Exit: Code 1 on an invalid ``layout:`` block, or a ``--paper``
+        that is not a single path segment; code 2 when ``--paper`` is omitted
+        and the cwd is outside every paper.
     """
     config, layout = _layout_or_exit()
     if positioning is not None:
         return config, layout, Path(positioning)
     paper_id = paper or _paper_dir_or_exit(layout, "--paper").name
-    return config, layout, layout.positioning(paper_id)
+    try:
+        return config, layout, layout.positioning(paper_id)
+    except LayoutError as exc:
+        typer.echo(f"invalid --paper: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
 
 def _locator_patterns(lit: dict[str, Any] | None) -> list[re.Pattern[str]]:
@@ -2744,16 +2749,18 @@ def extract_cells(
     the same convention `extract sample --citekey` already uses.
 
     :param citekey: The digested paper's citekey (`Layout.digest`'s key).
-    :raises typer.Exit: Code 0 with the cells as JSON; code 1 if the paper has
-        not been extracted, or its cells block is absent or malformed.
+    :raises typer.Exit: Code 0 with the cells as JSON; code 1 if `citekey` is
+        not a single path segment, the paper has not been extracted, or its
+        cells block is absent or malformed.
     """
     _config, layout = _layout_or_exit()
-    artifact = layout.digest(citekey)
+    artifact: Path | None = None
     cells: list[dict[str, Any]] | None = None
     error: str | None = None
     try:
+        artifact = layout.digest(citekey)
         cells = [dataclasses.asdict(c) for c in artifact_mod.read_cells(artifact)]
-    except extraction_mod.ExtractionError as exc:
+    except (LayoutError, extraction_mod.ExtractionError) as exc:
         typer.echo(f"digest extract cells failed: {exc}", err=True)
         error = str(exc)
     typer.echo(
@@ -2761,7 +2768,7 @@ def extract_cells(
             {
                 "ok": error is None,
                 "citekey": citekey,
-                "artifact": str(artifact),
+                "artifact": str(artifact) if artifact is not None else None,
                 "cells": cells,
                 "error": error,
             },
@@ -2948,8 +2955,12 @@ def extract_record(
     errors: list[dict[str, str]] = []
     triage_not_updated: list[dict[str, str]] = []
     for citekey, paper_cells in sorted(accepted.items()):
-        artifact = layout.digest(citekey)
+        # A display-only path, computed without the guard: if `layout.digest`
+        # below rejects `citekey`, this is never opened or written — it only
+        # names, in the error report, where the write would have gone.
+        artifact = layout.digests_dir / f"{citekey}.md"
         try:
+            artifact = layout.digest(citekey)
             # `init` does not scaffold literature/digests/ — the first recorded
             # paper creates it.
             artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -2961,7 +2972,7 @@ def extract_record(
                 log_dir=log_root,
                 date=date,
             )
-        except (extraction_mod.ExtractionError, OSError) as exc:
+        except (LayoutError, extraction_mod.ExtractionError, OSError) as exc:
             # The sweep continues and the report is still emitted. Aborting here
             # would leave the author knowing only that *something* failed, while
             # some papers had already landed — and re-running the whole batch to
@@ -3100,12 +3111,16 @@ def depth_cells_record(
     recorded: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for citekey, paper_cells in sorted(accepted.items()):
-        artifact = layout.digest(citekey)
+        # A display-only path, computed without the guard: if `layout.digest`
+        # below rejects `citekey`, this is never opened or written — it only
+        # names, in the error report, where the write would have gone.
+        artifact = layout.digests_dir / f"{citekey}.md"
         try:
+            artifact = layout.digest(citekey)
             log_entry = artifact_mod.write_depth_cells(
                 artifact, paper_cells, log_dir=log_root, date=date
             )
-        except (extraction_mod.ExtractionError, OSError) as exc:
+        except (LayoutError, extraction_mod.ExtractionError, OSError) as exc:
             # The sweep continues, same posture as `extract record`: a batch
             # of several depth-read papers must not be strangled by one bad
             # artifact, and re-running to find out which one would append a
@@ -3249,10 +3264,14 @@ def _read_sampled_cells(
     drawn_cells: dict[str, list[extraction_mod.Cell]] = {}
     sampled: list[dict[str, Any]] = []
     for key in sample:
-        target = layout.digest(key)
+        # A display-only path, computed without the guard: if `layout.digest`
+        # below rejects `key`, this is never opened — it only names, in the
+        # error report, where the read would have gone.
+        target = layout.digests_dir / f"{key}.md"
         try:
+            target = layout.digest(key)
             drawn_cells[key] = artifact_mod.read_cells(target)
-        except (extraction_mod.ExtractionError, OSError) as exc:
+        except (LayoutError, extraction_mod.ExtractionError, OSError) as exc:
             _note_error(errors, key, target, str(exc))
             continue
         sampled.append(
@@ -3299,8 +3318,12 @@ def _apply_verdict(
     updated: list[str] = []
     log_entries: list[str] = []
     for key in members:
-        target = layout.digest(key)
+        # A display-only path, computed without the guard: if `layout.digest`
+        # below rejects `key`, this is never opened or written — it only
+        # names, in the error report, where the write would have gone.
+        target = layout.digests_dir / f"{key}.md"
         try:
+            target = layout.digest(key)
             artifact_mod.set_batch_check(target, verdict, date=date)
             updated.append(key)
             if key in drawn_cells:
@@ -3318,7 +3341,7 @@ def _apply_verdict(
                         )
                     )
                 )
-        except (extraction_mod.ExtractionError, OSError) as exc:
+        except (LayoutError, extraction_mod.ExtractionError, OSError) as exc:
             _note_error(errors, key, target, str(exc))
     return updated, log_entries
 
@@ -3587,10 +3610,14 @@ def _cells_to_render(
     """
     rows: dict[str, dict[str, str]] = {}
     for citekey in batch:
-        target = layout.digest(citekey)
+        # A display-only path, computed without the guard: if `layout.digest`
+        # below rejects `citekey`, this is never opened — it only names, in
+        # the error report, where the read would have gone.
+        target = layout.digests_dir / f"{citekey}.md"
         try:
+            target = layout.digest(citekey)
             cells = artifact_mod.read_cells(target)
-        except (extraction_mod.ExtractionError, OSError) as exc:
+        except (LayoutError, extraction_mod.ExtractionError, OSError) as exc:
             typer.echo(f"digest extract render failed for {citekey}: {exc}", err=True)
             errors.append(
                 {"citekey": citekey, "artifact": str(target), "reason": str(exc)}
