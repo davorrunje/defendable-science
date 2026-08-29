@@ -45,6 +45,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from pydantic import ConfigDict, RootModel
+
+from defendable_science.core.models import parse_json
+
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
@@ -61,6 +65,12 @@ IN_REPO_STORE_PATH = Path(".defendable-science/keys.json")
 #: Prefix for rclone remote-config credentials handed to the rclone subprocess as
 #: ``RCLONE_CONFIG_<REMOTE>_<PARAM>`` environment variables (no config file).
 RCLONE_ENV_PREFIX = "RCLONE_CONFIG_"
+
+
+class _KeyStore(RootModel[dict[str, str]]):
+    """The on-disk key store: a flat JSON object of string values."""
+
+    model_config = ConfigDict(strict=True)
 
 
 @dataclass(frozen=True)
@@ -168,21 +178,14 @@ def load_store(path: str | Path | None = None) -> dict[str, str]:
     resolved = store_path(path)
     if not resolved.is_file():
         return {}
-    try:
-        data = json.loads(resolved.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        msg = f"{resolved}: invalid JSON: {exc}"
-        raise ValueError(msg) from exc
-    if not isinstance(data, dict):
-        msg = f"{resolved}: expected a JSON object, got {type(data).__name__}"
-        raise ValueError(msg)
-    result: dict[str, str] = {}
-    for name, value in data.items():
-        if not isinstance(value, str):
-            msg = f"{resolved}: value for {name!r} must be a string"
-            raise ValueError(msg)
-        result[str(name)] = value
-    return result
+    return dict(
+        parse_json(
+            _KeyStore,
+            resolved.read_text(encoding="utf-8"),
+            source=str(resolved),
+            error=ValueError,
+        ).root
+    )
 
 
 def write_store(mapping: Mapping[str, str], path: str | Path | None = None) -> None:

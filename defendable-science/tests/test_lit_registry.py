@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +135,8 @@ def test_invalid_json_is_an_actionable_error(tmp_path: Path) -> None:
 def test_non_array_top_level_is_an_actionable_error(tmp_path: Path) -> None:
     path = tmp_path / "r.json"
     path.write_text('{"items": []}', encoding="utf-8")
-    with pytest.raises(reg.RegistryError, match="expected a JSON array"):
+    pattern = rf"{re.escape(str(path))}: <root>: Input should be a valid list"
+    with pytest.raises(reg.RegistryError, match=pattern):
         reg.load_registry(path)
 
 

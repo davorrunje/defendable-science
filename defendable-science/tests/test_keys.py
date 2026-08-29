@@ -12,6 +12,7 @@ throwaway directory for every test, so the new out-of-repo default store path
 from __future__ import annotations
 
 import json
+import re
 import stat
 import subprocess
 from types import SimpleNamespace
@@ -107,21 +108,24 @@ def test_set_creates_parent_and_0600(tmp_path: Path) -> None:
 def test_load_store_rejects_bad_json(tmp_path: Path) -> None:
     store = tmp_path / "keys.json"
     store.write_text("{not json", encoding="utf-8")
-    with pytest.raises(ValueError, match="invalid JSON"):
+    pattern = rf"{re.escape(str(store))}: invalid JSON"
+    with pytest.raises(ValueError, match=pattern):
         keys_mod.load_store(store)
 
 
 def test_load_store_rejects_non_object(tmp_path: Path) -> None:
     store = tmp_path / "keys.json"
     store.write_text("[1, 2, 3]", encoding="utf-8")
-    with pytest.raises(ValueError, match="expected a JSON object"):
+    pattern = rf"{re.escape(str(store))}: <root>: Input should be a valid dictionary"
+    with pytest.raises(ValueError, match=pattern):
         keys_mod.load_store(store)
 
 
 def test_load_store_rejects_non_string_value(tmp_path: Path) -> None:
     store = tmp_path / "keys.json"
     store.write_text('{"S2_API_KEY": 5}', encoding="utf-8")
-    with pytest.raises(ValueError, match="must be a string"):
+    pattern = rf"{re.escape(str(store))}: S2_API_KEY: Input should be a valid string"
+    with pytest.raises(ValueError, match=pattern):
         keys_mod.load_store(store)
 
 
