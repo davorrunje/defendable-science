@@ -179,7 +179,7 @@ drive the table yourself:
 ```bash
 defendable-science backlog park "learned aug policy may help OOD but hurt in-distribution" \
     --provenance "own" --backlog docs/research/<paper>/backlog.md
-defendable-science backlog rank <id> --EIG high --feas med --interest high \
+defendable-science backlog rank <id> --eig high --feas med --interest high \
     --backlog docs/research/<paper>/backlog.md
 defendable-science backlog promote <id> --scaffold --paper-root docs/research/<paper> \
     --backlog docs/research/<paper>/backlog.md

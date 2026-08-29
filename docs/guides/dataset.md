@@ -29,7 +29,7 @@ So this page can never be misread, it uses exactly two conventions:
 
 ```bash
 # Anything in a shell block is a real command, verbatim.
-defendable-science dataset verify
+defendable-science dataset verify imagenet-c
 ```
 
 Note the asymmetry with the skill's verb table in
@@ -133,10 +133,10 @@ make a cited number defensible:
   name-addressed for use. That gives deduplication for free and makes integrity
   and identity the same fact.
 
-To check what you already have, offline and without touching the network:
+To check a dataset you already have, offline and without touching the network:
 
 ```bash
-defendable-science dataset verify
+defendable-science dataset verify imagenet-c
 ```
 
 `verify` never downloads. That is the point: it answers "do the bytes on this
