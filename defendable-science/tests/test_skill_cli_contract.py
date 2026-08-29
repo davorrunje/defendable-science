@@ -76,6 +76,9 @@ _INLINE_START = re.compile(rf"^(?:{_NAMES})\s+(.*)$", re.S)
 #: another command. ``<`` must be followed by whitespace so a ``<placeholder>``
 #: value is not mistaken for an input redirect.
 _SHELL_BREAK = re.compile(r"\s(?:\||&&|;|2?>>?|<<?\s)")
+#: Pipeline separators, split *before* matching so an invocation downstream of a
+#: pipe is still extracted rather than discarded with its whole line.
+_PIPELINE = re.compile(r"\s(?:\||&&|;)\s")
 #: A blockquote continuation marker. Skills document tooling inside ``>`` quotes,
 #: so a span wrapped across such a line carries a leading ``>`` that would
 #: otherwise read as an output redirect and truncate the invocation.
@@ -89,9 +92,12 @@ _SYNOPSIS = re.compile(r"[\[\]()|…]|(?<!\S)\.\.\.")
 #: A placeholder standing in for the command itself: ``defendable-science <group> <cmd>``.
 _TEMPLATE = re.compile(r"^[<{]")
 #: Prose that documents a command's *absence*, e.g. "There is no ``X`` command".
-#: Matched against the text between the previous code span and this one, so an
-#: unrelated "not" earlier in the sentence cannot suppress a real invocation.
-_NEGATION = re.compile(r"\b(no|not|never|instead of|rather than)\b[^.`]*$", re.I)
+#: The phrase must sit immediately before the span — only words and spaces may
+#: follow it — so an unrelated negation elsewhere in the sentence cannot suppress
+#: a real invocation. Any punctuation between the two (``resources/templates/README.md``
+#: has "…has **not** been generated); `defendable-science progress dashboard`…")
+#: means the negation is not about this span.
+_NEGATION = re.compile(r"\b(no|not|never|instead of|rather than)\b[\w\s]{0,24}$", re.I)
 
 
 class Invocation(NamedTuple):
@@ -103,22 +109,29 @@ class Invocation(NamedTuple):
     kind: Literal["fence", "inline"]
 
 
-def _fenced_lines(text: str) -> Iterator[tuple[int, str]]:
-    """Yield ``(line number, line)`` for lines inside a fenced code block.
+def _fenced_blocks(text: str) -> Iterator[list[tuple[int, str]]]:
+    r"""Yield each fenced code block as its own list of ``(line number, line)``.
 
     Prose names the product constantly ("the defendable-science user guide"), so
-    only code context counts as an invocation.
+    only code context counts as an invocation. Blocks stay separate so a fence
+    whose last line ends in ``\`` cannot fold the *next* fence's first line into
+    a bogus joined command reported at the wrong line.
 
     :param text: The document's markdown.
-    :returns: The fenced lines, the fence markers themselves excluded.
+    :returns: One list per block, the fence markers themselves excluded.
     """
+    block: list[tuple[int, str]] = []
     in_fence = False
     for number, line in enumerate(text.splitlines(), 1):
         if _FENCE.match(line):
-            in_fence = not in_fence
+            if in_fence and block:
+                yield block
+            block, in_fence = [], not in_fence
             continue
         if in_fence:
-            yield number, line
+            block.append((number, line))
+    if block:  # pragma: no cover - a document ending inside an unclosed fence
+        yield block
 
 
 def _join_continuations(lines: list[tuple[int, str]]) -> Iterator[tuple[int, str]]:
@@ -172,10 +185,15 @@ def _invocations(text: str) -> Iterator[Invocation]:
     :param text: The document's markdown.
     :returns: An iterator of invocations, entrypoint name already stripped.
     """
-    fenced = list(_fenced_lines(text))
-    for number, line in _join_continuations(fenced):
-        if match := _LINE_START.match(line):
-            yield Invocation(number, match.group(1), "fence")
+    for block in _fenced_blocks(text):
+        for number, line in _join_continuations(block):
+            # Split the pipeline first: an invocation is not always the head of
+            # its line. `docs/guides/keys.md` documents
+            # `echo "$MY_KEY" | defendable-science keys set S2_API_KEY`, which
+            # anchoring to the line start missed entirely.
+            for segment in _PIPELINE.split(line):
+                if match := _LINE_START.match(segment.strip()):
+                    yield Invocation(number, match.group(1), "fence")
 
     prose = _without_fences(text)
     for match in _INLINE.finditer(prose):
@@ -339,19 +357,42 @@ def test_documented_invocation_resolves(case: Case) -> None:
             f"argument(s), but the documented call passes {positionals}"
         )
 
+    # A required *option* omitted from a verbatim example exits 2 exactly as a
+    # missing positional does. Eight commands in the tree have one.
+    given = {token.partition("=")[0] for token in rest}
+    for param in command.params:
+        if param.param_type_name == "option" and param.required:
+            assert given & set(param.opts), (
+                f"{where}: `{_name(command)}` requires {param.opts[0]}, "
+                f"which the documented call omits"
+            )
+
 
 def test_the_guard_actually_found_invocations() -> None:
     """A glob or regex that silently matched nothing would make this vacuous.
 
-    The floors are close to the real counts on purpose. An earlier revision
-    asserted ``>= 40`` against 101 actual cases, which is why a backtick-pairing
-    bug that lost a third of the inline corpus went unnoticed: any floor slack
-    enough to never need updating is also slack enough to hide silent drift.
+    The floors sit ~15% below the real counts: tight enough that losing a chunk
+    of the corpus fails (an earlier revision asserted ``>= 40`` against 101
+    actual, which is how a backtick-pairing bug that hid a third of the inline
+    spans went unnoticed), loose enough that ordinary docs edits do not.
     """
-    assert len(_CASES) >= 95, f"only found {len(_CASES)} invocations"
-    by_kind = Counter(c.kind for c in _CASES)
-    assert by_kind["fence"] >= 30, by_kind
-    assert by_kind["inline"] >= 60, by_kind
+    counts = Counter(c.kind for c in _CASES)
+    #: kind -> (floor, count when written). Floors sit ~15% below the real count.
+    floors: dict[Literal["fence", "inline"], tuple[int, int]] = {
+        "fence": (50, 58),
+        "inline": (55, 63),
+    }
+    remedy = (
+        "if invocations were removed on purpose, lower the floor in this test; "
+        "if not, the extractor has stopped seeing part of the corpus"
+    )
+    for kind, (floor, when_written) in floors.items():
+        assert counts[kind] >= floor, (
+            f"{kind} invocations dropped to {counts[kind]}, below the {floor} "
+            f"floor ({when_written} when written) — {remedy}"
+        )
+    total = sum(floor for floor, _ in floors.values())
+    assert len(_CASES) >= total, f"{counts} — {remedy}"
     documents = {c.doc for c in _CASES}
     # Every skill that documents a command must contribute at least one case;
     # `hypothesis-exploration` and `dataset` silently yielded zero before the
@@ -361,6 +402,49 @@ def test_the_guard_actually_found_invocations() -> None:
             f"no invocation found in skills/{skill}/SKILL.md"
         )
     assert any(d.startswith("docs/") for d in documents), documents
+
+
+def test_an_invocation_downstream_of_a_pipe_is_extracted() -> None:
+    """`docs/guides/keys.md:54` pipes into the CLI; it used to yield nothing."""
+    found = list(
+        _invocations(
+            '```bash\necho "$MY_KEY" | defendable-science keys set S2_API_KEY\n```'
+        )
+    )
+    assert found == [Invocation(2, "keys set S2_API_KEY", "fence")], found
+
+
+def test_a_negation_after_an_earlier_span_does_not_suppress_this_one() -> None:
+    """The negation must sit immediately before the span it disowns."""
+    found = list(
+        _invocations(
+            "| `defendable-science init` (a stub saying it has not been "
+            "generated); `defendable-science progress dashboard` generates it |"
+        )
+    )
+    assert [f.args for f in found] == ["init", "progress dashboard"], found
+
+
+def test_a_trailing_backslash_does_not_leak_across_a_fence_boundary() -> None:
+    """Each fenced block joins its own continuations, so blocks cannot merge."""
+    found = list(
+        _invocations(
+            "```bash\ndefendable-science check \\\n```\n\n"
+            "```bash\ndefendable-science progress dashboard\n```\n"
+        )
+    )
+    assert [(f.line, f.args) for f in found] == [
+        (2, "check"),
+        (6, "progress dashboard"),
+    ], found
+
+
+def test_a_missing_required_option_is_caught() -> None:
+    """A verbatim example omitting a required option exits 2 at the point of use."""
+    with pytest.raises(AssertionError, match="requires --provenance"):
+        test_documented_invocation_resolves(
+            Case("x.md", 1, 'backlog park "idea"', "fence")
+        )
 
 
 def test_inline_spans_survive_a_preceding_fenced_block() -> None:
@@ -400,14 +484,20 @@ def test_an_elided_path_is_not_a_synopsis() -> None:
 
 
 def test_an_unrelated_negation_does_not_discard_an_invocation() -> None:
-    """Only the text since the previous code span counts as the negation."""
+    """A negation elsewhere in the sentence is not about this span.
+
+    "has **not** been generated by `defendable-science init`" says `init` writes
+    the stub — it does not say `init` is absent, so `init` must still be checked.
+    An earlier revision of the rule dropped it, and this test asserted that
+    wrongly; the punctuation between the negation and the span is the signal.
+    """
     found = list(
         _invocations(
             "a stub saying it has **not** been generated by "
             "`defendable-science init`; run `defendable-science progress dashboard`.\n"
         )
     )
-    assert [f.args for f in found] == ["progress dashboard"], found
+    assert [f.args for f in found] == ["init", "progress dashboard"], found
 
 
 def test_a_blockquote_continuation_does_not_truncate_a_span() -> None:
