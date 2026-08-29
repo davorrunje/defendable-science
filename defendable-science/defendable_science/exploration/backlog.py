@@ -19,6 +19,7 @@ from datetime import date as date_cls
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from defendable_science.core.paths import require_path_segment
 from defendable_science.scaffold import status
 
 if TYPE_CHECKING:
@@ -476,8 +477,11 @@ def scaffold_hypothesis(
     :param provenance: The verbatim provenance carried from the backlog row.
     :param today: ISO date for ``last-updated`` (defaults to today).
     :returns: The path to the written ``hypothesis.md``.
-    :raises BacklogError: If the target file already exists.
+    :raises BacklogError: If `slug` is not a single path segment (a ``--slug``
+        crafted to escape the hypotheses directory — defendable-science#182),
+        or if the target file already exists.
     """
+    slug = require_path_segment(slug, what="slug", error=BacklogError)
     folder = Path(paper_root) / "hypotheses" / slug
     target = folder / "hypothesis.md"
     if target.exists():

@@ -125,6 +125,22 @@ def test_scaffold_hypothesis_writes_frontmatter(tmp_path: Path) -> None:
         )
 
 
+def test_scaffold_hypothesis_rejects_a_traversal_slug(tmp_path: Path) -> None:
+    """`slug` is a single path segment (defendable-science#182, review round 2).
+
+    `Layout.hypothesis_dir` guards this same join, but has no live caller —
+    `scaffold_hypothesis` (reached from `backlog promote --scaffold`) joins
+    `slug` itself and must carry its own guard.
+    """
+    with pytest.raises(b.BacklogError, match="slug"):
+        b.scaffold_hypothesis(
+            tmp_path / "paperA",
+            "../../../../../../tmp/dsaudit/PWNED",
+            "x",
+            "own",
+        )
+
+
 def test_scaffold_paper_creates_root_and_registers(tmp_path: Path) -> None:
     layout = Layout.default(tmp_path)
     layout.research_root.mkdir(parents=True)
