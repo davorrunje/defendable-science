@@ -85,23 +85,35 @@ class OpenAlexWork(ExternalModel):
 
 
 class _PageMeta(ExternalModel):
-    next_cursor: str | None = None
+    """OpenAlex's per-page pagination metadata.
+
+    ``next_cursor`` has no default: OpenAlex always sends the key, so a
+    missing one is a malformed body, not "no further page" — but the *value*
+    stays ``str | None`` because ``null`` is exactly how OpenAlex spells "no
+    further page" on the last one. Required key, nullable value.
+    """
+
+    next_cursor: str | None
 
 
 class WorksPage(ExternalModel):
     """One cursor-paginated page of the OpenAlex ``/works`` endpoint.
 
-    ``meta`` tolerates an explicit ``null`` as well as a missing key —
-    unlike ``results``, a `default_factory` alone is not enough:
-    ``strict=True`` still rejects a present-but-``null`` value, and OpenAlex
-    sending ``"meta": null`` unambiguously means "no further cursor", not a
-    malformed page. Hard-failing there would discard every page already
-    collected for no benefit (see :func:`cites`'s truncated-frontier
-    argument, which rests on ``results`` staying strict, not on ``meta``).
+    ``results`` has no default: OpenAlex always sends it on a successful
+    response, so a page missing it — including an HTTP-200 error envelope
+    like ``{"error": ..., "message": ...}`` — is malformed, not empty.
+
+    ``meta`` likewise has no default, so a missing key is malformed too, but
+    its type stays ``_PageMeta | None``: OpenAlex sends an explicit
+    ``"meta": null`` mid-pagination to mean exactly "no further cursor", and
+    that is a legitimate final page, not a defect. Hard-failing a missing
+    ``meta`` key while still accepting a present ``null`` value is what keeps
+    :func:`cites` from reading a truncated frontier as complete (see its
+    docstring) without discarding a page OpenAlex genuinely ended.
     """
 
-    results: list[OpenAlexWork] = Field(default_factory=list)
-    meta: _PageMeta | None = None
+    results: list[OpenAlexWork]
+    meta: _PageMeta | None
 
 
 class _ExternalIdBundle(ExternalModel):

@@ -1571,3 +1571,69 @@ def test_enrich_marks_is_influential_degraded_even_when_samples_survive() -> Non
     assert rec["intent"] == "bg"
     assert rec["is_influential"] is False  # the value is unreliable, not corrected
     assert rec["degraded"] == ["is_influential"]
+
+
+# --- boundary-validation regressions (defendable-science#176) --------------
+
+
+def test_cites_missing_meta_key_raises_instead_of_truncating() -> None:
+    """A page missing `meta` entirely must not read as "no further cursor".
+
+    `meta: _PageMeta | None = None` used to default a *missing* key to
+    `None`, silently ending pagination as if the frontier were complete.
+    `meta` now has no default, so a missing key is the malformed page it
+    actually is — and `cites` needs no new error handling to see it, because
+    `parse_obj` already turns the validation failure into a named `HttpError`.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "results": [{"id": "https://openalex.org/W2"}]
+            }
+        }
+    )
+    with pytest.raises(
+        http.HttpError, match=r"https://api\.openalex\.org/works.*meta.*Field required"
+    ):
+        graph.cites("W1", client=client)
+
+
+def test_cites_error_envelope_raises_instead_of_reporting_zero_citations() -> None:
+    """An OpenAlex HTTP-200 error envelope must not read as "zero citations".
+
+    `results: list[OpenAlexWork] = Field(default_factory=list)` used to
+    default a *missing* `results` key to `[]`, so `{"error": ...,
+    "message": ...}` — OpenAlex's own error shape, delivered with a 200 —
+    silently became an empty, "legitimate" citation list instead of the
+    malformed page it is.
+    """
+    client = _client(
+        {
+            "https://api.openalex.org/works": {
+                "error": "Invalid query parameters",
+                "message": "cites filter value is not a valid OpenAlex ID",
+            }
+        }
+    )
+    with pytest.raises(
+        http.HttpError,
+        match=r"https://api\.openalex\.org/works.*results.*Field required",
+    ):
+        graph.cites("W1", client=client)
+
+
+def test_cites_null_next_cursor_still_terminates_pagination() -> None:
+    """A final page with `meta.next_cursor` explicitly `null` is not malformed.
+
+    `next_cursor` now has no default of its own, but its *value* legitimately
+    is `None` on the last page — required key, nullable value — so a
+    well-formed final page must keep terminating pagination normally rather
+    than becoming a stricter regression than the model it replaced.
+    """
+    page = {
+        "results": [{"id": "https://openalex.org/W2"}],
+        "meta": {"next_cursor": None},
+    }
+    client = _client({"https://api.openalex.org/works": page})
+    rows = graph.cites("W1", client=client)
+    assert [r["id"]["openalex"] for r in rows] == ["W2"]
