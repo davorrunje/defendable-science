@@ -32,10 +32,11 @@ def require_path_segment(
         module boundary.
     :returns: `value` unchanged.
     :raises Exception: `error`, naming `what` and the offending value, if `value`
-        is empty, ``.``/``..``, or contains a path separator — anything that
-        would make it address more than one path segment and let it escape the
-        directory it is joined into.
+        is empty, ``.``/``..``, contains a path separator, or contains a control
+        character (e.g. an embedded NUL) - anything that would either address
+        more than one path segment or reach the OS call as a raw, uncaught
+        error instead of this function's own signal.
     """
-    if value in _UNSAFE or "/" in value or "\\" in value:
+    if value in _UNSAFE or "/" in value or "\\" in value or any(c < " " for c in value):
         raise error(f"{what} is not a valid path segment: {value!r}")
     return value

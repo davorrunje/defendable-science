@@ -28,6 +28,10 @@ def test_accepts_an_ordinary_identifier(value: str) -> None:
         "/etc/passwd",
         "foo\\bar",
         "..\\..\\PWNED",
+        "a\x00b",
+        "a\nb",
+        "a\tb",
+        "\x1f",
     ],
 )
 def test_rejects_anything_that_is_not_a_single_path_segment(value: str) -> None:
