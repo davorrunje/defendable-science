@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Literal
 
 from defendable_science.core.paths import require_path_segment
 from defendable_science.scaffold import status
+from defendable_science.scaffold.layout import LayoutError
 
 if TYPE_CHECKING:
     from defendable_science.scaffold.layout import Layout
@@ -597,9 +598,14 @@ def scaffold_paper(
     :param provenance: The verbatim provenance carried from the backlog row.
     :param today: ISO date for ``last-updated`` (defaults to today).
     :returns: The paper root directory.
-    :raises BacklogError: If the paper root already exists.
+    :raises BacklogError: If `paper_id` is not a single path segment (a
+        ``row["id"]`` crafted to escape the research root -- defendable-science#182),
+        or if the paper root already exists.
     """
-    root = layout.paper_dir(paper_id)
+    try:
+        root = layout.paper_dir(paper_id)
+    except LayoutError as exc:
+        raise BacklogError(str(exc)) from exc
     if root.exists():
         raise BacklogError(f"{root} already exists — refusing to overwrite")
     layout.hypotheses_dir(paper_id).mkdir(parents=True)
