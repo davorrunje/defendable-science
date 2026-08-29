@@ -71,6 +71,30 @@ def test_parse_obj_reports_a_non_object_payload_at_the_root() -> None:
         models.parse_obj(_Widget, [1, 2], source="s", error=_BoomError)
 
 
+def test_parse_obj_names_the_received_type_at_the_root() -> None:
+    # Diagnostic parity with the pre-consolidation hand-rolled messages
+    # (Task 6 review): the received value's type is named, not just the
+    # field path and reason.
+    with pytest.raises(_BoomError, match=r"<root>: .*\(got list\)$"):
+        models.parse_obj(_Widget, [1, 2], source="s", error=_BoomError)
+
+
+def test_parse_obj_names_the_received_type_not_the_value_for_a_container() -> None:
+    # The type name, never the value, appears in the message — an input can
+    # be an entire API response, and a multi-megabyte error message is its
+    # own failure mode.
+    with pytest.raises(_BoomError) as caught:
+        models.parse_obj(
+            _Widget,
+            {"name": "a", "count": ["a-very-long-and-distinctive-marker"]},
+            source="s",
+            error=_BoomError,
+        )
+    message = str(caught.value)
+    assert "(got list)" in message
+    assert "a-very-long-and-distinctive-marker" not in message
+
+
 def test_parse_json_parses_text() -> None:
     got = models.parse_json(_Widget, '{"name": "a"}', source="s", error=_BoomError)
     assert got.name == "a"

@@ -50,16 +50,19 @@ class OwnedModel(BaseModel):
 
 
 def _explain(exc: ValidationError) -> str:
-    """Render a validation failure as ``<field path>: <reason>`` pairs.
+    """Render a validation failure as ``<field path>: <reason> (got <type>)`` pairs.
 
     :param exc: The failure to render.
     :returns: Every error, ``"; "``-joined; a root-level failure is located as
-        ``<root>`` so the message never reads as if a field were unnamed.
+        ``<root>`` so the message never reads as if a field were unnamed. Each
+        reason names the received value's *type* — never the value itself,
+        which can be an entire API response and too large to put in a message.
     """
     parts = []
     for err in exc.errors():
         location = ".".join(str(part) for part in err["loc"]) or "<root>"
-        parts.append(f"{location}: {err['msg']}")
+        received = type(err["input"]).__name__
+        parts.append(f"{location}: {err['msg']} (got {received})")
     return "; ".join(parts)
 
 
@@ -78,8 +81,9 @@ def parse_obj(
     :param error: The calling module's own error type (``RegistryError``,
         ``ManifestError``, ``HttpError``, ``RetrievalError``, …).
     :returns: The validated model.
-    :raises Exception: `error`, carrying `source`, the field path and the
-        reason. Never a ``ValidationError``, never a bare traceback.
+    :raises Exception: `error`, carrying `source`, the field path, the reason
+        and the received value's type. Never a ``ValidationError``, never a
+        bare traceback.
     """
     try:
         return model.model_validate(payload)
