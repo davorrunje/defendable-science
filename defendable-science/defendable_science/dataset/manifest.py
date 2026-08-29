@@ -548,12 +548,19 @@ class CroissantDocument(ExternalModel):
     to derive an id and title, ``distribution`` for the file list, and the five
     scalars ``version``, ``license``, ``description``, ``identifier`` and
     ``citeAs`` (as ``cite_as``) that flow straight into the draft
-    :class:`DatasetEntry`. Those five are typed ``Any`` rather than ``str |
-    None`` on purpose: :func:`_opt_str` is the sole coercion point and is
-    documented to accept any scalar, coercing it to ``str`` while preserving
-    ``None`` — a Croissant carrying ``version: 2`` becomes ``"2"`` today.
-    Typing them ``str`` under ``strict=True`` would start rejecting documents
-    that currently work, which is a behaviour change this model must not make.
+    :class:`DatasetEntry`.
+
+    The two field groups are typed deliberately differently, and that asymmetry
+    is not a bug to "fix" into uniformity. The five scalars are ``Any`` because
+    they flow through :func:`_opt_str`, which is documented to coerce any
+    scalar to ``str`` while preserving ``None`` — it is the sole coercion
+    point, so tightening these to ``str`` under ``strict=True`` would reject
+    documents that work today (``version: 2`` currently becomes ``"2"``) for
+    no gain. ``name`` and ``alternate_name`` are held to ``str | None``
+    instead: the entry **id** is derived from them, and silently coercing a
+    non-string ``name`` into a plausible-looking id is exactly the
+    silently-wrong-value failure ADR-0043 point 4 forbids — a document with a
+    non-string ``name`` must be rejected, not laundered into an id.
     """
 
     name: str | None = None
@@ -576,11 +583,12 @@ def entry_from_croissant(json_ld: object) -> DatasetEntry:
     :param json_ld: A parsed Croissant / schema.org ``Dataset`` document, of any
         shape — it is validated here rather than assumed.
     :returns: A partial :class:`DatasetEntry` draft.
-    :raises ManifestError: If the document is not a JSON object, has no usable
-        ``name``, or a ``distribution`` entry is a malformed ``FileObject`` (not
-        a mapping, or missing ``contentUrl`` / ``sha256``). A malformed file is
-        surfaced, never silently dropped — "no distribution" is distinct from
-        "a bad file".
+    :raises ManifestError: If the document is not a JSON object, ``name`` or
+        ``alternateName`` is present but not a string, the document has no
+        usable ``name``, or a ``distribution`` entry is a malformed
+        ``FileObject`` (not a mapping, or missing ``contentUrl`` /
+        ``sha256``). A malformed file is surfaced, never silently dropped —
+        "no distribution" is distinct from "a bad file".
     """
     doc = parse_obj(CroissantDocument, json_ld, source="croissant", error=ManifestError)
     if not doc.name:

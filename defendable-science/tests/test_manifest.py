@@ -186,6 +186,19 @@ def test_entry_from_croissant_without_name_raises() -> None:
         m.entry_from_croissant({"description": "no name here"})
 
 
+def test_entry_from_croissant_non_string_name_raises() -> None:
+    """Deliberate tightening (#169), not an accidental regression.
+
+    Pre-fix, ``{"name": 2024}`` silently minted the id ``"2024"`` via
+    ``str()`` coercion. ``name``/``alternateName`` are held to ``str`` (unlike
+    the five ``Any``-typed scalars) because the entry id is derived from them,
+    and coercing a non-string into a plausible-looking id is the
+    silently-wrong-value failure this model exists to reject.
+    """
+    with pytest.raises(m.ManifestError, match=r"croissant: name: .*valid string"):
+        m.entry_from_croissant({"name": 2024})
+
+
 def test_ingest_a_top_level_array_exits_1_not_a_traceback(tmp_path: Path) -> None:
     """Defect 6: AttributeError escaped cli.py's except tuple as a traceback."""
     croissant = tmp_path / "x.json"
