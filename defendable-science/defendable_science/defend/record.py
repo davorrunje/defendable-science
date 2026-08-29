@@ -26,6 +26,7 @@ from defendable_science.core.frontmatter import (
     set_field,
     split_frontmatter,
 )
+from defendable_science.core.paths import require_path_segment
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -338,7 +339,11 @@ def append_log_entry(log_dir: Path, date: str, stem: str, body: str) -> Path:
         naming scheme changes.
     :param body: The rendered YAML to write.
     :returns: The path written.
+    :raises RecordError: If `stem` is not a single path segment — see
+        :func:`~defendable_science.core.paths.require_path_segment`
+        (defendable-science#182).
     """
+    stem = require_path_segment(stem, what="stem", error=RecordError)
     log_dir.mkdir(parents=True, exist_ok=True)
     target = log_dir / f"{date}-{stem}.yml"
     n = 2

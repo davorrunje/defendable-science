@@ -557,6 +557,19 @@ def test_append_log_entry_creates_the_directory_and_returns_its_path(
     assert written.read_text(encoding="utf-8") == "body: 1\n"
 
 
+def test_append_log_entry_rejects_a_traversal_stem(tmp_path: Path) -> None:
+    """`stem` is a single path segment, not a sub-path (defendable-science#182)."""
+    from defendable_science.defend.record import RecordError, append_log_entry
+
+    with pytest.raises(RecordError, match="stem"):
+        append_log_entry(
+            tmp_path / "log",
+            DATE,
+            "../../../../../../tmp/dsaudit/PWNED",
+            "body: 1\n",
+        )
+
+
 def test_the_block_is_appended_after_trailing_blank_lines_not_among_them(
     tmp_path: Path,
 ) -> None:
