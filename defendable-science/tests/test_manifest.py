@@ -357,6 +357,17 @@ def test_entry_from_croissant_no_distribution() -> None:
     assert draft.files == []
 
 
+def test_entry_from_croissant_null_distribution_ingests_with_no_files() -> None:
+    """A publisher writing ``"distribution": null`` means the same as omitting it.
+
+    ``distribution: list[Any] = Field(default_factory=list)`` covered the
+    missing key but rejected the explicit ``null`` the format does not
+    distinguish from absence — a regression this branch's final review found.
+    """
+    draft = m.entry_from_croissant({"name": "x", "distribution": None})
+    assert draft.files == []
+
+
 def test_validate_incomplete_citation_warns() -> None:
     entry = m.DatasetEntry(
         id="e",

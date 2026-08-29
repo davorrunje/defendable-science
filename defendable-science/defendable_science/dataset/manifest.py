@@ -565,7 +565,12 @@ class CroissantDocument(ExternalModel):
 
     name: str | None = None
     alternate_name: str | None = Field(default=None, alias="alternateName")
-    distribution: list[Any] = Field(default_factory=list)
+    #: `| None`, not merely defaulted: a publisher writing `"distribution":
+    #: null` is indistinguishable in the Croissant/schema.org spec from one
+    #: who omits the key, and `default_factory` alone only covers the latter
+    #: — `strict=True` would reject the explicit `null` that a document
+    #: working today may legitimately send.
+    distribution: list[Any] | None = None
     version: Any = None
     license: Any = None
     description: Any = None
@@ -585,7 +590,9 @@ def entry_from_croissant(json_ld: object) -> DatasetEntry:
     :returns: A partial :class:`DatasetEntry` draft.
     :raises ManifestError: If the document is not a JSON object, ``name`` or
         ``alternateName`` is present but not a string, the document has no
-        usable ``name``, or a ``distribution`` entry is a malformed
+        usable ``name``, ``distribution`` is present but not a list (``null``
+        is accepted — a publisher writing it explicitly means the same as
+        omitting the key), or a ``distribution`` entry is a malformed
         ``FileObject`` (not a mapping, or missing ``contentUrl`` /
         ``sha256``). A malformed file is surfaced, never silently dropped —
         "no distribution" is distinct from "a bad file".
@@ -599,7 +606,7 @@ def entry_from_croissant(json_ld: object) -> DatasetEntry:
     title = str(doc.name) if str(doc.name) != entry_id else None
 
     files: list[FileRef] = []
-    for i, obj in enumerate(doc.distribution):
+    for i, obj in enumerate(doc.distribution or []):
         loc = f"croissant: distribution[{i}]"
         if not isinstance(obj, dict):
             raise ManifestError(f"{loc}: FileObject must be a mapping")
