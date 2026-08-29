@@ -17,7 +17,7 @@ import re
 import shutil
 import unicodedata
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from defendable_science.core.download import DownloadError, FetchedBytes
 from defendable_science.core.fixity import (
@@ -28,6 +28,7 @@ from defendable_science.core.fixity import (
     verified,
 )
 from defendable_science.core.mirror import MirrorUnreachableError
+from defendable_science.core.models import OwnedModel, parse_json
 from defendable_science.literature.graph import OPENALEX, resolve
 from defendable_science.literature.registry import (
     Acquisition,
@@ -214,6 +215,21 @@ class MatchRecord:
             "year": self.year,
             "reason": self.reason,
         }
+
+
+class QuarantineSidecar(OwnedModel):
+    """The ``<sha>.json`` this package parks beside a quarantined PDF.
+
+    Written by one invocation and read back by a later ``confirm``, so it
+    crosses a process boundary and is validated on the way in (ADR-0043
+    decision point 1). ``extra="forbid"``: an unexpected key means the writer
+    and the reader disagree about the format, which is worth surfacing.
+    """
+
+    candidate: dict[str, Any]
+    match: dict[str, Any]
+    rung: str
+    url: str | None = None
 
 
 def normalize_title(title: str) -> str:
@@ -1936,12 +1952,18 @@ def confirm_quarantined(entry: Entry, ctx: Context, sha256: str) -> Outcome:
                 "left untouched"
             ),
         )
-    data: dict[str, Any] = json.loads(sidecar.read_text(encoding="utf-8"))
-    candidate = cast("dict[str, Any]", data["candidate"])
-    match = cast("dict[str, Any]", data["match"])
-    rung = cast("str", data["rung"])
-    url = cast("str | None", data["url"])
-    license = _license_from_observed(cast("str | None", candidate.get("license")))
+    data = parse_json(
+        QuarantineSidecar,
+        sidecar.read_text(encoding="utf-8"),
+        source=str(sidecar),
+        error=RetrievalError,
+    )
+    candidate = data.candidate
+    match = data.match
+    rung = data.rung
+    url = data.url
+    observed = candidate.get("license")
+    license = _license_from_observed(observed if isinstance(observed, str) else None)
     fetched = FetchedBytes(
         path=pdf, media_type="application/pdf", size=pdf.stat().st_size
     )

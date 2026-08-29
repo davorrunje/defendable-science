@@ -2389,6 +2389,78 @@ def test_adopt_file_copies_rather_than_moves_the_humans_file(tmp_path: Path) -> 
     assert src.read_bytes() == PDF
 
 
+def test_confirm_rejects_a_sidecar_missing_a_required_field(tmp_path: Path) -> None:
+    """Defect 5: `data["candidate"]` raised a bare KeyError."""
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    sidecar = parked.parent / f"{PDF_SHA}.json"
+    sidecar.write_text(json.dumps({"rung": "oa", "url": None}), encoding="utf-8")
+
+    with pytest.raises(RetrievalError, match=r"candidate: "):
+        a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+
+def test_confirm_rejects_a_sidecar_whose_rung_is_the_wrong_type(
+    tmp_path: Path,
+) -> None:
+    """Defect 5: `cast("str", data["rung"])` let an int through as a str."""
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    (parked.parent / f"{PDF_SHA}.json").write_text(
+        json.dumps({"candidate": {}, "match": {}, "rung": 7, "url": None}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RetrievalError, match=r"rung: "):
+        a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+
+def test_confirm_rejects_a_sidecar_with_an_unexpected_key(tmp_path: Path) -> None:
+    """``extra="forbid"``: a key the writer never emits means a version skew."""
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    (parked.parent / f"{PDF_SHA}.json").write_text(
+        json.dumps(
+            {"candidate": {}, "match": {}, "rung": "oa", "url": None, "extra": 1}
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RetrievalError, match=r"extra: "):
+        a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+
+def test_confirm_rejects_a_sidecar_that_is_not_json(tmp_path: Path) -> None:
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+    (parked.parent / f"{PDF_SHA}.json").write_text("{oops", encoding="utf-8")
+
+    with pytest.raises(RetrievalError, match=r"invalid JSON"):
+        a.confirm_quarantined(entry, ctx, PDF_SHA)
+
+
+def test_the_writer_emits_what_the_reader_validates(tmp_path: Path) -> None:
+    """ADR-0043 point 3: the model is authoritative for this shape.
+
+    The writer builds the payload from the Candidate/Match dataclasses rather
+    than from the model (converting those would breach ADR-0043 point 2), so
+    this round-trip is what holds the two in agreement.
+    """
+    _path, entry = _registry(tmp_path)
+    ctx = _ctx(tmp_path, FakeClient({}), NeverFetcher())
+    parked = _quarantine(tmp_path, entry, ctx)
+
+    text = (parked.parent / f"{PDF_SHA}.json").read_text(encoding="utf-8")
+    parsed = a.QuarantineSidecar.model_validate_json(text)
+
+    assert parsed.rung == a.RUNG_SIBLING
+    assert parsed.url == "http://x/sib.pdf"
+
+
 # --- task 13: verify (offline fixity) + mirror (push/probe) -----------------
 
 
