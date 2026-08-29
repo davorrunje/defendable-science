@@ -43,11 +43,10 @@ extension to conflict inside.
 - `requests` pulls `certifi`, `charset-normalizer`, `idna`, `urllib3`
 
 Adding `pydantic` adds four more: `pydantic-core`, `annotated-types`,
-`typing-extensions` and `typing-inspection`. Only `pydantic-core` is
-compiled — it ships a per-platform wheel, so this is a real download-size
-increase — while the other three are pure Python. A difference of
-*degree*, then, not of *kind*, against a tree that already carries a
-Rust-adjacent dependency
+`typing-extensions` and `typing-inspection`. Only `pydantic-core` is compiled
+— it ships a per-platform wheel, so this is a real download-size increase —
+while the other three are pure Python. A difference of *degree*, then, not of
+*kind*, against a tree that already carries a Rust-adjacent dependency
 footprint (`urllib3`, `rich`'s C-accelerated paths) and eight indirect
 packages before Pydantic is even considered.
 
@@ -187,9 +186,9 @@ everything else in the package.
 - `pydantic` becomes a pinned runtime dependency of the package. Its version
   range must publish wheels across the whole of the package's
   `requires-python = ">=3.11,<3.15"`; that becomes a release-time check
-  (verified at design time: `pydantic-core` 2.48.0 ships `cp311`–`cp315`
-  wheels), not a one-time decision — a future Python floor or ceiling change
-  must re-check this.
+  (as shipped, `pydantic` 2.13.5 resolves `pydantic-core` 2.46.5, which
+  publishes `cp311`–`cp314` wheels — covering the whole range), not a
+  one-time decision: a future Python floor or ceiling change must re-check it.
 - The scope-creep risk into a general model layer is bounded by point 2: a
   reviewer treats a Pydantic model over package-internal or emit-only data as
   a finding against this ADR, not as a matter of taste.

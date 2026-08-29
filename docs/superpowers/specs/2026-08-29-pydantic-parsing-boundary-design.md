@@ -354,7 +354,13 @@ degradation branches.
       decision text is not rewritten
 - [ ] `docs/design/proposals/dataset-manifest-tooling.md` carries an amendment note;
       `docs/superpowers/plans/*.md` are untouched
-- [ ] `grep -rn "Pydantic is deliberately rejected\|ADR rejecting it stands" .` returns nothing
+- [ ] The old prohibition survives nowhere in **live guidance**:
+      `grep -rln "Pydantic is deliberately rejected" CLAUDE.md decisions/ docs/design/` returns
+      nothing, and `CLAUDE.md` cites ADR-0043 instead. Deliberately *not* scoped to `.` — the
+      phrase should and does still appear in `docs/superpowers/plans/*.md` (dated historical
+      plans, a §2 non-goal), in this spec and its plan, and quoted as history inside ADR-0043.
+      Likewise `"ADR rejecting it stands"` remains in ADR-0031's decision text, which is not
+      rewritten by design; its amendment blockquote is what resolves the dangling reference.
 
 **Phase 2**
 
