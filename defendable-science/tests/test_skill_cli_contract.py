@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
@@ -75,15 +76,22 @@ _INLINE_START = re.compile(rf"^(?:{_NAMES})\s+(.*)$", re.S)
 #: another command. ``<`` must be followed by whitespace so a ``<placeholder>``
 #: value is not mistaken for an input redirect.
 _SHELL_BREAK = re.compile(r"\s(?:\||&&|;|2?>>?|<<?\s)")
-#: Usage-synopsis grammar — ``[--flag]``, ``(a| b)``, ``x|y``, ``…``. These
-#: describe a command's shape rather than calling it, so arity and flag checks
-#: would both be meaningless.
-_SYNOPSIS = re.compile(r"[\[\]()|…]|\.\.\.")
+#: A blockquote continuation marker. Skills document tooling inside ``>`` quotes,
+#: so a span wrapped across such a line carries a leading ``>`` that would
+#: otherwise read as an output redirect and truncate the invocation.
+_QUOTE_MARKER = re.compile(r"^\s*>\s?", re.M)
+#: Usage-synopsis grammar — ``[--flag]``, ``(a| b)``, ``x|y``. These describe a
+#: command's shape rather than calling it, so arity and flag checks would both be
+#: meaningless. ``...`` counts only as a *standalone* token (``--citekey KEY
+#: ...``); inside a path it is an elision of real directories
+#: (``docs/research/.../strategy.md``) and the call is runnable.
+_SYNOPSIS = re.compile(r"[\[\]()|…]|(?<!\S)\.\.\.")
 #: A placeholder standing in for the command itself: ``defendable-science <group> <cmd>``.
 _TEMPLATE = re.compile(r"^[<{]")
-#: Prose that documents a command's *absence*. Checked against the text just
-#: before an inline span, on the same line.
-_NEGATION = re.compile(r"\b(no|not|never|instead of|rather than)\b[^.]*$", re.I)
+#: Prose that documents a command's *absence*, e.g. "There is no ``X`` command".
+#: Matched against the text between the previous code span and this one, so an
+#: unrelated "not" earlier in the sentence cannot suppress a real invocation.
+_NEGATION = re.compile(r"\b(no|not|never|instead of|rather than)\b[^.`]*$", re.I)
 
 
 class Invocation(NamedTuple):
@@ -136,6 +144,28 @@ def _join_continuations(lines: list[tuple[int, str]]) -> Iterator[tuple[int, str
         yield start, " ".join(p for p in parts if p)
 
 
+def _without_fences(text: str) -> str:
+    """Blank every fenced line, keeping the line count so numbering survives.
+
+    A ```` ``` ```` marker is three backticks, so scanning the raw document for
+    inline spans mis-pairs every span after the first fenced block — and captures
+    a bare fence's whole body as one "span". Both were happening: the guard saw
+    44 of 67 real inline invocations, and whole files yielded none.
+
+    :param text: The document's markdown.
+    :returns: `text` with fenced regions replaced by empty lines.
+    """
+    out: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            out.append("")
+            continue
+        out.append("" if in_fence else line)
+    return "\n".join(out)
+
+
 def _invocations(text: str) -> Iterator[Invocation]:
     """Yield every documented invocation in `text`.
 
@@ -147,13 +177,17 @@ def _invocations(text: str) -> Iterator[Invocation]:
         if match := _LINE_START.match(line):
             yield Invocation(number, match.group(1), "fence")
 
-    for match in _INLINE.finditer(text):
-        if not (inner := _INLINE_START.match(match.group(1).strip())):
+    prose = _without_fences(text)
+    for match in _INLINE.finditer(prose):
+        span = _QUOTE_MARKER.sub(" ", match.group(1)).strip()
+        if not (inner := _INLINE_START.match(span)):
             continue
-        before = text[: match.start()].rsplit("\n", maxsplit=1)[-1]
+        # Only back to the previous span on this line: an unrelated negation
+        # earlier in the sentence must not discard a real invocation.
+        before = prose[: match.start()].rsplit("\n", maxsplit=1)[-1]
         if _NEGATION.search(before):
             continue
-        number = text.count("\n", 0, match.start()) + 1
+        number = prose.count("\n", 0, match.start()) + 1
         yield Invocation(number, " ".join(inner.group(1).split()), "inline")
 
 
@@ -295,7 +329,10 @@ def test_documented_invocation_resolves(case: Case) -> None:
         f"call passes {positionals} positional argument(s)"
     )
     arguments = _arguments(command)
-    if arguments and all(p.nargs > 0 for p in arguments):
+    # No `arguments and` guard: `all([])` is True and `sum([])` is 0, so a
+    # command taking *no* positionals is exactly the case that must be checked —
+    # `defendable-science check junk` exits 2, and used to pass this guard.
+    if all(p.nargs > 0 for p in arguments):
         accepted = sum(p.nargs for p in arguments)
         assert positionals <= accepted, (
             f"{where}: `{_name(command)}` takes at most {accepted} positional "
@@ -304,13 +341,83 @@ def test_documented_invocation_resolves(case: Case) -> None:
 
 
 def test_the_guard_actually_found_invocations() -> None:
-    """A glob or regex that silently matched nothing would make this vacuous."""
-    assert len(_CASES) >= 40, f"only found {len(_CASES)} invocations"
-    kinds = {c.kind for c in _CASES}
-    assert kinds == {"fence", "inline"}, kinds
+    """A glob or regex that silently matched nothing would make this vacuous.
+
+    The floors are close to the real counts on purpose. An earlier revision
+    asserted ``>= 40`` against 101 actual cases, which is why a backtick-pairing
+    bug that lost a third of the inline corpus went unnoticed: any floor slack
+    enough to never need updating is also slack enough to hide silent drift.
+    """
+    assert len(_CASES) >= 95, f"only found {len(_CASES)} invocations"
+    by_kind = Counter(c.kind for c in _CASES)
+    assert by_kind["fence"] >= 30, by_kind
+    assert by_kind["inline"] >= 60, by_kind
     documents = {c.doc for c in _CASES}
-    assert any(d.startswith("skills/") for d in documents), documents
+    # Every skill that documents a command must contribute at least one case;
+    # `hypothesis-exploration` and `dataset` silently yielded zero before the
+    # fence-blanking fix.
+    for skill in ("hypothesis-exploration", "dataset", "digest", "progress"):
+        assert any(d == f"skills/{skill}/SKILL.md" for d in documents), (
+            f"no invocation found in skills/{skill}/SKILL.md"
+        )
     assert any(d.startswith("docs/") for d in documents), documents
+
+
+def test_inline_spans_survive_a_preceding_fenced_block() -> None:
+    """Backtick parity must not shift across a fence (the 44-of-67 bug)."""
+    found = list(
+        _invocations(
+            "```bash\ndefendable-science check\n```\n\n"
+            "Then run `defendable-science progress dashboard` to refresh it.\n"
+        )
+    )
+    assert found == [
+        Invocation(2, "check", "fence"),
+        Invocation(5, "progress dashboard", "inline"),
+    ], found
+
+
+def test_a_bare_fence_body_is_not_read_as_one_inline_span() -> None:
+    """An unlabelled fence's backticks used to swallow its whole body."""
+    found = list(
+        _invocations(
+            "```\ndefendable-science init --dry-run\n"
+            "defendable-science literature verify --all\n```\n"
+        )
+    )
+    assert [f.kind for f in found] == ["fence", "fence"], found
+
+
+def test_an_elided_path_is_not_a_synopsis() -> None:
+    """`...` inside a path is an elision; only a standalone `...` is grammar."""
+    assert _argv("defend record --artifact docs/research/.../strategy.md") == [
+        "defend",
+        "record",
+        "--artifact",
+        "docs/research/.../strategy.md",
+    ]
+    assert _argv("digest extract sample --citekey KEY ...") is None
+
+
+def test_an_unrelated_negation_does_not_discard_an_invocation() -> None:
+    """Only the text since the previous code span counts as the negation."""
+    found = list(
+        _invocations(
+            "a stub saying it has **not** been generated by "
+            "`defendable-science init`; run `defendable-science progress dashboard`.\n"
+        )
+    )
+    assert [f.args for f in found] == ["progress dashboard"], found
+
+
+def test_a_blockquote_continuation_does_not_truncate_a_span() -> None:
+    """Skills document tooling inside `>` quotes; `>` is not a redirect here."""
+    found = list(
+        _invocations(
+            "> **Tooling.** Append is the `defendable-science backlog\n> park` verb."
+        )
+    )
+    assert found == [Invocation(1, "backlog park", "inline")], found
 
 
 def test_the_guard_reads_fenced_blocks_and_joins_continuations() -> None:
