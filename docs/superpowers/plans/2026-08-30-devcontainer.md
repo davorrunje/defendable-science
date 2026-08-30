@@ -301,9 +301,12 @@ run_host_init() {
              bash "${HOST_INIT}" "${id}" 2>"${home}/stderr.log" )
 }
 
+# The fake workdir carries the repo marker host-init.sh checks for, so the
+# happy-path cases exercise the real code rather than the refuse-to-act guard.
 new_case() {
     local tmp; tmp="$(mktemp -d)"
-    mkdir -p "${tmp}/home/.claude/projects" "${tmp}/work"
+    mkdir -p "${tmp}/home/.claude/projects" "${tmp}/work/.claude-plugin"
+    printf '{}' > "${tmp}/work/.claude-plugin/plugin.json"
     printf '%s' "${tmp}"
 }
 
@@ -470,6 +473,28 @@ else
 fi
 rm -rf "${t}"
 
+# --- 7b. refuses to act on a directory that is not the repo root ------------
+t="$(new_case)"
+mkdir -p "${t}/elsewhere"
+run_host_init "${t}/home" "${t}/elsewhere" "abc123" "gho_x"
+secrets="${t}/home/.config/defendable-science-devcontainer"
+if [ ! -e "${t}/elsewhere/defendable-science" ]; then
+    pass "does not create a stray defendable-science/ outside the repo"
+else
+    fail "does not create a stray defendable-science/ outside the repo" "created one"
+fi
+if [ -d "${secrets}/claude-session-abc123" ] && [ ! -L "${secrets}/claude-session-abc123" ]; then
+    pass "leaves plain directories so container start still succeeds"
+else
+    fail "leaves plain directories so container start still succeeds" "symlinked or missing"
+fi
+if grep -q "not the defendable-science repo root" "${t}/home/stderr.log"; then
+    pass "warns that it refused to wire the wrong directory"
+else
+    fail "warns that it refused to wire the wrong directory" "no warning"
+fi
+rm -rf "${t}"
+
 # --- 8. always exits 0, even when everything is degraded --------------------
 t="$(new_case)"
 run_host_init "${t}/home" "${t}/work" "" absent
@@ -553,8 +578,38 @@ else
 fi
 unset token
 
+devcontainer_id="${1:-}"
+if [ -z "${devcontainer_id}" ]; then
+    warn "no devcontainerId argument; devcontainer.json must call:"
+    warn "  bash .devcontainer/host-init.sh \${devcontainerId}"
+fi
+
 # ---------------------------------------------------------------------------
-# 2. Pre-create the host-side venv directory.
+# 2. Refuse to act on the wrong directory.
+#
+# EVERY side effect below is derived from $PWD: the .venv pre-creation and both
+# session slugs. `initializeCommand` runs with cwd set to the workspace folder,
+# but nothing enforces that -- invoked by hand from elsewhere, this script would
+# create a stray <cwd>/defendable-science/.venv and silently point the container
+# at the WRONG host project directory, because devcontainer.json's bind targets
+# are hard-coded container slugs that cannot notice.
+#
+# Sharing is disabled rather than done wrongly. The stable paths are still
+# created as plain directories, because a bind mount with a missing source
+# fails container start and this script must not cause that.
+# ---------------------------------------------------------------------------
+if [ ! -f "${PWD}/.claude-plugin/plugin.json" ]; then
+    warn "cwd (${PWD}) is not the defendable-science repo root"
+    warn "(expected to find .claude-plugin/plugin.json there)."
+    warn "session sharing is DISABLED rather than risk wiring the wrong host directory."
+    mkdir -p "${SECRETS_DIR}/claude-session-${devcontainer_id}" \
+             "${SECRETS_DIR}/claude-session-pkg-${devcontainer_id}" \
+        || warn "could not create the session mount sources; container start may fail."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Pre-create the host-side venv directory.
 #
 # devcontainer.json mounts a named volume at
 # <workspace>/defendable-science/.venv, a path that resolves THROUGH the
@@ -574,7 +629,7 @@ if ! mkdir -p "${PWD}/defendable-science/.venv"; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Session sharing
+# 4. Session sharing
 #
 # Keyed by ${devcontainerId} ($1) because, unlike the token, the TARGET
 # genuinely differs per checkout.
@@ -584,11 +639,6 @@ fi
 # `cd defendable-science` for all package work -- so wiring only the workspace
 # root would leave the repo's *primary* working directory silently unshared.
 # ---------------------------------------------------------------------------
-devcontainer_id="${1:-}"
-if [ -z "${devcontainer_id}" ]; then
-    warn "no devcontainerId argument; devcontainer.json must call:"
-    warn "  bash .devcontainer/host-init.sh \${devcontainerId}"
-fi
 
 # wire_session_dir <host-dir> <stable-link-path>
 #
@@ -733,9 +783,20 @@ cd "$(dirname "$0")/.."
 # bare '*.sh' glob is extension-based. If the hook can fire on a file this
 # script never passes to shellcheck, the hook reports success without having
 # checked the file that triggered it.
+#
+# The shebang test MUST look at line 1 only. `git grep -E '^#!...'` matches that
+# pattern on ANY line, which sweeps in every Markdown document containing a
+# fenced `#!/usr/bin/env bash` block -- including this repo's own plan files --
+# and shellcheck then fails on them with SC2148/SC1036. That is also what
+# pre-commit's `identify` actually does: first line, not any line.
 mapfile -t scripts < <(
     { git ls-files '*.sh'
-      git grep -lI --untracked -E '^#!.*\b(ba)?sh\b' -- ':!*.sh' 2>/dev/null || true
+      git ls-files -- ':!*.sh' | while IFS= read -r _f; do
+          [ -f "${_f}" ] || continue
+          if head -n 1 -- "${_f}" 2>/dev/null | grep -qaE '^#!.*\b(ba)?sh\b'; then
+              printf '%s\n' "${_f}"
+          fi
+      done
     } | sort -u
 )
 
@@ -748,14 +809,22 @@ echo "Running shellcheck on ${#scripts[@]} script(s)..."
 uv run --project defendable-science --group lint shellcheck --severity=style "${scripts[@]}"
 ```
 
-Make it executable and run it:
+Make it executable, then check **what it selected** before checking that it passes — a discovery bug here silently either skips files or feeds ShellCheck documents it cannot parse:
 
 ```bash
 chmod +x tools/shellcheck.sh
+bash -x tools/shellcheck.sh 2>&1 | grep -E "^Running shellcheck"
+# and confirm no Markdown slipped in:
+{ git ls-files '*.sh'
+  git ls-files -- ':!*.sh' | while IFS= read -r f; do
+      [ -f "${f}" ] || continue
+      head -n 1 -- "${f}" 2>/dev/null | grep -qaE '^#!.*\b(ba)?sh\b' && printf '%s\n' "${f}"
+  done
+} | sort -u | grep -E '\.md$' && echo "FAIL: markdown selected" || echo "OK: no markdown"
 ./tools/shellcheck.sh
 ```
 
-Expected: it runs. If it reports findings in the Task 1–2 scripts, **fix the scripts** (do not lower `--severity`). Two likely ones and their correct fixes:
+Expected: `OK: no markdown`, the five existing `tools/*.sh` plus this task's new files selected, and the run passes. If it reports findings in the Task 1–2 scripts, **fix the scripts** (do not lower `--severity`). Two likely ones and their correct fixes:
 - `SC2086` (unquoted expansion) — add the quotes.
 - `SC1091` (can't follow a non-constant source) — add `# shellcheck disable=SC1091` with a one-line reason, only where the sourced path genuinely isn't resolvable at check time.
 
@@ -922,8 +991,14 @@ Create `.devcontainer/devcontainer.json`:
     "UV_CACHE_DIR": "/home/vscode/.local/share/uv/cache"
   },
 
+  // Features are pinned to EXACT versions, not floating majors (`:1`/`:2`).
+  // A floating major has no minor/patch component to bump, so Dependabot's
+  // minor+patch group would match nothing and the entry ADR-0044 calls
+  // load-bearing would track nothing. Exact pins also make a rebuild
+  // reproducible, and match how every other tool in this repo is pinned.
+  // Versions verified against GHCR on 2026-08-30; Dependabot moves them from here.
   "features": {
-    "ghcr.io/devcontainers/features/common-utils:2": {
+    "ghcr.io/devcontainers/features/common-utils:2.5.9": {
       "installZsh": true,
       "installOhMyZsh": true,
       "configureZshAsDefaultShell": true,
@@ -931,13 +1006,13 @@ Create `.devcontainer/devcontainer.json`:
       "userUid": "1000",
       "userGid": "1000"
     },
-    "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/git:1.3.8": {},
+    "ghcr.io/devcontainers/features/github-cli:1.1.1": {},
     // rclone: exercised by the opt-in live dataset-retrieval tests.
-    "ghcr.io/devcontainers-extra/features/rclone:1": {},
+    "ghcr.io/devcontainers-extra/features/rclone:1.0.15": {},
     // uv as a Feature rather than a curl install, so every tool is declared in
     // one place. Requires the `devcontainers` Dependabot ecosystem (Task 10).
-    "ghcr.io/devcontainers-extra/features/uv:1": {}
+    "ghcr.io/devcontainers-extra/features/uv:1.0.2": {}
   },
 
   "mounts": [
@@ -1025,13 +1100,20 @@ for d in (cfg["workspaceFolder"], cfg["workspaceFolder"] + "/defendable-science"
 # unreachable and plugin provisioning silently no-ops.
 assert cfg["remoteEnv"]["PATH"].startswith("/home/vscode/.local/bin:"), cfg["remoteEnv"]
 
+# Features must carry EXACT versions. A floating `:1` has no minor/patch to
+# bump, so Dependabot's group would silently track nothing (see Task 10).
+import re as _re
+for feat in cfg["features"]:
+    tag = feat.rsplit(":", 1)[1]
+    assert _re.fullmatch(r"\d+\.\d+\.\d+", tag), f"{feat} is not pinned to an exact version"
+
 # UV_CACHE_DIR must sit inside the uv volume, or a rebuild loses the wheels.
 assert cfg["containerEnv"]["UV_CACHE_DIR"].startswith("/home/vscode/.local/share/uv/")
 print("devcontainer.json is self-consistent")
 PY
 ```
 
-Expected: `devcontainer.json is self-consistent`. This is the check that catches a mistyped container path — which would otherwise fail silently as a feature that just doesn't work.
+Expected: `devcontainer.json is self-consistent`. The Feature-pin assertion is what keeps Task 10's Dependabot entry meaningful. This is the check that catches a mistyped container path — which would otherwise fail silently as a feature that just doesn't work.
 
 - [ ] **Step 4: Commit**
 
@@ -1648,9 +1730,10 @@ Append to the `updates:` list in `.github/dependabot.yml`, matching the conventi
 
 ```yaml
   # ── Devcontainer Features (ADR-0044) ────────────────────────────────────
-  # Keeps the `:1`/`:2` Feature pins in .devcontainer/devcontainer.json
-  # current. Without this entry those pins drift exactly like the hand-rolled
-  # curl install they were chosen over.
+  # Keeps the exact Feature pins in .devcontainer/devcontainer.json current.
+  # This only works because Task 4 pins them to exact versions: a floating
+  # `:1`/`:2` tag has no minor/patch component, so the group below would match
+  # nothing and the entry would track nothing.
   - package-ecosystem: "devcontainers"
     directory: "/"
     schedule:
@@ -1689,7 +1772,23 @@ PY
 
 Expected: `ecosystems: ['uv', 'github-actions', 'pre-commit', 'devcontainers']`.
 
-- [ ] **Step 3: Confirm `cooldown` is actually supported here**
+- [ ] **Step 3: Confirm the entry can actually match the pins**
+
+The group restricts to `["minor", "patch"]`, following the three existing entries. That is only meaningful against exact pins:
+
+```bash
+python3 - <<'PY'
+import json, re
+cfg = json.loads(re.sub(r'^\s*//.*$', '', open(".devcontainer/devcontainer.json").read(), flags=re.M))
+floating = [f for f in cfg["features"] if not re.fullmatch(r"\d+\.\d+\.\d+", f.rsplit(":", 1)[1])]
+assert not floating, f"floating pins the minor/patch group can never match: {floating}"
+print("all Feature pins are exact; the Dependabot group can match them")
+PY
+```
+
+Expected: `all Feature pins are exact; the Dependabot group can match them`. Majors still arrive as their own ungrouped PR, matching how the other three ecosystems behave.
+
+- [ ] **Step 4: Confirm `cooldown` is actually supported here**
 
 ADR-0036 records that `cooldown`'s sub-options are ecosystem-dependent (`semver-*-days` need a version-based ecosystem). Check GitHub's reference for the `devcontainers` ecosystem:
 
@@ -1700,7 +1799,7 @@ echo "Open https://docs.github.com/en/code-security/dependabot/working-with-depe
 
 If it is **not** supported, delete the two `cooldown` lines from this entry only and add a comment saying so — mirroring the existing comment on the `github-actions` entry, which already documents exactly this class of exception. Do not remove `cooldown` from the other entries.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add .github/dependabot.yml

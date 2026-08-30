@@ -96,8 +96,11 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   boundaries for a given host path.
 - Using Features for `uv`/`git`/`github-cli`/`rclone` puts their versions in one
   declared, pinnable place instead of a shell script — **conditional on** the new
-  `devcontainers` Dependabot ecosystem landing with it; ADR-0036's scope does not
-  currently cover Features.
+  `devcontainers` Dependabot ecosystem landing with it (ADR-0036's scope does not
+  currently cover Features) **and** on the Features being pinned to exact versions.
+  A floating `:1`/`:2` tag has no minor/patch component for a `["minor","patch"]` group
+  to match, so floating pins would leave the ecosystem entry tracking nothing — the very
+  drift it was added to prevent.
 - Three named volumes beyond `~/.claude` are needed: the project's `.venv` (container-
   private, avoids colliding with the bind-mounted source tree), `uv`'s state dir
   (`~/.local/share/uv`, with `UV_CACHE_DIR` redirected inside it so the wheel cache is

@@ -116,6 +116,12 @@ because it has multiple flavors; this repo has one):
   every tool in the container is declared and pinned in one place rather than one of
   them drifting inside a shell script. (Both `devcontainers-extra` Features were
   confirmed to exist on GHCR.)
+- **Features are pinned to exact versions, not floating majors (revised).**
+  `:1`/`:2` has no minor/patch component, so the Dependabot group below — restricted to
+  `["minor","patch"]` like every other entry in this repo — would match nothing, and the
+  companion change that justifies choosing Features at all would track nothing. Exact
+  pins also make a rebuild reproducible. Versions verified against GHCR 2026-08-30:
+  `common-utils:2.5.9`, `git:1.3.8`, `github-cli:1.1.1`, `rclone:1.0.15`, `uv:1.0.2`.
 - **Required companion change (reviewed, fixed).** Earlier drafts justified the Feature
   choice by saying Dependabot already tracks Feature versions "the same way it tracks
   Actions". That is **false as written**: `.github/dependabot.yml` declares only `uv`,
@@ -246,6 +252,16 @@ Two independent mechanisms, both adapted from mononet:
    mounts," so it applies the same way whether or not `dockerComposeFile` is set —
    this is exactly how mononet's own (working) `default/devcontainer.json` uses it
    alongside its compose file.
+
+**`host-init.sh` refuses to act on the wrong directory.** Every side effect it has is
+derived from `$PWD` — the `.venv` pre-creation and both session slugs — and while
+`initializeCommand` runs with cwd set to the workspace folder, nothing enforces that.
+Run from anywhere else it would create a stray `defendable-science/.venv` and point the
+container at the wrong host project directory, invisibly, because `devcontainer.json`'s
+bind targets are hard-coded container slugs that cannot detect the mismatch. It
+therefore checks for `.claude-plugin/plugin.json` in `$PWD` and, if absent, warns and
+disables sharing rather than doing it wrongly — still creating the stable paths as plain
+directories, since a missing bind source would fail container start.
 
 `host-init.sh` also unconditionally `mkdir -p`s
 `~/.config/defendable-science-devcontainer` (so the directory always exists, whether
