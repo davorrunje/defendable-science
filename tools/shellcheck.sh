@@ -14,14 +14,19 @@ cd "$(dirname "$0")/.."
 # script never passes to shellcheck, the hook reports success without having
 # checked the file that triggered it.
 #
+# --cached --others --exclude-standard, not a bare `git ls-files`: the default
+# lists TRACKED files only, so a newly written, not-yet-added script would be
+# silently skipped and the gate would report success on a file it never read.
+# --exclude-standard keeps gitignored paths (e.g. .venv/) out.
+#
 # The shebang test MUST look at line 1 only. `git grep -E '^#!...'` matches that
 # pattern on ANY line, which sweeps in every Markdown document containing a
 # fenced `#!/usr/bin/env bash` block -- including this repo's own plan files --
 # and shellcheck then fails on them with SC2148/SC1036. That is also what
 # pre-commit's `identify` actually does: first line, not any line.
 mapfile -t scripts < <(
-    { git ls-files '*.sh'
-      git ls-files -- ':!*.sh' | while IFS= read -r _f; do
+    { git ls-files --cached --others --exclude-standard '*.sh'
+      git ls-files --cached --others --exclude-standard -- ':!*.sh' | while IFS= read -r _f; do
           [ -f "${_f}" ] || continue
           if head -n 1 -- "${_f}" 2>/dev/null | grep -qaE '^#!.*\b(ba)?sh\b'; then
               printf '%s\n' "${_f}"
