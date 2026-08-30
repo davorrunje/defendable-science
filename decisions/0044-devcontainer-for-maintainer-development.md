@@ -62,12 +62,17 @@ Two independent mechanisms carry over from mononet, adapted:
   already holds real session data is untouched and safe; the stable path itself is
   removed only when it is a symlink, so a fallback directory holding real transcripts is
   never `rm -rf`'d the way mononet's unconditional removal would). That stable path is
-  bind-mounted onto the container's own project slug. Sharing is therefore scoped to the
-  **exact host path** the container was opened from — opening from a git worktree
-  shares with sessions run from that worktree, not from the main clone, which matches
-  Claude Code's own existing per-directory project model (verified: worktrees already
-  get distinct directories under `~/.claude/projects/`, independent of any devcontainer
-  involvement).
+  bind-mounted onto the container's own project slug.
+
+  **Two** directories are wired, not one. Claude Code keys transcripts by the directory
+  a session was *launched from*, and CLAUDE.md prescribes `cd defendable-science` for
+  package work — so wiring only the workspace root would leave the repo's primary
+  working directory silently unshared. Sharing is therefore scoped to those two
+  directories of the exact host path the container was opened from. Opening from a git
+  worktree would share with that worktree rather than the main clone, matching Claude
+  Code's own per-directory project model (verified: worktrees already get distinct
+  directories under `~/.claude/projects/`, independent of any devcontainer) — though
+  §2.1's constraint means the container is opened on the main clone anyway.
 
   The host-path→project-directory encoding is **every non-alphanumeric character** →
   `-` (`sed 's#[^a-zA-Z0-9]#-#g'`), not mononet's slash-only `sed 's#/#-#g'` and not the
@@ -100,10 +105,12 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   re-downloads the whole interpreter matrix, rebuilds every wheel, and rebuilds every
   pre-commit hook environment — the last is why `ci.yml` caches that exact path.
 - Every named volume is created root-owned, so each must be listed in
-  `install_common_tools.sh`'s ownership-claiming loop — **and so must
-  `${CLAUDE_CONFIG_DIR}/projects`**, which is not itself a mount but is created
-  root-owned as the parent of the nested session bind-mountpoint; the chown is
-  non-recursive, so chowning `~/.claude` does not reach it. Note also that the package
+  `install_common_tools.sh`'s ownership-claiming loop — **and so must every parent
+  directory Docker had to create on the way to one**, since the chown is non-recursive:
+  `${CLAUDE_CONFIG_DIR}/projects` (parent of the nested session bind-mountpoints),
+  `~/.local` and `~/.local/share` (parents of the `uv` volume), and `~/.cache` (parent
+  of the pre-commit volume). `~/.local` matters twice over, because the Claude CLI
+  installer writes to `~/.local/bin`. Note also that the package
   lives one level below the repo root here (unlike mononet, where they coincide), so
   mononet's script cannot be adapted by path substitution alone — the `.venv` path
   differs structurally, not just by name.
@@ -112,6 +119,11 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   concurrent writers write identical bytes; the read-only bind mount exposes the whole
   directory anyway, so per-ID naming would imply an isolation that does not exist; and
   unsuffixed names self-clean instead of accumulating plaintext tokens forever.
+- The base image's `PATH` omits `~/.local/bin`, where the Claude CLI installs, so it is
+  prepended via `remoteEnv` *and* exported inside `install_common_tools.sh`, which then
+  asserts `command -v claude` rather than trusting it. Without this the container would
+  build green with no plugins at all, since every consumer of `claude` downstream is
+  non-fatal by design.
 - `post-create.sh` runs `pre-commit install-hooks`, **not** `pre-commit install`:
   `.git` is shared with the host, and an installed hook embeds a container-only
   `INSTALL_PYTHON` path that would break host-side `git commit`. Building the hook

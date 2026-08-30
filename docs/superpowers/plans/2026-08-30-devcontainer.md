@@ -236,7 +236,7 @@ Runs on the host, before the container exists. Two jobs, both best-effort. Every
 
 **Interfaces:**
 - Consumes: `.devcontainer/claude-project-slug.sh` (Task 1).
-- Produces: `${HOME}/.config/defendable-science-devcontainer/` containing `gh-token` (mode 0600, only when the host has a token) and `claude-session-<id>` (a symlink to the real host project dir, or a plain directory in the degraded case). Task 4's `devcontainer.json` mounts both. Invoked as `bash .devcontainer/host-init.sh <devcontainerId>`.
+- Produces: `${HOME}/.config/defendable-science-devcontainer/` containing `gh-token` (mode 0600, only when the host has a token), `claude-session-<id>` and `claude-session-pkg-<id>` (symlinks to the real host project dirs for the workspace root and the package subdirectory, or plain directories in the degraded case). Also pre-creates the host-side `defendable-science/.venv`. Task 4's `devcontainer.json` mounts all three paths. Invoked as `bash .devcontainer/host-init.sh <devcontainerId>`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -334,6 +334,23 @@ if [ "$(readlink "${secrets}/claude-session-abc123")" = "${t}/home/.claude/proje
 else
     fail "symlink points at the slug-derived project dir" "$(readlink "${secrets}/claude-session-abc123")"
 fi
+
+# The package subdirectory is wired too -- CLAUDE.md prescribes working from
+# there, so a workspace-root-only link would leave the primary working
+# directory silently unshared.
+pkg_slug="$(bash "${SCRIPT_DIR}/../claude-project-slug.sh" "${t}/work/defendable-science")"
+if [ "$(readlink "${secrets}/claude-session-pkg-abc123")" = "${t}/home/.claude/projects/${pkg_slug}" ]; then
+    pass "package subdirectory session link is wired"
+else
+    fail "package subdirectory session link is wired" "$(readlink "${secrets}/claude-session-pkg-abc123")"
+fi
+
+# The host-side venv dir must be pre-created so Docker does not, as root.
+if [ -d "${t}/work/defendable-science/.venv" ]; then
+    pass "pre-creates the host-side .venv directory"
+else
+    fail "pre-creates the host-side .venv directory" "missing"
+fi
 rm -rf "${t}"
 
 # --- 2. no gh on the host: token absent, container start still possible -----
@@ -350,10 +367,10 @@ if [ -d "${secrets}" ]; then
 else
     fail "secrets dir still exists" "missing"
 fi
-if [ -e "${secrets}/claude-session-abc123" ]; then
-    pass "session mount source still exists"
+if [ -e "${secrets}/claude-session-abc123" ] && [ -e "${secrets}/claude-session-pkg-abc123" ]; then
+    pass "both session mount sources still exist"
 else
-    fail "session mount source still exists" "missing"
+    fail "both session mount sources still exist" "missing"
 fi
 rm -rf "${t}"
 
@@ -432,6 +449,14 @@ if grep -q "WARNING" "${t}/home/stderr.log"; then
     pass "warns about the disabled sharing"
 else
     fail "warns about the disabled sharing" "no WARNING on stderr"
+fi
+# Regression: the venv pre-creation must NOT be skipped by the degraded
+# session-sharing path. It used to sit after this branch's early exit, so every
+# open after the first degraded one silently re-armed the root-owned-.venv trap.
+if [ -d "${t}/work/defendable-science/.venv" ]; then
+    pass "still pre-creates .venv when session sharing is degraded"
+else
+    fail "still pre-creates .venv when session sharing is degraded" "missing"
 fi
 rm -rf "${t}"
 
@@ -529,72 +554,95 @@ fi
 unset token
 
 # ---------------------------------------------------------------------------
-# 2. session sharing
-#
-# Keyed by ${devcontainerId} ($1) because, unlike the token, the TARGET
-# genuinely differs per checkout.
-# ---------------------------------------------------------------------------
-devcontainer_id="${1:-}"
-if [ -z "${devcontainer_id}" ]; then
-    warn "no devcontainerId argument; devcontainer.json must call:"
-    warn "  bash .devcontainer/host-init.sh \${devcontainerId}"
-fi
-# The dash is UNCONDITIONAL so this name matches devcontainer.json's mount
-# source byte-for-byte. A conditional suffix would yield "claude-session" while
-# the mount expects "claude-session-", and a bind mount whose source does not
-# exist fails container start.
-SESSION_LINK="${SECRETS_DIR}/claude-session-${devcontainer_id}"
-
-host_slug="$(bash "${SCRIPT_DIR}/claude-project-slug.sh" "${PWD}")"
-target="${CLAUDE_PROJECTS}/${host_slug}"
-
-# The computed directory not existing is legitimate on a first-ever session for
-# this path -- but it is ALSO what a change in Claude Code's slug rule looks
-# like. Say so rather than silently sharing an empty directory.
-if [ ! -d "${target}" ]; then
-    warn "computed session dir ${target} did not exist."
-    warn "if you have used Claude Code in this directory before, the project-slug"
-    warn "rule may have changed and sessions may NOT be shared."
-fi
-
-if ! mkdir -p "${target}"; then
-    warn "could not create ${target}; falling back to a standalone directory (sessions NOT shared)."
-    mkdir -p "${SESSION_LINK}" || warn "could not create ${SESSION_LINK}; container start may fail."
-    exit 0
-fi
-
-# Replace only a symlink. A real directory here is a previous run's degraded
-# fallback and may hold real transcripts: never delete it, and never `ln` into
-# it either -- `ln -sfn` against an existing DIRECTORY silently creates the
-# link *inside* it and would leave this script exiting 0 with sharing dead.
-if [ -L "${SESSION_LINK}" ]; then
-    rm -f "${SESSION_LINK}"
-elif [ -e "${SESSION_LINK}" ]; then
-    warn "${SESSION_LINK} exists and is not a symlink; leaving it untouched."
-    warn "host/container session sharing is DISABLED until it is removed by hand."
-    exit 0
-fi
-
-if ! ln -sfn "${target}" "${SESSION_LINK}" 2>/dev/null; then
-    warn "could not link ${SESSION_LINK} -> ${target}; using a standalone directory (sessions NOT shared)."
-    mkdir -p "${SESSION_LINK}" || warn "could not create ${SESSION_LINK}; container start may fail."
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Pre-create the host-side venv directory.
+# 2. Pre-create the host-side venv directory.
 #
 # devcontainer.json mounts a named volume at
 # <workspace>/defendable-science/.venv, a path that resolves THROUGH the
 # workspace bind mount. Docker creates a missing mount destination, and that
 # creation lands in the host tree owned by ROOT -- after which the host's own
 # `cd defendable-science && uv sync` fails with a permission error. It is
-# gitignored, so `git status` stays clean and nothing else notices. Creating it
-# here, as the host user, means Docker finds it already present.
+# gitignored, so `git status` stays clean and nothing else notices.
+#
+# This runs BEFORE session sharing on purpose: the session block has several
+# legitimate early-`exit 0` paths (a degraded fallback directory is a normal
+# steady state), and leaving this last would mean the hazard silently returns
+# on every open after the first degraded one.
 # ---------------------------------------------------------------------------
 if ! mkdir -p "${PWD}/defendable-science/.venv"; then
     warn "could not pre-create ${PWD}/defendable-science/.venv; Docker may create it root-owned,"
     warn "which would break host-side 'uv sync' in that directory."
 fi
+
+# ---------------------------------------------------------------------------
+# 3. Session sharing
+#
+# Keyed by ${devcontainerId} ($1) because, unlike the token, the TARGET
+# genuinely differs per checkout.
+#
+# TWO directories are wired, not one. Claude Code keys transcripts by the
+# working directory it was launched from, and CLAUDE.md prescribes
+# `cd defendable-science` for all package work -- so wiring only the workspace
+# root would leave the repo's *primary* working directory silently unshared.
+# ---------------------------------------------------------------------------
+devcontainer_id="${1:-}"
+if [ -z "${devcontainer_id}" ]; then
+    warn "no devcontainerId argument; devcontainer.json must call:"
+    warn "  bash .devcontainer/host-init.sh \${devcontainerId}"
+fi
+
+# wire_session_dir <host-dir> <stable-link-path>
+#
+# Point <stable-link-path> at the real host Claude project directory for
+# <host-dir>. Always leaves SOMETHING at <stable-link-path>, because
+# devcontainer.json bind-mounts it and a missing bind source fails container
+# start. Never returns non-zero.
+wire_session_dir() {
+    local host_dir=$1 link=$2
+    local slug target
+    slug="$(bash "${SCRIPT_DIR}/claude-project-slug.sh" "${host_dir}")"
+    target="${CLAUDE_PROJECTS}/${slug}"
+
+    # Not existing is legitimate on a first-ever session for this path -- but
+    # it is ALSO what a change in Claude Code's slug rule looks like. Say so
+    # rather than silently sharing an empty directory.
+    if [ ! -d "${target}" ]; then
+        warn "computed session dir ${target} did not exist."
+        warn "if you have used Claude Code in ${host_dir} before, the project-slug"
+        warn "rule may have changed and those sessions may NOT be shared."
+    fi
+
+    if ! mkdir -p "${target}"; then
+        warn "could not create ${target}; falling back to a standalone directory (sessions NOT shared)."
+        mkdir -p "${link}" || warn "could not create ${link}; container start may fail."
+        return 0
+    fi
+
+    # Replace only a symlink. A real directory here is a previous run's
+    # degraded fallback and may hold real transcripts: never delete it, and
+    # never `ln` into it either -- `ln -sfn` against an existing DIRECTORY
+    # silently creates the link *inside* it, which would leave this script
+    # exiting 0 with sharing dead.
+    if [ -L "${link}" ]; then
+        rm -f "${link}"
+    elif [ -e "${link}" ]; then
+        warn "${link} exists and is not a symlink; leaving it untouched."
+        warn "session sharing for ${host_dir} is DISABLED until it is removed by hand."
+        return 0
+    fi
+
+    if ! ln -sfn "${target}" "${link}" 2>/dev/null; then
+        warn "could not link ${link} -> ${target}; using a standalone directory (sessions NOT shared)."
+        mkdir -p "${link}" || warn "could not create ${link}; container start may fail."
+    fi
+    return 0
+}
+
+# The dash before ${devcontainer_id} is UNCONDITIONAL so these names match
+# devcontainer.json's mount sources byte-for-byte even when the id is empty.
+wire_session_dir "${PWD}" \
+                 "${SECRETS_DIR}/claude-session-${devcontainer_id}"
+wire_session_dir "${PWD}/defendable-science" \
+                 "${SECRETS_DIR}/claude-session-pkg-${devcontainer_id}"
 
 exit 0
 ```
@@ -681,7 +729,15 @@ set -euo pipefail
 # repo-wide so a future script elsewhere is covered without editing this file.
 cd "$(dirname "$0")/.."
 
-mapfile -t scripts < <(git ls-files '*.sh')
+# Two sources, because pre-commit's `types: [shell]` is SHEBANG-based while a
+# bare '*.sh' glob is extension-based. If the hook can fire on a file this
+# script never passes to shellcheck, the hook reports success without having
+# checked the file that triggered it.
+mapfile -t scripts < <(
+    { git ls-files '*.sh'
+      git grep -lI --untracked -E '^#!.*\b(ba)?sh\b' -- ':!*.sh' 2>/dev/null || true
+    } | sort -u
+)
 
 if [ "${#scripts[@]}" -eq 0 ]; then
     echo "No shell scripts found."
@@ -848,6 +904,14 @@ Create `.devcontainer/devcontainer.json`:
   "updateContentCommand": "bash .devcontainer/setup.sh",
   "postCreateCommand": "bash .devcontainer/post-create.sh",
 
+  // Prepend ~/.local/bin for interactive shells and lifecycle commands: the
+  // base image's PATH omits it, and that is where the Claude CLI installs.
+  // ${containerEnv:...} is only expandable in remoteEnv, which is why this is
+  // not folded into containerEnv below.
+  "remoteEnv": {
+    "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
+  },
+
   "containerEnv": {
     // install_common_tools.sh reads this to chown the root-owned ~/.claude
     // volume. If it is unset that chown is SILENTLY skipped (the script guards
@@ -883,6 +947,11 @@ Create `.devcontainer/devcontainer.json`:
     // checkout, so host and container sessions share transcripts. Its source
     // is created by host-init.sh; a missing bind source fails container start.
     "source=${localEnv:HOME}/.config/defendable-science-devcontainer/claude-session-${devcontainerId},target=/home/vscode/.claude/projects/-workspaces-defendable-science,type=bind",
+    // The SECOND session bind: Claude Code keys transcripts by the directory it
+    // was launched from, and CLAUDE.md prescribes `cd defendable-science` for
+    // package work. Without this, sessions started there land in the
+    // container-local volume and are silently unshared.
+    "source=${localEnv:HOME}/.config/defendable-science-devcontainer/claude-session-pkg-${devcontainerId},target=/home/vscode/.claude/projects/-workspaces-defendable-science-defendable-science,type=bind",
     // The whole secrets DIRECTORY, read-only. Mounting the directory (not the
     // file) means a host with no gh token is simply a directory without that
     // file, rather than a missing mount source.
@@ -935,6 +1004,7 @@ targets = [m.split("target=")[1].split(",")[0] for m in cfg["mounts"]]
 expected = {
     "/home/vscode/.claude",
     "/home/vscode/.claude/projects/-workspaces-defendable-science",
+    "/home/vscode/.claude/projects/-workspaces-defendable-science-defendable-science",
     "/var/run/devcontainer-host-secrets",
     "/workspaces/defendable-science/defendable-science/.venv",
     "/home/vscode/.local/share/uv",
@@ -942,12 +1012,18 @@ expected = {
 }
 assert set(targets) == expected, set(targets) ^ expected
 
-# The session bind target must equal the slug of the container workspace.
+# Both session bind targets must equal the slugs of the directories a `claude`
+# session is actually started from inside the container.
 import subprocess
-slug = subprocess.run(
-    ["bash", ".devcontainer/claude-project-slug.sh", cfg["workspaceFolder"]],
-    capture_output=True, text=True, check=True).stdout
-assert f"/home/vscode/.claude/projects/{slug}" in targets, slug
+for d in (cfg["workspaceFolder"], cfg["workspaceFolder"] + "/defendable-science"):
+    slug = subprocess.run(
+        ["bash", ".devcontainer/claude-project-slug.sh", d],
+        capture_output=True, text=True, check=True).stdout
+    assert f"/home/vscode/.claude/projects/{slug}" in targets, (d, slug)
+
+# remoteEnv must put ~/.local/bin ahead of the image PATH, or `claude` is
+# unreachable and plugin provisioning silently no-ops.
+assert cfg["remoteEnv"]["PATH"].startswith("/home/vscode/.local/bin:"), cfg["remoteEnv"]
 
 # UV_CACHE_DIR must sit inside the uv volume, or a rebuild loses the wheels.
 assert cfg["containerEnv"]["UV_CACHE_DIR"].startswith("/home/vscode/.local/share/uv/")
@@ -1082,6 +1158,23 @@ fi
 echo "uv: $(uv --version)"   # installed by the devcontainer Feature
 
 # ---------------------------------------------------------------------------
+# ~/.local/bin on PATH.
+#
+# The base image's PATH is /usr/local/python/current/bin:/usr/local/py-utils/bin:
+# /usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/
+# sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin -- verified by reading the
+# image config blob. It does NOT include ~/.local/bin, which is where the Claude
+# CLI installer below puts `claude`. Debian's ~/.profile adds that directory only
+# if it already exists when the shell starts, and it does not: this script
+# creates it. Without this export, `command -v claude` fails for the rest of the
+# build, provision-claude-plugins.sh (non-fatal by design) warns and exits 0, and
+# the container reports a successful setup with no plugins installed at all.
+# devcontainer.json's remoteEnv covers interactive shells; this covers the
+# remainder of THIS script.
+# ---------------------------------------------------------------------------
+export PATH="${HOME}/.local/bin:${PATH}"
+
+# ---------------------------------------------------------------------------
 # Authenticate gh. Two token sources, in order:
 #   1. $GITHUB_TOKEN (Codespaces injects this).
 #   2. the host token forwarded by host-init.sh via initializeCommand.
@@ -1114,6 +1207,18 @@ else
   echo -e "\033[32mInstalling Claude Code...\033[0m"
   curl -fsSL https://claude.ai/install.sh | bash
 fi
+
+# Assert rather than assume. Everything downstream that uses `claude` is
+# non-fatal by design, so a failed install would otherwise surface as a
+# perfectly green build with no plugins -- the precise "failure reported as a
+# legitimate result" CLAUDE.md forbids. This IS a real failure, so fail here.
+if ! command -v claude >/dev/null 2>&1; then
+  echo -e "\033[1;31mERROR: claude is not on PATH after installation.\033[0m" >&2
+  echo "PATH=${PATH}" >&2
+  ls -la "${HOME}/.local/bin" 2>&1 >&2 || true
+  exit 1
+fi
+echo "claude on PATH: $(command -v claude)"
 
 echo -e "\033[32m✓ Common tools installed\033[0m"
 ```
@@ -1287,14 +1392,37 @@ sed -i \
   .devcontainer/shell-prompt.sh .devcontainer/install-shell-prompt.sh
 ```
 
-- [ ] **Step 2: Verify no `mononet` reference survives**
+- [ ] **Step 2: Verify no `mononet` reference survives *in these two files***
 
 ```bash
-if grep -rn "mononet" .devcontainer/; then echo "FAIL: mononet references remain"; else echo "clean"; fi
+if grep -n "mononet" .devcontainer/shell-prompt.sh .devcontainer/install-shell-prompt.sh; then
+    echo "FAIL: mononet references remain"
+else
+    echo "clean"
+fi
 grep -n "PROMPT_FILE=" .devcontainer/install-shell-prompt.sh
 ```
 
 Expected: `clean`, and `PROMPT_FILE="/workspaces/defendable-science/.devcontainer/shell-prompt.sh"` — the path must point at the file's real new location, with no `shared/` segment.
+
+Scope this to the two prompt files, **not** `grep -rn mononet .devcontainer/`: `claude-project-slug.sh` and `install_common_tools.sh` both carry deliberate provenance comments naming mononet (this plan mandates them), and a directory-wide grep would flag those and push you to delete load-bearing documentation.
+
+- [ ] **Step 2b: Add the ShellCheck disables this file needs**
+
+`shell-prompt.sh` is sourced by **both** bash and zsh, so ShellCheck — which parses it as bash — necessarily misreads the zsh half. Verified: as copied it produces five findings and exits 1, which would fail the gate Task 3 just added. All five are inherent to the dual-shell design, so they are pre-authorised here as specific, permanent disables (this is *not* licence to lower `--severity`). Insert immediately after the existing `# shellcheck shell=bash` line at the top:
+
+```bash
+#
+# ShellCheck: this file is sourced by BOTH bash and zsh, so shellcheck (which
+# parses it as bash) necessarily misreads the zsh half. Each disable below is
+# specific and permanent, not a way around the gate:
+# shellcheck disable=SC2059  # __git_ps1 fallback: the format string IS the argument
+# shellcheck disable=SC2154  # debian_chroot is exported by Debian's /etc/bash.bashrc
+# shellcheck disable=SC2034  # SAVEHIST/PROMPT are read by zsh, invisible to shellcheck
+# shellcheck disable=SC2016  # zsh PROMPT relies on PROMPT_SUBST: it must NOT expand here
+```
+
+These four were confirmed sufficient: with them the file exits 0 at `--severity=style`. If ShellCheck reports anything *else*, fix the code rather than extending this list.
 
 - [ ] **Step 3: Check and smoke-test**
 
@@ -1307,7 +1435,7 @@ bash -n .devcontainer/shell-prompt.sh && bash -n .devcontainer/install-shell-pro
 bash -c 'set -e; . .devcontainer/shell-prompt.sh; echo "sourced OK"'
 ```
 
-Expected: shellcheck clean (add `# shellcheck disable=` with a reason only for genuine dynamic-source cases), `syntax OK`, `sourced OK`.
+Expected: shellcheck exits 0 (thanks to Step 2b's disables), `syntax OK`, `sourced OK`. If ShellCheck still reports findings, they are new ones the copied file did not have — fix the code rather than adding disables.
 
 - [ ] **Step 4: Verify `install-shell-prompt.sh` is idempotent**
 
@@ -1605,6 +1733,11 @@ Container*, or run `devcontainer up --workspace-folder .`.
 
 Design and rationale: [`docs/superpowers/specs/2026-08-30-devcontainer-design.md`](docs/superpowers/specs/2026-08-30-devcontainer-design.md)
 and [ADR-0044](decisions/0044-devcontainer-for-maintainer-development.md).
+
+Claude Code keys transcripts by the directory a session was started from, so
+two directories are wired for sharing: the repo root and `defendable-science/`
+(the one this guide prescribes for package work). A session started from some
+*other* subdirectory is container-local and not shared with the host.
 
 **Open it on the main clone, not on a git worktree.** A linked worktree's `.git`
 is a file holding an *absolute* host path, which does not resolve inside the

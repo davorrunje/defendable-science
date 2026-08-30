@@ -151,6 +151,18 @@ Two independent mechanisms, both adapted from mononet:
    container therefore write transcripts into the same host directory: sessions are
    shared, not merely persisted.
 
+   **Two directories are wired, not one (revised).** Claude Code keys transcripts by
+   the directory a session was *launched from*, and `CLAUDE.md` prescribes
+   `cd defendable-science` for all package work — a different directory, hence a
+   different slug (`-workspaces-defendable-science-defendable-science`), which this
+   machine already has a host-side counterpart for. Wiring only the workspace root
+   would leave the repo's primary working directory resolving inside the
+   container-local `~/.claude` volume: silently unshared, while this section claimed
+   sharing worked. So `host-init.sh` wires both, via a `wire_session_dir` helper, and
+   `devcontainer.json` carries a second bind. Sharing remains scoped to those two
+   directories — a session started from any other subdirectory is container-local, and
+   that limit is stated in `CONTRIBUTING.md` rather than left to be discovered.
+
    **Slug rule: `sed 's#[^a-zA-Z0-9]#-#g'` (twice revised).** mononet's
    `host-init.sh:44` uses `sed 's#/#-#g'` (slashes only), which is wrong. An earlier
    revision of this spec narrowed the fix to `[/._]`, which is *also* wrong — Claude
@@ -270,6 +282,21 @@ host with no `gh` token simply has no such file inside it — not a missing bind
 source — so the `[ -s "${HOST_TOKEN_FILE}" ]` check degrades cleanly.
 `gh`/`create-pr`/`create-issue` then work inside the container without
 re-authenticating; non-fatal if the host has no `gh` token.
+
+**`remoteEnv`: `PATH` must gain `~/.local/bin`.** The base image's `PATH` was read
+from its config blob and is
+`/usr/local/python/current/bin:/usr/local/py-utils/bin:/usr/local/jupyter:/usr/local/share/nvm/current/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`
+— no `~/.local/bin`, which is where the Claude CLI installer puts `claude`. Debian's
+`~/.profile` adds that directory only when it already exists at shell start, and it does
+not: `install_common_tools.sh` creates it later. Without the addition, every downstream
+consumer of `claude` is non-fatal-by-design and would warn-and-continue, so the container
+would report a clean build with **no plugins installed at all** — a failure surfacing as
+a legitimate result, which `CLAUDE.md` forbids. Two mechanisms, deliberately both:
+`"remoteEnv": {"PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"}` for interactive
+shells and lifecycle commands (`${containerEnv:…}` is only expandable in `remoteEnv`),
+and an `export` inside `install_common_tools.sh` for the remainder of that script.
+`install_common_tools.sh` then **asserts** `command -v claude` succeeds and exits 1 if
+not — at that point it is a real failure, not a degradation.
 
 **`containerEnv` (two variables, both required).**
 
@@ -416,6 +443,9 @@ argument as the `uv` volume, and `ci.yml:29` caches this exact path for the same
 without it every `devcontainer rebuild` rebuilds every hook environment from scratch.
 It too is in the ownership-claiming loop above, along with its parent
 `/home/vscode/.cache`.
+
+**Bind inventory (three).** The secrets directory (read-only), and the two
+`claude-session-*` stable paths from §3.3.
 
 **Volume inventory (four).** All are keyed by `${devcontainerId}`; §2.1's one-container
 constraint is what keeps that bounded, since the ID is stable across rebuilds:
