@@ -1702,7 +1702,10 @@ chmod +x .devcontainer/post-create.sh
 ./tools/shellcheck.sh
 bash -n .devcontainer/post-create.sh && echo "syntax OK"
 
-if grep -E 'pre-commit install($|[^-])' .devcontainer/post-create.sh; then
+# Strip comments first: this script deliberately QUOTES the rejected
+# `pre-commit install` form to explain why it is wrong, and a naive grep would
+# match that explanation and report a false failure.
+if grep -v '^\s*#' .devcontainer/post-create.sh | grep -E 'pre-commit install($|[^-])'; then
     echo "FAIL: bare 'pre-commit install' would corrupt the host's .git/hooks"
 else
     echo "OK: only install-hooks is used"
