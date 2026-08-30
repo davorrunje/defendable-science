@@ -1768,6 +1768,9 @@ Append to the `updates:` list in `.github/dependabot.yml`, matching the conventi
       day: "monday"
       time: "07:00"
       timezone: "Etc/UTC"
+    # As with github-actions: `default-days` IS supported here, but the
+    # semver-*-days sub-options are not (GitHub's cooldown support table lists
+    # Devcontainers as default-days yes / SemVer-bump days no).
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
