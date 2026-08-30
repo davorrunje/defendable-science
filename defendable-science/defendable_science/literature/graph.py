@@ -85,23 +85,37 @@ class OpenAlexWork(ExternalModel):
 
 
 class _PageMeta(ExternalModel):
-    next_cursor: str | None = None
+    """OpenAlex's per-page pagination metadata.
+
+    ``next_cursor`` has no default: OpenAlex always sends the key, so a
+    missing one is a malformed body, not "no further page" — but the *value*
+    stays ``str | None`` because ``null`` is exactly how OpenAlex spells "no
+    further page" on the last one. Required key, nullable value.
+    """
+
+    next_cursor: str | None
 
 
 class WorksPage(ExternalModel):
     """One cursor-paginated page of the OpenAlex ``/works`` endpoint.
 
-    ``meta`` tolerates an explicit ``null`` as well as a missing key —
-    unlike ``results``, a `default_factory` alone is not enough:
-    ``strict=True`` still rejects a present-but-``null`` value, and OpenAlex
-    sending ``"meta": null`` unambiguously means "no further cursor", not a
-    malformed page. Hard-failing there would discard every page already
-    collected for no benefit (see :func:`cites`'s truncated-frontier
-    argument, which rests on ``results`` staying strict, not on ``meta``).
+    ``results`` has no default: OpenAlex always sends it on a successful
+    response, so a page missing it — including an HTTP-200 error envelope
+    like ``{"error": ..., "message": ...}`` — is malformed, not empty.
+
+    ``meta`` likewise has no default, so a missing key is malformed too. Its
+    type stays ``_PageMeta | None``, tolerating an explicit ``"meta": null``
+    as a defensive fallback rather than something the live API is known to
+    send: OpenAlex always returns a ``meta`` object, and the last page is
+    spelled ``meta.next_cursor: null`` (see :class:`_PageMeta`). Hard-failing
+    a missing ``meta`` key is what keeps :func:`cites` from reading a
+    truncated frontier as complete (see its docstring); whether tolerating an
+    explicit top-level ``null`` should itself become a hard failure is
+    tracked separately (defendable-science#191).
     """
 
-    results: list[OpenAlexWork] = Field(default_factory=list)
-    meta: _PageMeta | None = None
+    results: list[OpenAlexWork]
+    meta: _PageMeta | None
 
 
 class _ExternalIdBundle(ExternalModel):
@@ -147,12 +161,10 @@ class S2CitationEdge(ExternalModel):
 class S2CitationsPage(ExternalModel):
     """One page of S2's ``/paper/{id}/citations`` response.
 
-    ``data`` has **no default** on purpose: unlike ``WorksPage.results``
-    (which defaults to ``[]`` because a missing/empty page is not a hard
-    error there either), a missing, ``null``, or non-list ``data`` here is a
-    malformed page, not a page with zero edges — the two must not collapse,
-    or a truncated response would read as "this work simply has no citation
-    edges."
+    ``data`` has **no default** on purpose, like ``WorksPage.results``: a
+    missing, ``null``, or non-list ``data`` here is a malformed page, not a
+    page with zero edges — the two must not collapse, or a truncated response
+    would read as "this work simply has no citation edges."
     """
 
     data: list[Any]
