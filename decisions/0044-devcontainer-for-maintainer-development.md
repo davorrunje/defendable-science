@@ -26,7 +26,8 @@ portability.
 - Reuse the proven mononet pattern where it fits; drop everything it needs that this
   repo does not (GPU flavors, Node, Docker-in-Docker).
 - Stay correct for this repo's actual concurrent-worktree workflow (several sessions
-  and background agents run against this repo at once, per established practice).
+  and background agents run against this repo at once, per established practice) — which
+  turns out to mean keeping worktrees *out* of the container, see Consequences.
 
 ## Considered options
 
@@ -44,9 +45,11 @@ portability.
 A single `.devcontainer/` (no flavor split), `mcr.microsoft.com/devcontainers/python:3.14`
 base image (matches `pyproject.toml`'s `requires-python = ">=3.11,<3.15"` upper bound),
 with `common-utils`, `git`, `github-cli`, `rclone`, and `uv` supplied as devcontainer
-**Features** rather than hand-rolled install scripts, matching this repo's existing
-preference for tool-managed dependencies (Dependabot tracks Feature versions the same
-way it tracks Actions, per ADR-0036).
+**Features** rather than hand-rolled install scripts, so every tool in the container is
+declared and pinned in one place. This decision *requires* adding a
+`package-ecosystem: "devcontainers"` entry to `.github/dependabot.yml`: ADR-0036 scoped
+Dependabot to `uv`, `github-actions`, and `pre-commit` only, so without that fourth
+entry the Feature pins would drift exactly like the curl install they replace.
 
 Two independent mechanisms carry over from mononet, adapted:
 
@@ -66,10 +69,12 @@ Two independent mechanisms carry over from mononet, adapted:
   get distinct directories under `~/.claude/projects/`, independent of any devcontainer
   involvement).
 
-  The host-path→project-directory encoding is `[/._]` → `-`, **not** mononet's
-  slash-only `sed 's#/#-#g'`: verified empirically against this machine's real
-  `~/.claude/projects/` entries, where a worktree under `.claude/worktrees/` produces a
-  *double* dash. Since this encoding is inferred from observed behavior rather than a
+  The host-path→project-directory encoding is **every non-alphanumeric character** →
+  `-` (`sed 's#[^a-zA-Z0-9]#-#g'`), not mononet's slash-only `sed 's#/#-#g'` and not the
+  narrower `[/._]` an intermediate revision of this ADR recorded. Verified against two
+  real entries under this machine's `~/.claude/projects/`: a path containing `/.` yields
+  a *double* dash, and one containing `+` yields `-` — the latter rules out `[/._]`
+  outright. Since the encoding is inferred from observed behavior rather than a
   documented contract, the script warns explicitly when the computed directory did not
   already exist, so a future divergence surfaces instead of silently sharing nothing
   (`CLAUDE.md` failure-honesty rule).
@@ -84,24 +89,43 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   management.
 - Plugins/auth survive rebuilds; session history is continuous across host/container
   boundaries for a given host path.
-- Using Features for `uv`/`git`/`github-cli`/`rclone` means their versions are
-  Dependabot-tracked (ADR-0036) instead of hand-maintained in a shell script.
-- Two named volumes beyond `~/.claude` are needed: the project's `.venv` (container-
-  private, avoids colliding with the bind-mounted source tree) and `uv`'s state dir
+- Using Features for `uv`/`git`/`github-cli`/`rclone` puts their versions in one
+  declared, pinnable place instead of a shell script — **conditional on** the new
+  `devcontainers` Dependabot ecosystem landing with it; ADR-0036's scope does not
+  currently cover Features.
+- Three named volumes beyond `~/.claude` are needed: the project's `.venv` (container-
+  private, avoids colliding with the bind-mounted source tree), `uv`'s state dir
   (`~/.local/share/uv`, with `UV_CACHE_DIR` redirected inside it so the wheel cache is
-  covered too) — without the latter, every rebuild re-downloads the whole interpreter
-  matrix and rebuilds every wheel.
-- Every named volume is created root-owned, so each one must be listed in
-  `install_common_tools.sh`'s ownership-claiming loop. Note the package lives one level
-  below the repo root here (unlike mononet, where they coincide), so mononet's script
-  cannot be adapted by path substitution alone — the `.venv` path differs structurally,
-  not just by name.
-- The forwarded `gh` auth token is scoped by `${devcontainerId}` (not a single shared
-  file) so concurrent devcontainers opened from different worktrees don't race to
-  overwrite each other's token.
+  covered too), and `~/.cache/pre-commit` (hook environments). Without them a rebuild
+  re-downloads the whole interpreter matrix, rebuilds every wheel, and rebuilds every
+  pre-commit hook environment — the last is why `ci.yml` caches that exact path.
+- Every named volume is created root-owned, so each must be listed in
+  `install_common_tools.sh`'s ownership-claiming loop — **and so must
+  `${CLAUDE_CONFIG_DIR}/projects`**, which is not itself a mount but is created
+  root-owned as the parent of the nested session bind-mountpoint; the chown is
+  non-recursive, so chowning `~/.claude` does not reach it. Note also that the package
+  lives one level below the repo root here (unlike mononet, where they coincide), so
+  mononet's script cannot be adapted by path substitution alone — the `.venv` path
+  differs structurally, not just by name.
+- The forwarded `gh` auth token uses a **single** filename (as in mononet), not a
+  `${devcontainerId}`-suffixed one: the token is a property of the host *user*, so
+  concurrent writers write identical bytes; the read-only bind mount exposes the whole
+  directory anyway, so per-ID naming would imply an isolation that does not exist; and
+  unsuffixed names self-clean instead of accumulating plaintext tokens forever.
+- `post-create.sh` runs `pre-commit install-hooks`, **not** `pre-commit install`:
+  `.git` is shared with the host, and an installed hook embeds a container-only
+  `INSTALL_PYTHON` path that would break host-side `git commit`. Building the hook
+  environments is the part worth doing centrally; registering git hooks stays a
+  per-side choice.
 - Known, accepted limitation: the container's `vscode` user is a fixed uid 1000: this
   only works cleanly when the host user is also uid 1000 (true for this repo's sole
   maintainer; Linux's `updateRemoteUserUID` default mitigates the general case).
+
+**Load-bearing constraint discovered during review:** a linked worktree's `.git` is a
+file holding an *absolute* gitdir path, which cannot resolve inside the container. So the
+devcontainer is opened on the **main clone, once**; worktree parallelism stays a
+host-side workflow, and inside the container one works on branches. This is also what
+bounds the `${devcontainerId}`-keyed volumes to a single set.
 
 ## Rejected alternatives
 
@@ -113,8 +137,9 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   one of those legs leaves three untestable locally.
 - **Hand-install `uv` via its curl script (mononet's approach).** Rejected in favor of
   the `devcontainers-extra/features/uv` Feature: this repo already uses Features for
-  `git`/`github-cli`/`rclone`, and a Feature gets picked up by the same Dependabot
-  update path as the rest of the toolchain, instead of drifting silently in a script.
+  `git`/`github-cli`/`rclone`, so Features keep every tool declared in one place. The
+  version-tracking benefit is not automatic: it requires the `devcontainers` Dependabot
+  ecosystem this ADR mandates adding, since ADR-0036 covers only three ecosystems.
 - **Ship the prompt/completion setup via the devcontainer `dotfiles` mechanism instead
   of a repo-committed script.** Rejected: `dotfiles.repository` pulls a *personal*
   dotfiles repo, so a second person (or the author on a machine without that repo
@@ -124,7 +149,8 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
 ## Links
 
 `docs/superpowers/specs/2026-08-30-devcontainer-design.md` (the design); ADR-0036
-(Dependabot tracks Feature/Action versions); `davorrunje/mononet` `.devcontainer/`
+(Dependabot scope — extended here by a required `devcontainers` ecosystem entry);
+`davorrunje/mononet` `.devcontainer/`
 (source pattern this adapts from); containers.dev devcontainer.json reference
 (`${devcontainerId}` support matrix; `mounts` as "cross-orchestrator") consulted
 2026-08-30.
