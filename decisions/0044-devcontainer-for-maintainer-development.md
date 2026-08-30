@@ -56,13 +56,23 @@ Two independent mechanisms carry over from mononet, adapted:
   `${devcontainerId}`-scoped stable path at the *real* host Claude project directory
   for the cwd the devcontainer was opened from (via `mkdir -p` + `ln -sfn` — the real
   directory is only ever the symlink's *target*, never replaced, so a directory that
-  already holds real session data is untouched and safe). That stable path is bind-
-  mounted onto the container's own project slug. Sharing is therefore scoped to the
+  already holds real session data is untouched and safe; the stable path itself is
+  removed only when it is a symlink, so a fallback directory holding real transcripts is
+  never `rm -rf`'d the way mononet's unconditional removal would). That stable path is
+  bind-mounted onto the container's own project slug. Sharing is therefore scoped to the
   **exact host path** the container was opened from — opening from a git worktree
   shares with sessions run from that worktree, not from the main clone, which matches
   Claude Code's own existing per-directory project model (verified: worktrees already
   get distinct directories under `~/.claude/projects/`, independent of any devcontainer
   involvement).
+
+  The host-path→project-directory encoding is `[/._]` → `-`, **not** mononet's
+  slash-only `sed 's#/#-#g'`: verified empirically against this machine's real
+  `~/.claude/projects/` entries, where a worktree under `.claude/worktrees/` produces a
+  *double* dash. Since this encoding is inferred from observed behavior rather than a
+  documented contract, the script warns explicitly when the computed directory did not
+  already exist, so a future divergence surfaces instead of silently sharing nothing
+  (`CLAUDE.md` failure-honesty rule).
 
 Full design, file layout, and the per-script adaptation-from-mononet details are in
 `docs/superpowers/specs/2026-08-30-devcontainer-design.md`.
@@ -77,9 +87,15 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
 - Using Features for `uv`/`git`/`github-cli`/`rclone` means their versions are
   Dependabot-tracked (ADR-0036) instead of hand-maintained in a shell script.
 - Two named volumes beyond `~/.claude` are needed: the project's `.venv` (container-
-  private, avoids colliding with the bind-mounted source tree) and `uv`'s Python-
-  install cache (`~/.local/share/uv`) — without the latter, every rebuild re-downloads
-  the whole interpreter matrix.
+  private, avoids colliding with the bind-mounted source tree) and `uv`'s state dir
+  (`~/.local/share/uv`, with `UV_CACHE_DIR` redirected inside it so the wheel cache is
+  covered too) — without the latter, every rebuild re-downloads the whole interpreter
+  matrix and rebuilds every wheel.
+- Every named volume is created root-owned, so each one must be listed in
+  `install_common_tools.sh`'s ownership-claiming loop. Note the package lives one level
+  below the repo root here (unlike mononet, where they coincide), so mononet's script
+  cannot be adapted by path substitution alone — the `.venv` path differs structurally,
+  not just by name.
 - The forwarded `gh` auth token is scoped by `${devcontainerId}` (not a single shared
   file) so concurrent devcontainers opened from different worktrees don't race to
   overwrite each other's token.
