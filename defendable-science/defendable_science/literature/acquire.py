@@ -141,6 +141,29 @@ QUARANTINE_YEAR_WINDOW = 5
 _PUNCT = re.compile(r"[^\w\s]", flags=re.UNICODE)
 _SPACE = re.compile(r"\s+")
 
+#: OpenAlex's ``filter`` grammar reserves ``,`` (AND) and ``|`` (OR) between
+#: terms. A human-authored title containing either would silently splice a
+#: second filter clause into the query instead of erroring, so both are
+#: replaced with a space before interpolation. ``title.search`` is full-text,
+#: so dropping these characters narrows nothing that matters, and the
+#: three-way match gate re-checks the title against the real record
+#: afterwards (ADR-0037) — a query-time approximation is safe here.
+_FILTER_RESERVED = re.compile(r"[,|]")
+
+#: OpenAlex additionally reserves a *leading* ``!`` on a filter value as
+#: negation — ``title.search:!Kung`` means "does not contain Kung", not
+#: "contains !Kung". Only the leading position is reserved (a mid-title
+#: ``!``, e.g. "Kung! Fu", is just full-text content), so only the leading
+#: run is stripped rather than every ``!`` in the title — narrower than the
+#: comma/pipe case, where the character is reserved everywhere.
+#:
+#: The class spans whitespace as well as ``!`` because :data:`_FILTER_RESERVED`
+#: runs *first* and substitutes a space for every ',' and '|'. That can
+#: manufacture a gap inside what was a single leading run — "!,!Kung" becomes
+#: "! !Kung" — and a pattern anchored to one unbroken run would leave the
+#: second ``!`` in place, inverting the query after all.
+_LEADING_BANG = re.compile(r"^[!\s]+")
+
 
 @dataclass
 class Candidate:
@@ -726,9 +749,15 @@ def sibling_candidates(
     if entry.title is None:
         return []
     anchor = _short_id(work.get("id"))
+    search = _LEADING_BANG.sub("", _FILTER_RESERVED.sub(" ", entry.title)).strip()
+    if not search:
+        # A title made entirely of reserved characters (",", "|", "!") would
+        # otherwise collapse to an empty or all-whitespace search, sending an
+        # unbounded `title.search:` query instead of a targeted one.
+        return []
     page = client.get_json(
         f"{OPENALEX}/works",
-        {"filter": f"title.search:{entry.title}", "per-page": str(SEARCH_LIMIT)},
+        {"filter": f"title.search:{search}", "per-page": str(SEARCH_LIMIT)},
     )
     if not isinstance(page, dict):
         return []

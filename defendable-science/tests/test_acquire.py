@@ -701,6 +701,96 @@ def test_rung_4_proposes_a_subtitle_extended_sibling_and_the_gate_decides() -> N
         assert record.verdict == a.QUARANTINE  # author+year decide, not the filter
 
 
+# --- #173: a title with a filter-reserved character must not split the query -
+
+
+def test_rung_4_comma_in_title_does_not_split_the_filter_query() -> None:
+    """OpenAlex's ``filter`` grammar reserves ',' for AND between terms.
+
+    An unescaped comma in the title would silently turn one
+    ``title.search:`` clause into two ANDed clauses instead of raising, so
+    the request actually sent must carry exactly one ``title.search:`` term.
+
+    The load-bearing check is the absence of ',' anywhere in the filter
+    value: counting terms with the ``title.search:`` prefix (as the first
+    assertion below does) is *not* discriminating on its own — with the sub
+    reverted, ``"title.search:Deep Learning, Revisited".split(",")`` still
+    yields exactly one element that starts with that prefix, so that
+    assertion alone would pass even with the bug present.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="Deep Learning, Revisited")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    search_terms = params["filter"].split(",")
+    title_search_terms = [t for t in search_terms if t.startswith("title.search:")]
+    assert len(title_search_terms) == 1
+    assert "," not in params["filter"]
+
+
+def test_rung_4_pipe_in_title_does_not_split_the_filter_query() -> None:
+    """OpenAlex's ``filter`` grammar reserves '|' for OR within a term."""
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="A|B testing")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"].count("title.search:") == 1
+    assert "|" not in params["filter"]
+
+
+def test_rung_4_leading_bang_in_title_does_not_invert_the_search() -> None:
+    """OpenAlex reserves a leading '!' on a filter value for negation.
+
+    An unescaped leading '!' would silently turn "does this title" into
+    "does NOT contain this title", returning an empty rung instead of
+    erroring or matching. The request actually sent must not carry that '!'.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!Kung-Fu Panda")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"] == "title.search:Kung-Fu Panda"
+
+
+def test_rung_4_bang_run_split_by_a_reserved_character_is_still_stripped() -> None:
+    """Substituting ',' / '|' first can *manufacture* a second leading '!'.
+
+    ``_FILTER_RESERVED`` turns ',' and '|' into spaces before the leading-'!'
+    strip runs, so "!,!Kung Fu" becomes "! !Kung Fu" — two bang-runs
+    separated by a space. A pattern matching only a single run leaves the
+    second '!' in place, the query inverts after all, and rung 4 returns an
+    empty result indistinguishable from a genuine miss.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!,!Kung Fu")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"] == "title.search:Kung Fu"
+
+
+def test_rung_4_all_reserved_character_title_short_circuits_without_a_request() -> None:
+    """A title made only of reserved characters must not send an unbounded query.
+
+    Stripping ',', '|', and a leading '!' from a title like "!,|" leaves
+    nothing to search on; sending `title.search:` with no value would be an
+    unbounded query rather than a targeted one, so the rung must return no
+    candidates without calling the client at all.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!,|")
+    result = a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert result == []
+    assert client.calls == []
+
+
 def test_rung_5_builds_candidates_from_the_arxiv_atom_feed() -> None:
     feed = (
         '<?xml version="1.0"?>'
