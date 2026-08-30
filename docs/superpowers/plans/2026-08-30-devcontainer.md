@@ -1527,6 +1527,22 @@ bash -c 'set -e; . .devcontainer/shell-prompt.sh; echo "sourced OK"'
 
 Expected: shellcheck exits 0 (thanks to Step 2b's disables), `syntax OK`, `sourced OK`. If ShellCheck still reports findings, they are new ones the copied file did not have — fix the code rather than adding disables.
 
+- [ ] **Step 3b: Make the file safe to source under `set -e`**
+
+The bash branch's last statement is `[ -r /usr/share/doc/fzf/examples/key-bindings.bash ] && . …`. When fzf's bindings are absent — the normal case on a fresh container, before `install_common_tools.sh` reinstalls them — the test fails, the `&&` short-circuits, and the whole file returns 1. Sourcing it from anything running under `set -e` then aborts. (mononet has the same latent issue; rc files are not run under `set -e`, so it never surfaced there.) Append to the very end of `shell-prompt.sh`:
+
+```bash
+
+# Always leave a zero exit status. The last statement in the bash branch above
+# is a short-circuit `[ -r ... ] && . ...` whose test fails whenever fzf's
+# key-bindings file is absent -- which would make `. shell-prompt.sh` return 1
+# and abort any caller running under `set -e`. (Carried over from mononet,
+# which has the same latent issue.)
+:
+```
+
+Re-run the source check from Step 3; it must now print `sourced OK`.
+
 - [ ] **Step 4: Verify `install-shell-prompt.sh` is idempotent**
 
 ```bash
