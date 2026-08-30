@@ -142,37 +142,29 @@ actual="$(cd / && "${SLUG}")"
 if [ "${actual}" = "-" ]; then pass "defaults to \$PWD"; else fail "defaults to \$PWD" "-" "${actual}"; fi
 
 # ---------------------------------------------------------------------------
-# Corroboration against this machine's real project directories, when present.
+# Corroboration against real directories, when this machine has them.
+#
 # Every directory under ~/.claude/projects was produced by Claude Code itself,
-# so re-deriving each one from its decoded path is the strongest available
-# check. Skipped (not failed) on a machine that has none -- e.g. CI.
+# so re-deriving one from its known source path is the strongest check
+# available. The two paths below are the ADVERSARIAL ones: they are exactly
+# what falsified the '/'-only rule and then the '[/._]' rule during design
+# review. Skipped, not failed, on a machine without them (e.g. CI).
 # ---------------------------------------------------------------------------
 projects="${HOME}/.claude/projects"
-if [ -d "${projects}" ]; then
-    checked=0
-    for d in "${projects}"/*; do
-        [ -d "${d}" ] || continue
-        name="$(basename "${d}")"
-        # Only paths we can reconstruct unambiguously: try the literal host path
-        # formed by turning leading '-' into '/' is NOT reversible, so instead
-        # walk real candidate paths and require that each maps onto SOME dir.
-        checked=$((checked + 1))
-    done
-    if [ "${checked}" -gt 0 ]; then
-        # Forward direction: every real repo path we know about must map to a
-        # directory that exists.
-        for real in "${PWD}" "${HOME}/projects/PhD/defendable-science"; do
-            [ -d "${real}" ] || continue
-            slug="$("${SLUG}" "${real}")"
-            if [ -d "${projects}/${slug}" ]; then
-                pass "real path maps to an existing project dir: ${real}"
-            else
-                echo "  note ${real} -> ${slug} (no such project dir; fine if never used)"
-            fi
-        done
+repo_root="${HOME}/projects/PhD/defendable-science"
+corroborated=0
+for real in \
+    "${repo_root}/.claude/worktrees/curried-plotting-harp" \
+    "${repo_root}/.claude/worktrees/scope+arxiv-query-escaping"
+do
+    slug="$("${SLUG}" "${real}")"
+    if [ -d "${projects}/${slug}" ]; then
+        pass "adversarial real path resolves: $(basename "${real}")"
+        corroborated=$((corroborated + 1))
     fi
-else
-    echo "  skip corroboration against ~/.claude/projects (not present)"
+done
+if [ "${corroborated}" -eq 0 ]; then
+    echo "  skip corroboration (no known adversarial paths under ${projects})"
 fi
 
 echo
@@ -268,21 +260,45 @@ failures=0
 pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %s: %s\n' "$1" "$2"; failures=$((failures + 1)); }
 
-# run_host_init <fake-home> <workdir> <devcontainer-id> [gh-token|""]
-# Stubs `gh` on PATH: a non-empty token makes `gh auth token` succeed; an empty
-# string makes the stub absent entirely (simulating no gh on the host).
+# run_host_init <fake-home> <workdir> <devcontainer-id> <gh-mode>
+#   gh-mode: "absent"          -> no gh on PATH at all
+#            "unauthenticated" -> gh exists but `gh auth token` fails
+#            <anything else>   -> gh returns that string as the token
+#
+# PATH is rebuilt from EMPTY, containing only this stub dir with the handful of
+# real binaries host-init.sh needs symlinked in. Inheriting the caller's PATH
+# would leave the maintainer's real /usr/bin/gh visible, so "absent" would
+# exercise the opposite branch AND write a live OAuth token into this
+# throwaway HOME. `env -i` additionally drops GH_TOKEN/GITHUB_TOKEN, which
+# `gh auth token` would otherwise honour.
 run_host_init() {
-    local home=$1 workdir=$2 id=$3 token=${4:-}
+    local home=$1 workdir=$2 id=$3 mode=$4
     local bindir="${home}/.stub-bin"
     mkdir -p "${bindir}"
-    if [ -n "${token}" ]; then
-        printf '#!/usr/bin/env bash\n[ "$1 $2" = "auth token" ] && printf %%s %s\n' "${token}" > "${bindir}/gh"
-        chmod +x "${bindir}/gh"
-    else
-        rm -f "${bindir}/gh"
-    fi
-    ( cd "${workdir}" && HOME="${home}" PATH="${bindir}:/usr/bin:/bin" \
-        bash "${HOST_INIT}" "${id}" 2>"${home}/stderr.log" )
+
+    local tool
+    for tool in bash sed mkdir chmod rm ln dirname; do
+        [ -e "${bindir}/${tool}" ] || ln -s "$(command -v "${tool}")" "${bindir}/${tool}"
+    done
+
+    rm -f "${bindir}/gh"
+    case "${mode}" in
+        absent) : ;;
+        unauthenticated)
+            printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "${bindir}/gh"
+            chmod +x "${bindir}/gh" ;;
+        *)
+            # shellcheck disable=SC2016  # the stub's $1/$2 must NOT expand here
+            { printf '%s\n' '#!/usr/bin/env bash'
+              printf '%s\n' '[ "$1 $2" = "auth token" ] || exit 1'
+              printf 'printf %%s %s\n' "${mode}"
+            } > "${bindir}/gh"
+            chmod +x "${bindir}/gh" ;;
+    esac
+
+    ( cd "${workdir}" \
+        && env -i HOME="${home}" PATH="${bindir}" \
+             bash "${HOST_INIT}" "${id}" 2>"${home}/stderr.log" )
 }
 
 new_case() {
@@ -322,7 +338,7 @@ rm -rf "${t}"
 
 # --- 2. no gh on the host: token absent, container start still possible -----
 t="$(new_case)"
-run_host_init "${t}/home" "${t}/work" "abc123" ""
+run_host_init "${t}/home" "${t}/work" "abc123" absent
 secrets="${t}/home/.config/defendable-science-devcontainer"
 if [ ! -e "${secrets}/gh-token" ]; then
     pass "no token file when the host has no gh"
@@ -341,10 +357,20 @@ else
 fi
 rm -rf "${t}"
 
+# --- 2b. gh present but not authenticated: same outcome, different branch ---
+t="$(new_case)"
+run_host_init "${t}/home" "${t}/work" "abc123" unauthenticated
+if [ ! -e "${t}/home/.config/defendable-science-devcontainer/gh-token" ]; then
+    pass "no token file when gh is present but unauthenticated"
+else
+    fail "no token file when gh is present but unauthenticated" "file exists"
+fi
+rm -rf "${t}"
+
 # --- 3. a stale token is removed when the host loses its gh auth ------------
 t="$(new_case)"
 run_host_init "${t}/home" "${t}/work" "abc123" "gho_first"
-run_host_init "${t}/home" "${t}/work" "abc123" ""
+run_host_init "${t}/home" "${t}/work" "abc123" absent
 if [ ! -e "${t}/home/.config/defendable-science-devcontainer/gh-token" ]; then
     pass "stale token is removed on a later run"
 else
@@ -421,7 +447,7 @@ rm -rf "${t}"
 
 # --- 8. always exits 0, even when everything is degraded --------------------
 t="$(new_case)"
-run_host_init "${t}/home" "${t}/work" "" ""
+run_host_init "${t}/home" "${t}/work" "" absent
 rc=$?
 if [ "${rc}" -eq 0 ]; then pass "exits 0 in the degraded case"; else fail "exits 0 in the degraded case" "rc=${rc}"; fi
 rm -rf "${t}"
@@ -473,7 +499,13 @@ CLAUDE_PROJECTS="${HOME}/.claude/projects"
 warn() { echo "WARNING: host-init.sh: $*" >&2; }
 
 if ! mkdir -p "${SECRETS_DIR}"; then
-    warn "could not create ${SECRETS_DIR}; skipping gh-token and session setup."
+    warn "could not create ${SECRETS_DIR}."
+    # Be explicit rather than reassuring: devcontainer.json bind-mounts this
+    # directory, and a bind mount with a missing source is a hard container
+    # start failure. Nothing this script can do fixes that, so say exactly what
+    # is about to happen instead of implying it degraded gracefully.
+    warn "the devcontainer bind-mounts that path, so CONTAINER START WILL FAIL."
+    warn "fix the permissions on ${HOME}/.config and re-open the container."
     exit 0
 fi
 chmod 700 "${SECRETS_DIR}" || true
@@ -503,7 +535,15 @@ unset token
 # genuinely differs per checkout.
 # ---------------------------------------------------------------------------
 devcontainer_id="${1:-}"
-SESSION_LINK="${SECRETS_DIR}/claude-session${devcontainer_id:+-${devcontainer_id}}"
+if [ -z "${devcontainer_id}" ]; then
+    warn "no devcontainerId argument; devcontainer.json must call:"
+    warn "  bash .devcontainer/host-init.sh \${devcontainerId}"
+fi
+# The dash is UNCONDITIONAL so this name matches devcontainer.json's mount
+# source byte-for-byte. A conditional suffix would yield "claude-session" while
+# the mount expects "claude-session-", and a bind mount whose source does not
+# exist fails container start.
+SESSION_LINK="${SECRETS_DIR}/claude-session-${devcontainer_id}"
 
 host_slug="$(bash "${SCRIPT_DIR}/claude-project-slug.sh" "${PWD}")"
 target="${CLAUDE_PROJECTS}/${host_slug}"
@@ -538,6 +578,22 @@ fi
 if ! ln -sfn "${target}" "${SESSION_LINK}" 2>/dev/null; then
     warn "could not link ${SESSION_LINK} -> ${target}; using a standalone directory (sessions NOT shared)."
     mkdir -p "${SESSION_LINK}" || warn "could not create ${SESSION_LINK}; container start may fail."
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Pre-create the host-side venv directory.
+#
+# devcontainer.json mounts a named volume at
+# <workspace>/defendable-science/.venv, a path that resolves THROUGH the
+# workspace bind mount. Docker creates a missing mount destination, and that
+# creation lands in the host tree owned by ROOT -- after which the host's own
+# `cd defendable-science && uv sync` fails with a permission error. It is
+# gitignored, so `git status` stays clean and nothing else notices. Creating it
+# here, as the host user, means Docker finds it already present.
+# ---------------------------------------------------------------------------
+if ! mkdir -p "${PWD}/defendable-science/.venv"; then
+    warn "could not pre-create ${PWD}/defendable-science/.venv; Docker may create it root-owned,"
+    warn "which would break host-side 'uv sync' in that directory."
 fi
 
 exit 0
@@ -592,23 +648,22 @@ Everything in this feature is shell. The repo gates Python with ruff/mypy/100% c
 
 - [ ] **Step 1: Add `shellcheck-py` to the `lint` group**
 
-Find the current version, then pin it exactly (this repo pins `lint` tools with `==`, one pin per tool, per ADR-0036 / issue #79):
+This repo pins every `lint` tool with `==`, exactly once, in `pyproject.toml` (ADR-0036 / issue #79) — an unconstrained entry would silently get no Dependabot bumps. Do **not** use `--frozen` here: it suppresses resolution, so `uv` has no version to write and would land a bare `"shellcheck-py"`.
+
+Confirm the current release, then add it with an explicit pin:
 
 ```bash
-cd defendable-science && uv add --group lint --frozen "shellcheck-py" --no-sync && grep shellcheck pyproject.toml
+python3 -c "import urllib.request,json; print(json.load(urllib.request.urlopen('https://pypi.org/pypi/shellcheck-py/json'))['info']['version'])"
+cd defendable-science && uv add --group lint "shellcheck-py==0.11.0.1" && cd ..
 ```
 
-If `uv add` picks a version, keep it. Otherwise add the line by hand to `[dependency-groups].lint` in `defendable-science/pyproject.toml`, in the same `name==version` style as its neighbours, e.g.:
-
-```toml
-    "shellcheck-py==0.11.0.1",
-```
-
-Then sync:
+`0.11.0.1` was the current release when this plan was written (verified 2026-08-30); if the command above prints something newer, use that instead. Then confirm the entry matches its neighbours' style:
 
 ```bash
-cd defendable-science && uv sync --group lint
+grep -A1 -B1 shellcheck defendable-science/pyproject.toml
 ```
+
+Expected: a `"shellcheck-py==<version>",` line inside `[dependency-groups].lint`.
 
 - [ ] **Step 2: Write the failing check**
 
@@ -753,7 +808,12 @@ name: defendable-science-devcontainer
 services:
   defendable-science-dev:
     image: mcr.microsoft.com/devcontainers/python:3.14
-    pull_policy: always
+    # No `pull_policy: always`. Two reasons: it would make every start depend
+    # on the registry (an offline `devcontainer up` would fail outright, which
+    # defeats a design whose selling point is that rebuilds are cheap), and
+    # because `features` are declared the devcontainer CLI substitutes a
+    # locally-built image for this service -- asking Compose to always pull an
+    # image that exists only locally. Compose's default (`missing`) is right.
     volumes:
       # The repo root, one level above .devcontainer/.
       - ../:/workspaces/defendable-science:cached
@@ -941,31 +1001,53 @@ cd /workspaces/defendable-science
 echo -e "\033[36m=== Installing common tools ===\033[0m"
 
 # ---------------------------------------------------------------------------
-# Claim the root-owned volume mountpoints.
+# Claim the root-owned mountpoints AND the parents Docker had to create.
 #
-# Docker creates named-volume mountpoints root-owned, so `vscode` cannot write
-# to them until each is chowned. FOUR paths need it, and the third is easy to
-# miss because it is not itself a mount: Docker creates ~/.claude/projects as
-# the PARENT of the nested session bind-mountpoint, and this chown is NOT
-# recursive, so claiming ~/.claude does not reach it. Without it, running
-# `claude` from any subdirectory (e.g. the `cd defendable-science` that
-# CLAUDE.md prescribes) hits EACCES creating its project dir.
+# Docker creates named-volume mountpoints -- and every missing parent directory
+# on the way to one -- root-owned. This chown is NOT recursive, so the list has
+# to name the parents explicitly rather than rely on the leaves:
+#
+#   ~/.claude/projects        created as the PARENT of the nested session bind
+#                             mount, so claiming ~/.claude never reaches it.
+#                             Without it, `cd defendable-science && claude` --
+#                             the working dir CLAUDE.md prescribes -- hits
+#                             EACCES creating its project directory.
+#   ~/.local, ~/.local/share  parents of the uv volume. Also where the Claude
+#                             CLI installer writes (~/.local/bin), so a
+#                             root-owned ~/.local kills this very script below.
+#   ~/.cache                  parent of the pre-commit volume.
+#
+# CLAUDE_CONFIG_DIR is dereferenced ONCE, up front. Writing
+# "${CLAUDE_CONFIG_DIR:-}/projects" inline would expand to the literal
+# "/projects" when the variable is unset -- sailing past an [ -n ] guard and
+# creating a root-owned directory at the filesystem root, while the chown that
+# actually mattered still never happened.
 # ---------------------------------------------------------------------------
-for _vol in "${CLAUDE_CONFIG_DIR:-}" \
-            "${CLAUDE_CONFIG_DIR:-}/projects" \
-            /workspaces/defendable-science/defendable-science/.venv \
-            /home/vscode/.local/share/uv \
-            /home/vscode/.cache/pre-commit; do
-  [ -n "${_vol}" ] || continue
-  # A volume whose mountpoint Docker has not created yet fails [ -d ]; make it
+_claim_paths=()
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  _claim_paths+=("${CLAUDE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}/projects")
+else
+  echo -e "\033[1;33mWARNING: CLAUDE_CONFIG_DIR is unset; the ~/.claude volume cannot be claimed and the Claude CLI install will fail.\033[0m"
+fi
+_claim_paths+=(
+  /home/vscode/.local
+  /home/vscode/.local/share
+  /home/vscode/.local/share/uv
+  /home/vscode/.cache
+  /home/vscode/.cache/pre-commit
+  /workspaces/defendable-science/defendable-science/.venv
+)
+
+for _vol in "${_claim_paths[@]}"; do
+  # A volume whose mountpoint Docker has not created yet fails [ -w ]; make it
   # first so the writability test below is meaningful.
   sudo mkdir -p "${_vol}"
   if [ ! -w "${_vol}" ]; then
-    echo "Claiming ownership of ${_vol} (root-owned named volume)..."
+    echo "Claiming ownership of ${_vol}..."
     sudo chown "$(id -u):$(id -g)" "${_vol}"
   fi
 done
-unset _vol
+unset _vol _claim_paths
 
 # ---------------------------------------------------------------------------
 # Interactive-shell tooling. The base image is minimised and ships none of it:
@@ -1060,12 +1142,27 @@ vols = [m.split("target=")[1].split(",")[0] for m in cfg["mounts"] if "type=volu
 missing = [v for v in vols if v not in script
            and not (v == cfg["containerEnv"]["CLAUDE_CONFIG_DIR"] and "CLAUDE_CONFIG_DIR" in script)]
 assert not missing, f"volumes never chowned: {missing}"
-assert '"${CLAUDE_CONFIG_DIR:-}/projects"' in script, "the nested projects/ parent is not claimed"
-print(f"all {len(vols)} volume mountpoints are claimed")
+
+# The parents Docker creates root-owned on the way to a volume are as important
+# as the volumes themselves; match them as whole lines so that, e.g.,
+# "/home/vscode/.local" is not satisfied by "/home/vscode/.local/share/uv".
+# Compare against CODE only: the script's comments deliberately quote the
+# rejected "${CLAUDE_CONFIG_DIR:-}/projects" form to explain why it is wrong,
+# and a naive substring test would match that explanation and fail.
+code = "\n".join(l for l in script.splitlines() if not l.lstrip().startswith("#"))
+lines = {l.strip() for l in code.splitlines()}
+
+assert '"${CLAUDE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}/projects")' in code, \
+    "the nested projects/ parent is not claimed"
+for parent in ("/home/vscode/.local", "/home/vscode/.local/share", "/home/vscode/.cache"):
+    assert parent in lines, f"parent {parent} is not claimed"
+assert '"${CLAUDE_CONFIG_DIR:-}/projects"' not in code, \
+    "unset CLAUDE_CONFIG_DIR would expand to the literal /projects"
+print(f"all {len(vols)} volume mountpoints and their parents are claimed")
 PY
 ```
 
-Expected: `all 4 volume mountpoints are claimed`.
+Expected: `all 4 volume mountpoints and their parents are claimed`.
 
 - [ ] **Step 4: Commit**
 
@@ -1569,8 +1666,16 @@ The single most important check, because a failure here is silent and persistent
 ls -la .git/hooks/pre-commit 2>/dev/null || echo "no host pre-commit hook (fine)"
 grep -l "workspaces/defendable-science" .git/hooks/* 2>/dev/null && echo "FAIL: container paths leaked into host hooks" || echo "OK: host hooks are clean"
 git status --short
-git commit --allow-empty -m "probe" && git reset --hard HEAD~1
+# --soft, NOT --hard: this repo's primary tree is routinely dirty with other
+# concurrent sessions' work, and `git reset --hard` would discard it. --soft
+# removes the probe commit and leaves the working tree exactly as it was.
+git commit --allow-empty -m "probe" && git reset --soft HEAD~1
 ls ~/.claude/projects/-home-davor-projects-PhD-defendable-science/ | head -3
+
+# The venv volume nests inside the workspace bind mount, so Docker will create
+# this directory root-owned if host-init.sh did not get there first.
+ls -ld defendable-science/.venv
+[ -w defendable-science/.venv ] && echo "OK: host .venv is writable" || echo "FAIL: host .venv is root-owned"
 ```
 
 Expected: no container path in any host hook, host `git commit` still works, and the host's session transcripts are intact.

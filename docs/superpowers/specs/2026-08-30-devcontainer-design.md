@@ -320,15 +320,38 @@ claude` — the working directory `CLAUDE.md` prescribes for package work, and o
 machine already has a host project directory for — makes Claude Code try to create
 `~/.claude/projects/-workspaces-defendable-science-defendable-science` and get `EACCES`.
 
-The correct list is all four, and the `.venv`/`uv` entries additionally need
-`mkdir -p` before the test, since `[ -d ]` is false for a volume Docker has not yet
-created a mountpoint for:
+**And it must claim the parents, not just the leaves.** Docker creates every
+missing directory on the way to a mountpoint, also root-owned, and this chown is
+non-recursive. `/home/vscode/.local` and `/home/vscode/.local/share` (parents of the
+`uv` volume) and `/home/vscode/.cache` (parent of the pre-commit volume) are therefore
+in scope too — and `~/.local` doubly so, because the Claude CLI installer writes to
+`~/.local/bin`, so a root-owned `~/.local` kills `install_common_tools.sh` itself.
+
+`CLAUDE_CONFIG_DIR` must be dereferenced **once, up front**, never interpolated inline:
+`"${CLAUDE_CONFIG_DIR:-}/projects"` expands to the literal `/projects` when the variable
+is unset, which sails past an `[ -n … ]` guard and creates a root-owned directory at the
+filesystem root while the chown that mattered still never runs.
+
+The full list is seven paths — three volume mountpoints, three parents, and the
+non-mount `projects/` directory (the `~/.claude` volume itself is the fourth mountpoint,
+added conditionally). Each needs `mkdir -p` before the writability test, since `[ -w ]`
+is false for a mountpoint Docker has not created yet:
 
 ```bash
-for _vol in "${CLAUDE_CONFIG_DIR:-}" \
-            "${CLAUDE_CONFIG_DIR:-}/projects" \
-            /workspaces/defendable-science/defendable-science/.venv \
-            /home/vscode/.local/share/uv; do
+_claim_paths=()
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  _claim_paths+=("${CLAUDE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}/projects")
+else
+  echo "WARNING: CLAUDE_CONFIG_DIR unset; the ~/.claude volume cannot be claimed." >&2
+fi
+_claim_paths+=(
+  /home/vscode/.local
+  /home/vscode/.local/share
+  /home/vscode/.local/share/uv
+  /home/vscode/.cache
+  /home/vscode/.cache/pre-commit
+  /workspaces/defendable-science/defendable-science/.venv
+)
 ```
 
 The `MONONET_EXTRAS`-driven `install_dependencies.sh` call is dropped (this repo has one
@@ -363,7 +386,14 @@ The venv lives in a named volume,
 `source=defendable-science-venv-${devcontainerId},target=/workspaces/defendable-science/defendable-science/.venv`,
 so it is container-private (isolated from any host-side `.venv`) and survives rebuilds
 independently of the bind-mounted source tree — mirroring mononet's rationale for its
-own `.venv` volume. Switching `--python` versions against this shared venv makes `uv`
+own `.venv` volume.
+
+**Host-side hazard.** This target nests *inside* the workspace bind mount, so on a
+checkout where `defendable-science/.venv` does not yet exist, Docker creates the mount
+destination in the **host** tree, owned by root — after which the host's own
+`cd defendable-science && uv sync` fails with a permission error. The directory is
+gitignored, so `git status` never shows it. `host-init.sh` therefore pre-creates it as
+the host user, and the verification plan checks its ownership. Switching `--python` versions against this shared venv makes `uv`
 rebuild it in place (expected, not a bug — just not "free" the way separate per-version
 venvs would be; not worth the extra complexity for four rarely-alternated versions).
 
@@ -384,7 +414,8 @@ claiming loop above.
 persists the `pre-commit` hook environments built by §3.5's `install-hooks`. Same
 argument as the `uv` volume, and `ci.yml:29` caches this exact path for the same reason:
 without it every `devcontainer rebuild` rebuilds every hook environment from scratch.
-It too must be in the ownership-claiming loop.
+It too is in the ownership-claiming loop above, along with its parent
+`/home/vscode/.cache`.
 
 **Volume inventory (four).** All are keyed by `${devcontainerId}`; §2.1's one-container
 constraint is what keeps that bounded, since the ID is stable across rebuilds:
