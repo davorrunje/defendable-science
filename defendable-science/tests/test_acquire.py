@@ -758,6 +758,24 @@ def test_rung_4_leading_bang_in_title_does_not_invert_the_search() -> None:
     assert params["filter"] == "title.search:Kung-Fu Panda"
 
 
+def test_rung_4_bang_run_split_by_a_reserved_character_is_still_stripped() -> None:
+    """Substituting ',' / '|' first can *manufacture* a second leading '!'.
+
+    ``_FILTER_RESERVED`` turns ',' and '|' into spaces before the leading-'!'
+    strip runs, so "!,!Kung Fu" becomes "! !Kung Fu" — two bang-runs
+    separated by a space. A pattern matching only a single run leaves the
+    second '!' in place, the query inverts after all, and rung 4 returns an
+    empty result indistinguishable from a genuine miss.
+    """
+    client = FakeClient({"/works": {"results": []}})
+    entry = _entry(title="!,!Kung Fu")
+    a.sibling_candidates(entry, _work("sill1997"), client=client)
+    assert len(client.calls) == 1
+    _url, params = client.calls[0]
+    assert params is not None
+    assert params["filter"] == "title.search:Kung Fu"
+
+
 def test_rung_4_all_reserved_character_title_short_circuits_without_a_request() -> None:
     """A title made only of reserved characters must not send an unbounded query.
 
