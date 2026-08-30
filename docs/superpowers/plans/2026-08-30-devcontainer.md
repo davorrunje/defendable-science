@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Never commit to `main`.** Work continues on the existing branch `feature/devcontainer-design`, which already carries the spec + ADR commits (`f0f0acc`, `58987a7`, `b3b113d`, `88a449d`, `c1bd5c6`). Open a PR at the end; do not merge it.
+- **Never commit to `main`.** Work continues on the branch `dx/devcontainer` — renamed from `feature/devcontainer-design` to match the repo's `<area>/<slug>` convention, and rebased onto `origin/main` once #187 merged, so the pre-rebase hashes quoted in earlier commit messages no longer resolve. That branch already carries the design spec, ADR-0044, and the three plan-review rounds. Open a PR at the end; do not merge it.
 - **Commit attribution:** author `Davor Runje <davor@synthpop.ai>` with a `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` trailer. Conventional-Commits subjects (`feat`, `build`, `ci`, `docs`, `test`).
 - **This is maintainer tooling, not a shipped artifact.** Nothing in `.devcontainer/` may leak into the plugin's domain-neutral content (`skills/`, `resources/`, `.claude-plugin/`). Do not bump `.claude-plugin/plugin.json`.
 - **No Python package source changes.** `defendable-science/` is untouched except `pyproject.toml`'s `lint` group (Task 3 only). The 100%-coverage gate is therefore unaffected — but still run `cd defendable-science && uv run pytest -q` before the PR.
