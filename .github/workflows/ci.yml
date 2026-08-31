@@ -74,11 +74,34 @@ jobs:
       - name: Validate plugin manifests
         run: ./tools/validate-plugin.sh
 
+  devcontainer-scripts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+      - name: Sync defendable-science (lint group)
+        run: uv sync --project defendable-science --group lint
+      - name: ShellCheck
+        run: ./tools/shellcheck.sh
+      - name: Devcontainer script tests
+        run: |
+          bash .devcontainer/tests/test-claude-project-slug.sh
+          bash .devcontainer/tests/test-host-init.sh
+      - name: Validate devcontainer.json is parseable JSON-with-comments
+        run: |
+          if [ -f .devcontainer/devcontainer.json ]; then
+            python3 -c "import json,re,sys; s=open('.devcontainer/devcontainer.json').read(); s=re.sub(r'^\s*//.*$','',s,flags=re.M); json.loads(s); print('devcontainer.json parses')"
+          else
+            echo "devcontainer.json not present yet; skipping"
+          fi
+
   check:
     if: always()
     runs-on: ubuntu-latest
     permissions: {}
-    needs: [pre-commit, test, plugin-validate]
+    needs: [pre-commit, test, plugin-validate, devcontainer-scripts]
     steps:
       - name: Decide whether the needed jobs succeeded or failed
         uses: re-actors/alls-green@release/v1 # nosemgrep

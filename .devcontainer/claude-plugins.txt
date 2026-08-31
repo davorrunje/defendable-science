@@ -1,0 +1,19 @@
+# Claude Code plugins provisioned into the container-local ~/.claude volume by
+# provision-claude-plugins.sh. The host's ~/.claude is never touched.
+#
+# Format: <marketplace-source>  <plugin>@<marketplace-name>
+#
+# The marketplace NAME is the one the source repo declares for itself in its
+# own .claude-plugin/marketplace.json -- not a local alias. Verified:
+# obra/superpowers declares "superpowers-dev", matching .claude/settings.json.
+https://github.com/obra/superpowers.git  superpowers@superpowers-dev
+
+# This repo's own plugin, from a local marketplace source, so the skills it
+# ships are testable inside the container immediately.
+#
+# The source MUST be the absolute path, not ".". The provisioner's idempotency
+# check is `grep -qF "${src}"` against `claude plugin marketplace list`, and a
+# lone "." matches almost any line (URLs, versions and paths all contain a
+# dot), so "." would read as already-known on the first run and the marketplace
+# would silently never be added.
+/workspaces/defendable-science  defendable-science@defendable-science

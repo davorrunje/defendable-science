@@ -75,3 +75,30 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
+
+  # ── Devcontainer Features (ADR-0044) ────────────────────────────────────
+  # Keeps the exact Feature pins in .devcontainer/devcontainer.json current.
+  # This only works because Task 4 pins them to exact versions: a floating
+  # `:1`/`:2` tag has no minor/patch component, so the group below would match
+  # nothing and the entry would track nothing.
+  - package-ecosystem: "devcontainers"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Etc/UTC"
+    # As with github-actions: `default-days` IS supported here, but the
+    # semver-*-days sub-options are not (GitHub's cooldown support table lists
+    # Devcontainers as default-days yes / SemVer-bump days no).
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies"]
+    groups:
+      devcontainer-features:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

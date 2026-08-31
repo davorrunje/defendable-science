@@ -1,0 +1,123 @@
+{
+  "name": "defendable-science",
+  "dockerComposeFile": ["./docker-compose.yml"],
+  "service": "defendable-science-dev",
+  "shutdownAction": "stopCompose",
+  "workspaceFolder": "/workspaces/defendable-science",
+  "remoteUser": "vscode",
+
+  // Runs on the HOST before the container exists: forwards the gh token and
+  // wires the session symlink. ${devcontainerId} is supported here per the
+  // containers.dev variables reference, and is stable across rebuilds.
+  "initializeCommand": "bash .devcontainer/host-init.sh ${devcontainerId}",
+  "updateContentCommand": "bash .devcontainer/setup.sh",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // Prepend ~/.local/bin for interactive shells and lifecycle commands: the
+  // base image's PATH omits it, and that is where the Claude CLI installs.
+  // ${containerEnv:...} is only expandable in remoteEnv, which is why this is
+  // not folded into containerEnv below.
+  "remoteEnv": {
+    "PATH": "/home/vscode/.local/bin:${containerEnv:PATH}"
+  },
+
+  "containerEnv": {
+    // install_common_tools.sh reads this to chown the root-owned ~/.claude
+    // volume. If it is unset that chown is SILENTLY skipped (the script guards
+    // with [ -n ... ]) and the Claude CLI install fails later.
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    // Keep uv's wheel cache inside the persisted uv volume instead of the
+    // container's writable layer, which a rebuild discards.
+    "UV_CACHE_DIR": "/home/vscode/.local/share/uv/cache"
+  },
+
+  // Features are pinned to EXACT versions, not floating majors (`:1`/`:2`).
+  // A floating major has no minor/patch component to bump, so Dependabot's
+  // minor+patch group would match nothing and the entry ADR-0044 calls
+  // load-bearing would track nothing. Exact pins also make a rebuild
+  // reproducible, and match how every other tool in this repo is pinned.
+  // Versions verified against GHCR on 2026-08-30; Dependabot moves them from here.
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2.5.9": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "configureZshAsDefaultShell": true,
+      "username": "vscode",
+      "userUid": "1000",
+      "userGid": "1000"
+    },
+    "ghcr.io/devcontainers/features/git:1.3.8": {},
+    "ghcr.io/devcontainers/features/github-cli:1.1.1": {},
+    // rclone: exercised by the opt-in live dataset-retrieval tests.
+    "ghcr.io/devcontainers-extra/features/rclone:1.0.15": {},
+    // uv as a Feature rather than a curl install, so every tool is declared in
+    // one place. Requires the `devcontainers` Dependabot ecosystem (Task 10).
+    "ghcr.io/devcontainers-extra/features/uv:1.0.2": {}
+  },
+
+  "mounts": [
+    // Survives `devcontainer rebuild`: plugins, auth, settings.
+    "source=defendable-science-claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+    // Nested INSIDE the volume above: the host's real project dir for this
+    // checkout, so host and container sessions share transcripts. Its source
+    // is created by host-init.sh; a missing bind source fails container start.
+    "source=${localEnv:HOME}/.config/defendable-science-devcontainer/claude-session-${devcontainerId},target=/home/vscode/.claude/projects/-workspaces-defendable-science,type=bind",
+    // The SECOND session bind: Claude Code keys transcripts by the directory it
+    // was launched from, and CLAUDE.md prescribes `cd defendable-science` for
+    // package work. Without this, sessions started there land in the
+    // container-local volume and are silently unshared.
+    "source=${localEnv:HOME}/.config/defendable-science-devcontainer/claude-session-pkg-${devcontainerId},target=/home/vscode/.claude/projects/-workspaces-defendable-science-defendable-science,type=bind",
+    // The whole secrets DIRECTORY, read-only. Mounting the directory (not the
+    // file) means a host with no gh token is simply a directory without that
+    // file, rather than a missing mount source.
+    "source=${localEnv:HOME}/.config/defendable-science-devcontainer,target=/var/run/devcontainer-host-secrets,type=bind,readonly",
+    // Container-private venv: isolates it from any host-side .venv on the
+    // bind-mounted source tree. NOTE the doubled path segment -- the package
+    // lives one level below the repo root.
+    "source=defendable-science-venv-${devcontainerId},target=/workspaces/defendable-science/defendable-science/.venv,type=volume",
+    // uv's downloaded interpreters + (via UV_CACHE_DIR) its wheel cache.
+    "source=defendable-science-uv-${devcontainerId},target=/home/vscode/.local/share/uv,type=volume",
+    // pre-commit hook environments; ci.yml caches this same path.
+    "source=defendable-science-precommit-${devcontainerId},target=/home/vscode/.cache/pre-commit,type=volume",
+    // ONE shared settings.json, so host and container agree on theme, env and
+    // enabled plugins. Nested inside the ~/.claude volume, same as the session
+    // binds. host-init.sh creates the source if absent -- a missing bind source
+    // fails container start.
+    //
+    // This is only safe because of the mount below: settings.json records the
+    // defendable-science marketplace as a "directory" source, i.e. an absolute
+    // path, and one file cannot hold two different paths.
+    "source=${localEnv:HOME}/.claude/settings.json,target=/home/vscode/.claude/settings.json,type=bind",
+    // The repo a SECOND time, at its own host path, READ-ONLY.
+    //
+    // Sole purpose: make host-absolute paths resolve inside the container, so
+    // the shared settings.json above needs no per-side rewriting. ${localWorkspaceFolder}
+    // is resolved by the devcontainer CLI, so this hardcodes nothing.
+    //
+    // Read-only on purpose. The venv volume is mounted under the /workspaces
+    // view only, so this second view exposes the HOST's .venv -- built against
+    // the host's interpreter. Writing through this path would be a subtle way
+    // to corrupt either environment. Do your work in /workspaces/defendable-science.
+    "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind,readonly"
+  ],
+
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.testing.pytestEnabled": true,
+        "editor.formatOnSave": true,
+        "editor.rulers": [88],
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "terminal.integrated.profiles.linux": {
+          "zsh": { "path": "/bin/zsh" }
+        }
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "anthropic.claude-code"
+      ]
+    }
+  }
+}

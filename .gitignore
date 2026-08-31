@@ -43,3 +43,8 @@ build/
 # git worktrees (agent isolation)
 .worktrees/
 .claude/worktrees/
+
+# repo-root scratch directory. Anchored with a leading '/' and marked as a
+# directory with a trailing '/' on purpose: a bare 'tmp' would also ignore any
+# file or directory named 'tmp' at any depth (e.g. a future test fixture).
+/tmp/

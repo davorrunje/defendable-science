@@ -1,0 +1,22 @@
+# One service. No `version:` key -- it is obsolete in Compose v2 and warns.
+#
+# The compose project name is fixed rather than derived, which assumes ONE
+# devcontainer for this repo at a time. That is not a limitation in practice:
+# git worktrees cannot cross the container boundary (their .git holds an
+# absolute host gitdir path), so the devcontainer is opened on the main clone,
+# once. See section 2.1 of the design spec.
+name: defendable-science-devcontainer
+
+services:
+  defendable-science-dev:
+    image: mcr.microsoft.com/devcontainers/python:3.14
+    # No `pull_policy: always`. Two reasons: it would make every start depend
+    # on the registry (an offline `devcontainer up` would fail outright, which
+    # defeats a design whose selling point is that rebuilds are cheap), and
+    # because `features` are declared the devcontainer CLI substitutes a
+    # locally-built image for this service -- asking Compose to always pull an
+    # image that exists only locally. Compose's default (`missing`) is right.
+    volumes:
+      # The repo root, one level above .devcontainer/.
+      - ../:/workspaces/defendable-science:cached
+    command: sleep infinity
