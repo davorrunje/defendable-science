@@ -40,7 +40,8 @@
 | `.devcontainer/tests/test-claude-project-slug.sh` | create | Table-driven tests for the slug rule, including the two adversarial real paths. |
 | `.devcontainer/tests/test-host-init.sh` | create | Tests `host-init.sh` against a fake `$HOME`: token write/remove, symlink create/replace, and the must-not-destroy branches. |
 | `.devcontainer/docker-compose.yml` | create | One service, the base image, the workspace bind mount. |
-| `.devcontainer/devcontainer.json` | create | Features, the four named volumes + two host binds, `containerEnv`, lifecycle hooks, VS Code customizations. |
+| `.devcontainer/devcontainer.json` | create | Features, the four named volumes + host binds, `containerEnv`/`remoteEnv`, lifecycle hooks, VS Code customizations. |
+| `.devcontainer/devcontainer-lock.json` | generated | Written by the CLI on first build; commit it so rebuilds pull byte-identical Features. |
 | `.devcontainer/install_common_tools.sh` | create | Claims ownership of root-owned volume mountpoints; installs interactive-shell tooling; authenticates `gh`; installs the `claude` CLI. |
 | `.devcontainer/setup.sh` | create | `updateContentCommand`: calls `install_common_tools.sh`, prefetches the CI Python matrix, `uv sync`. |
 | `.devcontainer/shell-prompt.sh` | create | Git-aware prompt + completion, sourced by shell rc files. |
