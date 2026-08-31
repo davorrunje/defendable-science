@@ -39,6 +39,28 @@ fi
 chmod 700 "${SECRETS_DIR}" || true
 
 # ---------------------------------------------------------------------------
+# 0. The shared settings.json must exist.
+#
+# devcontainer.json bind-mounts ${HOME}/.claude/settings.json so host and
+# container share one file. A bind mount whose source is missing is a HARD
+# container start failure, and Claude Code does not create settings.json until
+# it first needs to write one -- so on a fresh host this file legitimately does
+# not exist yet. Create a minimal valid one rather than let the container
+# refuse to start.
+#
+# Only ever created, never overwritten: an existing file is the user's.
+# ---------------------------------------------------------------------------
+CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
+if [ ! -e "${CLAUDE_SETTINGS}" ]; then
+    if mkdir -p "${HOME}/.claude" && printf '{}\n' > "${CLAUDE_SETTINGS}"; then
+        warn "created an empty ${CLAUDE_SETTINGS} (the devcontainer bind-mounts it)."
+    else
+        warn "could not create ${CLAUDE_SETTINGS}."
+        warn "the devcontainer bind-mounts that file, so CONTAINER START WILL FAIL."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # 1. gh token
 #
 # A single, unsuffixed filename on purpose. `gh auth token` is a property of

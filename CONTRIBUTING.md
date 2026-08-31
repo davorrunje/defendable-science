@@ -39,6 +39,12 @@ directories are wired for sharing: the repo root and `defendable-science/` (the
 one this guide prescribes for package work). A session started from some *other*
 subdirectory is container-local and not shared with the host.
 
+`~/.claude/settings.json` is shared with the host as a single file, so theme, `env` and
+enabled plugins stay in step. The repo is also mounted a second time, read-only, at its
+own host path — that is what lets the shared file's absolute marketplace path resolve on
+both sides. **Work at `/workspaces/defendable-science`**, never through that second view:
+the container's `.venv` is only mounted under the `/workspaces` path.
+
 **Open it on the main clone, not on a git worktree.** A linked worktree's `.git`
 is a file holding an *absolute* host path, which does not resolve inside the
 container, so git — and therefore `pre-commit`, committing and `gh` — breaks

@@ -127,6 +127,13 @@ Full design, file layout, and the per-script adaptation-from-mononet details are
   asserts `command -v claude` rather than trusting it. Without this the container would
   build green with no plugins at all, since every consumer of `claude` downstream is
   non-fatal by design.
+- `~/.claude/settings.json` is bind-mounted from the host so both sides share one file
+  (theme, `env`, enabled plugins). That is only coherent alongside a second, **read-only**
+  bind of the repo at its own host path (`${localWorkspaceFolder}` → identical target):
+  `settings.json` records this repo's plugin marketplace as an absolute `"directory"`
+  path, and one file cannot hold two. Read-only because the `.venv` volume is mounted
+  under the `/workspaces` view only, so the second view would otherwise expose the host's
+  `.venv` for writing.
 - `post-create.sh` runs `pre-commit install-hooks`, **not** `pre-commit install`:
   `.git` is shared with the host, and an installed hook embeds a container-only
   `INSTALL_PYTHON` path that would break host-side `git commit`. Building the hook

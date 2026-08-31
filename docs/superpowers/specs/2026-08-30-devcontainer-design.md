@@ -460,8 +460,34 @@ without it every `devcontainer rebuild` rebuilds every hook environment from scr
 It too is in the ownership-claiming loop above, along with its parent
 `/home/vscode/.cache`.
 
-**Bind inventory (three).** The secrets directory (read-only), and the two
-`claude-session-*` stable paths from §3.3.
+**Bind inventory (five).** The secrets directory (read-only), the two
+`claude-session-*` stable paths from §3.3, plus the two added in §3.7.
+
+### 3.7 One shared `settings.json`
+
+`~/.claude/settings.json` is bind-mounted from the host, so host and container agree on
+theme, `env`, and enabled plugins rather than drifting. `host-init.sh` creates the file
+(as `{}`) when the host has none — Claude Code writes it lazily, and a bind mount with a
+missing source is a hard container-start failure. An existing file is never overwritten.
+
+Sharing one file is only coherent because of a second mount: the repo is bind-mounted a
+**second time at its own host path**, `${localWorkspaceFolder}` → the identical target,
+**read-only**. `settings.json` records this repo's own plugin marketplace as a
+`"directory"` source — an *absolute* path — and one file cannot hold two different ones.
+With the second view, `/home/davor/…/defendable-science` resolves on both sides and the
+shared file needs no per-side rewriting. `${localWorkspaceFolder}` is resolved by the
+devcontainer CLI, so nothing is hardcoded to one machine.
+
+Read-only is deliberate. The `.venv` volume is mounted under the `/workspaces` view only,
+so the second view exposes the **host's** `.venv`, built against the host's interpreter;
+writing through it is a quiet way to corrupt either environment. All work happens at
+`/workspaces/defendable-science`.
+
+**Side effect, not yet relied upon:** because host-absolute paths now resolve, a git
+worktree created on the host has a `.git` gitdir pointer that resolves inside the
+container too — the §2.1 constraint is softened for read-only inspection. §2.1's rule
+still stands for *working* in a worktree, since the second view is read-only and the
+devcontainer is still opened on the main clone.
 
 **Volume inventory (four).** All are keyed by `${devcontainerId}`; §2.1's one-container
 constraint is what keeps that bounded, since the ID is stable across rebuilds:

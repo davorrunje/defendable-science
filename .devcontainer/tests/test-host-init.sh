@@ -132,6 +132,33 @@ else
 fi
 rm -rf "${t}"
 
+# --- 1b. the shared settings.json bind source is created when absent --------
+t="$(new_case)"
+run_host_init "${t}/home" "${t}/work" "abc123" "gho_x"
+if [ -f "${t}/home/.claude/settings.json" ]; then
+    pass "creates settings.json when the host has none (bind source must exist)"
+else
+    fail "creates settings.json when the host has none" "missing"
+fi
+if [ "$(cat "${t}/home/.claude/settings.json")" = "{}" ]; then
+    pass "the created settings.json is valid, empty JSON"
+else
+    fail "the created settings.json is valid, empty JSON" "$(cat "${t}/home/.claude/settings.json")"
+fi
+rm -rf "${t}"
+
+# --- 1c. an EXISTING settings.json is never overwritten ---------------------
+t="$(new_case)"
+mkdir -p "${t}/home/.claude"
+printf '{"theme":"dark","env":{"KEEP":"me"}}' > "${t}/home/.claude/settings.json"
+run_host_init "${t}/home" "${t}/work" "abc123" "gho_x"
+if grep -q '"KEEP":"me"' "${t}/home/.claude/settings.json"; then
+    pass "an existing settings.json is left untouched"
+else
+    fail "an existing settings.json is left untouched" "clobbered: $(cat "${t}/home/.claude/settings.json")"
+fi
+rm -rf "${t}"
+
 # --- 2b. gh present but not authenticated: same outcome, different branch ---
 t="$(new_case)"
 run_host_init "${t}/home" "${t}/work" "abc123" unauthenticated

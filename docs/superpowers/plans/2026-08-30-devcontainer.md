@@ -1046,7 +1046,27 @@ Create `.devcontainer/devcontainer.json`:
     // uv's downloaded interpreters + (via UV_CACHE_DIR) its wheel cache.
     "source=defendable-science-uv-${devcontainerId},target=/home/vscode/.local/share/uv,type=volume",
     // pre-commit hook environments; ci.yml caches this same path.
-    "source=defendable-science-precommit-${devcontainerId},target=/home/vscode/.cache/pre-commit,type=volume"
+    "source=defendable-science-precommit-${devcontainerId},target=/home/vscode/.cache/pre-commit,type=volume",
+    // ONE shared settings.json, so host and container agree on theme, env and
+    // enabled plugins. Nested inside the ~/.claude volume, same as the session
+    // binds. host-init.sh creates the source if absent -- a missing bind source
+    // fails container start.
+    //
+    // This is only safe because of the mount below: settings.json records the
+    // defendable-science marketplace as a "directory" source, i.e. an absolute
+    // path, and one file cannot hold two different paths.
+    "source=${localEnv:HOME}/.claude/settings.json,target=/home/vscode/.claude/settings.json,type=bind",
+    // The repo a SECOND time, at its own host path, READ-ONLY.
+    //
+    // Sole purpose: make host-absolute paths resolve inside the container, so
+    // the shared settings.json above needs no per-side rewriting. ${localWorkspaceFolder}
+    // is resolved by the devcontainer CLI, so this hardcodes nothing.
+    //
+    // Read-only on purpose. The venv volume is mounted under the /workspaces
+    // view only, so this second view exposes the HOST's .venv -- built against
+    // the host's interpreter. Writing through this path would be a subtle way
+    // to corrupt either environment. Do your work in /workspaces/defendable-science.
+    "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind,readonly"
   ],
 
   "customizations": {
@@ -1092,8 +1112,16 @@ expected = {
     "/workspaces/defendable-science/defendable-science/.venv",
     "/home/vscode/.local/share/uv",
     "/home/vscode/.cache/pre-commit",
+    "/home/vscode/.claude/settings.json",
+    "${localWorkspaceFolder}",
 }
 assert set(targets) == expected, set(targets) ^ expected
+
+# The repo's second view exists only so host-absolute paths resolve; writing
+# through it would reach the HOST's .venv (the volume is mounted under the
+# /workspaces view only), so it must stay read-only.
+second = [m for m in cfg["mounts"] if "${localWorkspaceFolder}" in m]
+assert len(second) == 1 and second[0].endswith("readonly"), second
 
 # Both session bind targets must equal the slugs of the directories a `claude`
 # session is actually started from inside the container.
