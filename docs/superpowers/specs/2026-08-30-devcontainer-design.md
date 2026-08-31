@@ -90,6 +90,7 @@ because it has multiple flavors; this repo has one):
 ```
 .devcontainer/
   devcontainer.json
+  devcontainer-lock.json    # written by the CLI on build; committed (see 3.2)
   docker-compose.yml
   claude-plugins.txt
   host-init.sh              # runs on the HOST via initializeCommand
@@ -122,6 +123,11 @@ because it has multiple flavors; this repo has one):
   companion change that justifies choosing Features at all would track nothing. Exact
   pins also make a rebuild reproducible. Versions verified against GHCR 2026-08-30:
   `common-utils:2.5.9`, `git:1.3.8`, `github-cli:1.1.1`, `rclone:1.0.15`, `uv:1.0.2`.
+  The devcontainer CLI writes `devcontainer-lock.json` beside `devcontainer.json` on
+  build, recording the resolved **digest** for each Feature; it is **committed**, so a
+  rebuild pulls byte-identical Features and not merely the same tags. It doubles as an
+  independent check on the pins above — the first real build resolved all five exactly
+  as written.
 - **Required companion change (reviewed, fixed).** Earlier drafts justified the Feature
   choice by saying Dependabot already tracks Feature versions "the same way it tracks
   Actions". That is **false as written**: `.github/dependabot.yml` declares only `uv`,
