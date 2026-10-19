@@ -13,7 +13,7 @@ repos:
         stages: [pre-commit, pre-merge-commit, manual]
 
 -   repo: https://github.com/asottile/pyupgrade
-    rev: v3.21.2
+    rev: v3.22.0
     hooks:
     -   id: pyupgrade
         stages: [pre-commit, pre-merge-commit, manual]
